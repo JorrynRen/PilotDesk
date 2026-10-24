@@ -20,33 +20,65 @@ import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import type { TeamStats } from '../types/enclave';
 
-type PeriodKind = 'week' | 'month';
+type PeriodKind = 'week' | 'month' | 'year' | 'custom';
 
-/** 本地时区的周期区间：周一 00:00 起算；`offset` = 0 当期、-1 上一期 */
-function periodRange(kind: PeriodKind, offset: number): { from: number; to: number; label: string } {
+interface Range {
+  from: number;
+  to: number;
+  label: string;
+  /** 自定义区间填反 / 未填时不可查询 */
+  valid: boolean;
+}
+
+const DAY_SEC = 86_400;
+
+function fmtDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** 本地时区的固定周期：周一起算 / 自然月 / 自然年；`offset` = 0 当期、-1 上一期 */
+function periodRange(kind: Exclude<PeriodKind, 'custom'>, offset: number): Range {
   const now = new Date();
-  const fmt = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  let start: Date;
+  let end: Date;
   if (kind === 'week') {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const dow = (start.getDay() + 6) % 7; // 周一 = 0
     start.setDate(start.getDate() - dow + offset * 7);
-    const end = new Date(start);
+    end = new Date(start);
     end.setDate(end.getDate() + 7);
-    const last = new Date(end.getTime() - 86_400_000);
-    return {
-      from: Math.floor(start.getTime() / 1000),
-      to: Math.floor(end.getTime() / 1000),
-      label: `${fmt(start)} – ${fmt(last)}`,
-    };
+  } else if (kind === 'month') {
+    start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    end = new Date(now.getFullYear(), now.getMonth() + offset + 1, 1);
+  } else {
+    start = new Date(now.getFullYear() + offset, 0, 1);
+    end = new Date(now.getFullYear() + offset + 1, 0, 1);
   }
-  const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + offset + 1, 1);
-  const last = new Date(end.getTime() - 86_400_000);
+  const last = new Date(end.getTime() - DAY_SEC * 1000);
   return {
     from: Math.floor(start.getTime() / 1000),
     to: Math.floor(end.getTime() / 1000),
-    label: `${fmt(start)} – ${fmt(last)}`,
+    label: `${fmtDate(start)} – ${fmtDate(last)}`,
+    valid: true,
+  };
+}
+
+/** 自定义区间：`YYYY-MM-DD` 输入，按本地日期整天（含结束日） */
+function customRange(fromDate: string, toDate: string): Range {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    return { from: 0, to: 0, label: '请选择起止日期', valid: false };
+  }
+  const start = new Date(`${fromDate}T00:00:00`);
+  const end = new Date(`${toDate}T00:00:00`);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) {
+    return { from: 0, to: 0, label: '起止日期不正确', valid: false };
+  }
+  const endExclusive = new Date(end.getTime() + DAY_SEC * 1000);
+  return {
+    from: Math.floor(start.getTime() / 1000),
+    to: Math.floor(endExclusive.getTime() / 1000),
+    label: `${fromDate} – ${toDate}`,
+    valid: true,
   };
 }
 
@@ -73,12 +105,21 @@ export function EnclaveReportPage() {
 
   const [kind, setKind] = useState<PeriodKind>('week');
   const [offset, setOffset] = useState(0);
+  /** 自定义区间（本地日期，含结束日） */
+  const [fromDate, setFromDate] = useState(() => {
+    const now = new Date();
+    return fmtDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  });
+  const [toDate, setToDate] = useState(() => fmtDate(new Date()));
   const [stats, setStats] = useState<TeamStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rootOpen, setRootOpen] = useState(false);
 
-  const range = useMemo(() => periodRange(kind, offset), [kind, offset]);
+  const range = useMemo(
+    () => (kind === 'custom' ? customRange(fromDate, toDate) : periodRange(kind, offset)),
+    [kind, offset, fromDate, toDate],
+  );
   const members = detail?.members ?? [];
   const memberName = useCallback(
     (id: string) => {
@@ -102,6 +143,11 @@ export function EnclaveReportPage() {
 
   const load = useCallback(async () => {
     if (!activeOrgId) return;
+    if (!range.valid) {
+      setStats(null);
+      setError(range.label);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -117,7 +163,7 @@ export function EnclaveReportPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeOrgId, range.from, range.to]);
+  }, [activeOrgId, range.from, range.to, range.valid, range.label]);
 
   useEffect(() => {
     void load();
@@ -157,7 +203,8 @@ export function EnclaveReportPage() {
 
   const copyMarkdown = () => {
     if (!stats) return;
-    const title = kind === 'week' ? '团队周报' : '团队月报';
+    const title =
+      kind === 'week' ? '团队周报' : kind === 'month' ? '团队月报' : kind === 'year' ? '团队年报' : '团队报告';
     const lines = [
       `# ${title}（${range.label}）`,
       '',
@@ -276,9 +323,16 @@ export function EnclaveReportPage() {
 
         <EnclaveFilesRootPanel open={rootOpen} />
 
-        {/* 周期选择 */}
+        {/* 周期选择：固定周期（周/月/年）或自定义起止 */}
         <div className="shrink-0 px-1 py-2 flex items-center gap-2 flex-wrap">
-          {(['week', 'month'] as PeriodKind[]).map((k) => {
+          {(
+            [
+              { k: 'week', label: '本周' },
+              { k: 'month', label: '本月' },
+              { k: 'year', label: '年报' },
+              { k: 'custom', label: '自定义' },
+            ] as { k: PeriodKind; label: string }[]
+          ).map(({ k, label }) => {
             const on = kind === k;
             return (
               <button
@@ -294,35 +348,63 @@ export function EnclaveReportPage() {
                   border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
                 }}
               >
-                {k === 'week' ? '本周' : '本月'}
+                {label}
               </button>
             );
           })}
-          <div
-            className="flex items-center gap-1 rounded-lg px-1 py-0.5"
-            style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
-          >
-            <button
-              onClick={() => setOffset((v) => v - 1)}
-              className="p-0.5 rounded"
-              style={{ color: 'var(--text-secondary)' }}
-              title="上一周期"
+          {kind === 'custom' ? (
+            <div
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs"
+              style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
             >
-              <ChevronLeft size={13} />
-            </button>
-            <span className="text-xs tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-              {range.label}
-            </span>
-            <button
-              onClick={() => setOffset((v) => Math.min(0, v + 1))}
-              disabled={offset >= 0}
-              className="p-0.5 rounded"
-              style={{ color: 'var(--text-secondary)', opacity: offset >= 0 ? 0.35 : 1 }}
-              title="下一周期"
+              <input
+                type="date"
+                value={fromDate}
+                max={toDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="bg-transparent outline-none text-xs"
+                style={{ color: 'var(--text-secondary)' }}
+              />
+              <span style={{ color: 'var(--text-tertiary)' }}>至</span>
+              <input
+                type="date"
+                value={toDate}
+                min={fromDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="bg-transparent outline-none text-xs"
+                style={{ color: 'var(--text-secondary)' }}
+              />
+              {!range.valid && (
+                <span style={{ color: 'var(--status-danger)' }}>· {range.label}</span>
+              )}
+            </div>
+          ) : (
+            <div
+              className="flex items-center gap-1 rounded-lg px-1 py-0.5"
+              style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
             >
-              <ChevronRight size={13} />
-            </button>
-          </div>
+              <button
+                onClick={() => setOffset((v) => v - 1)}
+                className="p-0.5 rounded"
+                style={{ color: 'var(--text-secondary)' }}
+                title="上一周期"
+              >
+                <ChevronLeft size={13} />
+              </button>
+              <span className="text-xs tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                {range.label}
+              </span>
+              <button
+                onClick={() => setOffset((v) => Math.min(0, v + 1))}
+                disabled={offset >= 0}
+                className="p-0.5 rounded"
+                style={{ color: 'var(--text-secondary)', opacity: offset >= 0 ? 0.35 : 1 }}
+                title="下一周期"
+              >
+                <ChevronRight size={13} />
+              </button>
+            </div>
+          )}
           <div className="flex-1" />
           {loading && <Loader2 size={13} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
           <button

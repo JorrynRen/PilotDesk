@@ -340,6 +340,14 @@ export interface DepsPreview {
   error: string | null;
 }
 
+/** AI 任务分解草稿（人工确认后才创建子任务） */
+export interface TaskSplitDraft {
+  title: string;
+  description: string;
+  /** low / normal / high / urgent */
+  priority: string;
+}
+
 /** 团队报告：成员维度的绩效数据（只计数，不做评分） */
 export interface MemberStat {
   userId: string;

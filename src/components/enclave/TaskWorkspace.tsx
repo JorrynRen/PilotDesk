@@ -11,17 +11,19 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, ListTree, Link2, AlertTriangle, ChevronRight,
   Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Trash2,
+  Wand2, Loader2,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore, type TaskDetailTab } from '../../stores/enclaveTaskStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 import { Select } from '../common/Select';
 import { EnclaveNavBar } from './EnclaveNavBar';
 import { EnclaveToolbarActions, EnclaveFilesRootPanel } from './EnclaveToolbar';
 import type {
-  DepsPreview, KbView, MemberView, TaskCommentView, TaskStatus, TaskView,
+  DepsPreview, KbView, MemberView, TaskCommentView, TaskSplitDraft, TaskStatus, TaskView,
 } from '../../types/enclave';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
@@ -494,6 +496,7 @@ export function TaskWorkspace() {
               members={members}
               memberLabel={memberLabel}
               kbOptions={kbOptions}
+              myRole={detail?.org.myRole ?? ''}
             />
           )}
         </div>
@@ -640,8 +643,10 @@ function TaskDetail(props: {
   memberLabel: (id: string | null) => string;
   /** 产出目标库候选（默认库 + 本组织自定义库） */
   kbOptions: { id: string; name: string; isImplicit: boolean }[];
+  /** 当前登录用户在组织中的角色（仅 owner 可以使用 AI 拆解） */
+  myRole: string;
 }) {
-  const { orgId, task, tasks, members, memberLabel, kbOptions } = props;
+  const { orgId, task, tasks, members, memberLabel, kbOptions, myRole } = props;
   // 权限按「当前登录身份 + 任务字段」本地复核（同时兼容快照未及时刷新）：
   // 非参与者不出现任何提交表单；创建者 / 负责人才能编辑与流转状态。
   const caps = useEnclaveOrgStore((s) => s.caps);
@@ -663,6 +668,51 @@ function TaskDetail(props: {
   const canUpload = identityVerified && isParticipant && !isClosed;
   /** 有子任务 = 汇总容器：状态由子任务派生，自身不执行 */
   const isContainer = task.childCount > 0;
+  /** AI 拆解只对主机 owner 开放（团队数据出境闸门在主机侧判定），且只拆未终态的普通任务 */
+  const canSplit = identityVerified && myRole === 'owner' && !isContainer && !isClosed;
+
+  const requestSplit = async () => {
+    setSplitLoading(true);
+    try {
+      const drafts = await invoke<TaskSplitDraft[]>('enclave_task_split_preview', {
+        orgId,
+        taskId: task.id,
+      });
+      setSplitDrafts(drafts.map((d) => ({ ...d, checked: true })));
+      setSplitOpen(true);
+    } catch (e) {
+      showToast(errorMessage(e), 'error');
+    } finally {
+      setSplitLoading(false);
+    }
+  };
+
+  const createSplitTasks = async () => {
+    const picked = splitDrafts.filter((d) => d.checked && d.title.trim());
+    if (picked.length === 0) return;
+    setSplitCreating(true);
+    let done = 0;
+    for (const d of picked) {
+      const created = await useEnclaveTaskStore.getState().createTask(orgId, {
+        title: d.title.trim(),
+        description: d.description,
+        parentTaskId: task.id,
+        priority: d.priority,
+      });
+      if (created) done += 1;
+    }
+    setSplitCreating(false);
+    setSplitOpen(false);
+    setSplitDrafts([]);
+    if (done > 0) {
+      showToast(`已创建 ${done} 个子任务`, 'success');
+      await useEnclaveTaskStore.getState().loadTasks(orgId);
+      await useEnclaveTaskStore.getState().loadExtras(orgId, task.id);
+    } else {
+      showToast('子任务创建失败', 'error');
+    }
+  };
+
   /** 产出目标库显示名：空 = 默认库 */
   const kbLabel = (id: string): string =>
     id ? kbOptions.find((k) => k.id === id)?.name ?? '未知库' : '默认库';
@@ -692,6 +742,14 @@ function TaskDetail(props: {
   /** 产出目标库草稿（空 = 默认库） */
   const [kbTarget, setKbTarget] = useState(task.targetKbId);
   const [preview, setPreview] = useState<DepsPreview | null>(null);
+
+  // AI 拆解：模型只产出草稿，勾选后逐个 created（父任务仍是普通任务时会被自动转成汇总容器）
+  const [splitLoading, setSplitLoading] = useState(false);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [splitCreating, setSplitCreating] = useState(false);
+  const [splitDrafts, setSplitDrafts] = useState<
+    { title: string; description: string; priority: string; checked: boolean }[]
+  >([]);
 
   const reports = useEnclaveTaskStore((s) => s.reports);
   const files = useEnclaveTaskStore((s) => s.files);
@@ -1088,6 +1146,23 @@ function TaskDetail(props: {
           <Info size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务信息</span>
           <div className="flex-1" />
+          {canSplit && !editingProps && (
+            <button
+              onClick={() => void requestSplit()}
+              disabled={splitLoading}
+              className="text-[11px] px-2 py-0.5 rounded flex items-center gap-1"
+              style={{
+                backgroundColor: 'var(--accent-light)',
+                color: 'var(--accent)',
+                border: '1px solid var(--border)',
+                opacity: splitLoading ? 0.6 : 1,
+              }}
+              title="用模型把当前任务拆成子任务草稿（仅主机可用，需开启「团队数据可发送至云端模型」）"
+            >
+              {splitLoading ? <Loader2 size={11} className="animate-spin" /> : <Wand2 size={11} />}
+              AI 拆解
+            </button>
+          )}
           {!editingProps && (canEdit || canAssign) && (
             <button
               onClick={() => setEditingProps(true)}
@@ -2171,6 +2246,143 @@ function TaskDetail(props: {
           </div>
         )}
         </div>
+
+      {/* AI 拆解草稿：模型产出先过人工，勾选后才创建 */}
+      {splitOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.35)' }}
+        >
+          <div
+            className="w-[560px] max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
+            style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+          >
+            <div
+              className="shrink-0 px-4 py-2.5 flex items-center gap-2"
+              style={{ borderBottom: '1px solid var(--border)' }}
+            >
+              <Wand2 size={13} style={{ color: 'var(--accent)' }} />
+              <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                AI 拆解草稿
+              </span>
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                勾选需要创建的子任务；标题与描述可先改再创建
+              </span>
+              <div className="flex-1" />
+              <button
+                onClick={() => {
+                  setSplitOpen(false);
+                  setSplitDrafts([]);
+                }}
+                className="text-xs"
+                style={{ color: 'var(--text-tertiary)' }}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 flex flex-col gap-2">
+              {splitDrafts.map((d, i) => (
+                <div
+                  key={i}
+                  className="flex items-start gap-2 rounded-lg p-2"
+                  style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={d.checked}
+                    onChange={() =>
+                      setSplitDrafts((prev) =>
+                        prev.map((x, j) => (j === i ? { ...x, checked: !x.checked } : x)),
+                      )
+                    }
+                    className="mt-1"
+                  />
+                  <div className="flex-1 min-w-0 flex flex-col gap-1">
+                    <input
+                      value={d.title}
+                      onChange={(e) =>
+                        setSplitDrafts((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)),
+                        )
+                      }
+                      className="w-full px-1.5 py-0.5 rounded text-xs outline-none"
+                      style={{
+                        backgroundColor: 'var(--bg-content)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border)',
+                      }}
+                    />
+                    <input
+                      value={d.description}
+                      placeholder="描述（可留空）"
+                      onChange={(e) =>
+                        setSplitDrafts((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)),
+                        )
+                      }
+                      className="w-full px-1.5 py-0.5 rounded text-[11px] outline-none"
+                      style={{
+                        backgroundColor: 'var(--bg-content)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border)',
+                      }}
+                    />
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      优先级：{PRIORITY_LABEL[d.priority] ?? d.priority}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {splitDrafts.length === 0 && (
+                <div className="text-xs text-center py-6" style={{ color: 'var(--text-tertiary)' }}>
+                  模型没有给出可用的子任务
+                </div>
+              )}
+            </div>
+            <div
+              className="shrink-0 px-4 py-2.5 flex items-center gap-2"
+              style={{ borderTop: '1px solid var(--border)' }}
+            >
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                草稿由模型生成，请核对后再创建
+              </span>
+              <div className="flex-1" />
+              <button
+                onClick={() => {
+                  setSplitOpen(false);
+                  setSplitDrafts([]);
+                }}
+                className="text-xs px-2 py-1 rounded"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void createSplitTasks()}
+                disabled={
+                  splitCreating || splitDrafts.filter((d) => d.checked && d.title.trim()).length === 0
+                }
+                className="text-xs px-2 py-1 rounded"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity:
+                    splitCreating ||
+                    splitDrafts.filter((d) => d.checked && d.title.trim()).length === 0
+                      ? 0.5
+                      : 1,
+                }}
+              >
+                {splitCreating ? '创建中…' : '创建子任务'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </fieldset>
       )}
     </div>

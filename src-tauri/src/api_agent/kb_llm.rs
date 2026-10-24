@@ -7,6 +7,7 @@
 //! 生成结果一律落成**待确认候选**（origin=ai），用户核对/修改后才入库 —— 模型产出不等于事实。
 
 use rusqlite::Connection;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::sync::{Arc, Mutex};
 
@@ -1394,6 +1395,88 @@ fn parse_draft(raw: &str) -> Result<KbDraft, String> {
     })
 }
 
+/// 任务拆解产出的子任务草稿（人工确认后才创建）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSplitDraft {
+    pub title: String,
+    pub description: String,
+    /// low / normal / high / urgent
+    pub priority: String,
+}
+
+/// 把任务标题 / 描述拆成可执行的子任务草稿。
+///
+/// **安全边界**：这两段文本属于团队数据，调用方必须先确认组织的
+/// 「团队数据可发送至云端模型」已开启；本函数不自行判断策略。
+pub async fn decompose_task(
+    model: &KbModel,
+    title: &str,
+    description: &str,
+) -> Result<Vec<TaskSplitDraft>, String> {
+    ensure_openai_compatible(model)?;
+    let system = "你是任务拆解助手，负责把一个任务拆成若干可独立执行的子任务。\n\
+        规则：\n\
+        1. 只输出一个 JSON 数组，不要解释、不要 markdown 代码块；\n\
+        2. 每项字段固定为 title / description / priority；\n\
+        3. 子任务数量 3~8 个；title ≤ 30 字，动词开头；\n\
+        4. description 一两句话说明交付物或验收点，不要空泛；\n\
+        5. priority 只能是 low / normal / high / urgent；\n\
+        6. 不要编造原任务里没有的事实；信息不足时按合理步骤拆分，不要臆造具体人名、日期。";
+    let user = format!(
+        "任务标题：{}\n任务描述：{}\n\n请输出 JSON 数组。",
+        title,
+        if description.trim().is_empty() {
+            "（无描述）"
+        } else {
+            description
+        }
+    );
+    let raw = complete_json(model, system, &user).await?;
+    parse_split(&raw)
+}
+
+fn parse_split(raw: &str) -> Result<Vec<TaskSplitDraft>, String> {
+    let text = extract_json(raw)
+        .ok_or_else(|| "模型没有输出 JSON 数组（可换一个更擅长结构化输出的模型）".to_string())?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("解析模型输出失败: {}", e))?;
+    // 容忍两种根：直接数组，或 { "subtasks": [...] }
+    let items = if let Some(arr) = v.as_array() {
+        arr.clone()
+    } else if let Some(arr) = v.get("subtasks").and_then(|x| x.as_array()) {
+        arr.clone()
+    } else {
+        return Err("模型输出不是子任务数组".to_string());
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let title = item["title"].as_str().unwrap_or("").trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+        let description = item["description"].as_str().unwrap_or("").trim().to_string();
+        let priority = match item["priority"].as_str().unwrap_or("").to_lowercase().as_str() {
+            "low" => "low",
+            "high" => "high",
+            "urgent" => "urgent",
+            _ => "normal",
+        }
+        .to_string();
+        out.push(TaskSplitDraft {
+            title: title.chars().take(60).collect(),
+            description: description.chars().take(400).collect(),
+            priority,
+        });
+        if out.len() >= 10 {
+            break;
+        }
+    }
+    if out.is_empty() {
+        return Err("模型没有给出可用的子任务".to_string());
+    }
+    Ok(out)
+}
+
 /// 从模型的输出里抠出 JSON 文本（容忍 markdown 代码块围栏与前后的废话）。
 ///
 /// 定位方式是**第一个结构性括号**：`{` 与 `[` 谁先出现就按谁配对。
@@ -1560,6 +1643,22 @@ mod tests {
 
         assert!(parse_draft("没有 JSON").is_err());
         assert!(parse_draft(r#"{"title":"只有标题"}"#).is_err());
+    }
+
+    #[test]
+    fn task_split_parsing_normalizes_priority() {
+        let raw = "```json\n[{\"title\":\"梳理需求\",\"description\":\"列出范围\",\"priority\":\"HIGH\"},{\"title\":\"\"},{\"title\":\"实现\",\"priority\":\"whatever\"}]\n```";
+        let out = parse_split(raw).unwrap();
+        assert_eq!(out.len(), 2, "没有标题的项应被丢弃");
+        assert_eq!(out[0].title, "梳理需求");
+        assert_eq!(out[0].priority, "high");
+        assert_eq!(out[1].priority, "normal");
+
+        // 也容忍 {"subtasks": [...]} 包装
+        let out = parse_split(r#"{"subtasks":[{"title":"A"}]}"#).unwrap();
+        assert_eq!(out.len(), 1);
+        // 全部无效 → 报错，由调用方提示换模型
+        assert!(parse_split(r#"[{"description":"没有标题"}]"#).is_err());
     }
 
     #[test]

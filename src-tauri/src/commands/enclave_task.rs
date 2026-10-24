@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::json;
@@ -2348,6 +2348,70 @@ async fn process_team_queue_row(
             file_id_opt.as_deref(),
         )
     })
+}
+
+/// AI 辅助任务分解（仅主机执行）：把任务标题 / 描述拆成子任务草稿。
+///
+/// 安全边界：任务内容属于团队数据，因此只在**主机**本机调用模型，且必须先开启
+/// 「团队数据可发送至云端模型」；成员端不转发（避免把团队数据送到成员机器的模型）。
+#[tauri::command]
+pub async fn enclave_task_split_preview(
+    org_id: String,
+    task_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::api_agent::kb_llm::TaskSplitDraft>, String> {
+    let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
+    if !matches!(role, Some(authz::Role::Owner)) {
+        return Err("AI 拆解需要由主机执行（团队数据出境闸门在主机侧判定）".to_string());
+    }
+    let allowed = state
+        .store
+        .with_conn(|c| crate::enclave::org::get_allow_cloud_model(c, &org_id))?
+        .unwrap_or(false);
+    if !allowed {
+        return Err(
+            "「团队数据可发送至云端模型」未开启：请先在「组织与权限 › 安全与审计」开启后再试"
+                .to_string(),
+        );
+    }
+    let (title, description, child_count, status): (String, String, i64, String) = state
+        .store
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT t.title, t.description,
+                        (SELECT COUNT(*) FROM org_tasks WHERE parent_task_id = t.id),
+                        t.status
+                 FROM org_tasks t WHERE t.id = ?1 AND t.org_id = ?2",
+                rusqlite::params![task_id, org_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| format!("读取任务失败：{}", e))?
+            .ok_or_else(|| "任务不存在或不属于该组织".to_string())
+        })?;
+    if child_count > 0 {
+        return Err("该任务已经是汇总容器，请对它的子任务单独拆解".to_string());
+    }
+    if matches!(status.as_str(), "archived" | "cancelled") {
+        return Err("任务已归档或作废，无法拆解".to_string());
+    }
+    let model = {
+        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
+        crate::api_agent::kb_llm::resolve_kb_model(&conn)
+            .map_err(|e| format!("没有可用模型：{}", e))?
+    };
+    let drafts = crate::api_agent::kb_llm::decompose_task(&model, &title, &description)
+        .await
+        .map_err(|e| format!("拆解失败：{}", e))?;
+    if let Ok(conn) = db.pool.get() {
+        crate::commands::knowledge::record_kb_usage_conn(
+            &conn,
+            &format!("enclave:{}", org_id),
+            &model,
+        );
+    }
+    Ok(drafts)
 }
 
 /// 团队报告（只读聚合）：周期内的任务 / 汇报 / 知识产出与成员绩效数据。
