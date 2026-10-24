@@ -331,8 +331,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const setOpen = useCommandCenterStore((s) => s.setOpen);
   const closeCenter = useCommandCenterStore((s) => s.closeCenter);
   const refreshCenter = useCommandCenterStore((s) => s.refreshCenter);
-  const guideSeen = useCommandCenterStore((s) => s.guideSeen);
-  const markGuideSeen = useCommandCenterStore((s) => s.markGuideSeen);
   const usage = useCommandCenterStore((s) => s.usage);
   const loadingUsage = useCommandCenterStore((s) => s.loadingUsage);
   const pollLive = useCommandCenterStore((s) => s.pollLive);
@@ -381,33 +379,19 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const cliAgentName = registryAgents.find((a) => a.agentType === cliAgentType)?.displayName;
   const agentReady = Boolean(apiProvider) || Boolean(cliAgentType);
   /**
-   * 主动重新打开使用引导（不落盘，仅本次面板存活期间有效）。
+   * 使用引导的展开态（本次面板存活期间有效，不落盘）。
    *
-   * 背景：引导"看过一次就不再出现"是刻意的（新用户不被反复打扰），但**没有回来的路**——
-   * 用户之后想再对照一遍步骤，只能靠清 localStorage。现在引导收起后，
-   * 会在它原本的位置（待处理之前）留一行常驻入口，点开即还原完整内容。
-   * 让"已看过"变成"默认收起、随时可展开"，而不是"永久消失"。
+   * **默认折叠**：开发/生产一致，初次进入也只是一行「开始使用」入口。
+   * 之前用「是否看过 / Agent 是否已配置」决定是否自动展开，导致两边表现不一致：
+   * 生产环境没配 Agent，点「知道了」后整块既收不起来、又只剩半截内容（五种模式与常用功能被藏掉）。
+   * 现在只有一条规则：**用户点开才展开，展开后随时可收起**。
    */
-  const [guideForcedOpen, setGuideForcedOpen] = useState(false);
-  // 未配置时向导常驻（即使用户已点过「知道了」——配置是使用前提，不能因为关掉指引就找不到了）
-  const showGuide = !guideSeen || !agentReady || guideForcedOpen;
-  /**
-   * 是否展示「完整引导」。
-   *
-   * 与 showGuide 的区别：未配置 Agent 时引导块常驻，但那时只留「使用向导」这一块；
-   * 首次（含刚打开时的自动展示）与用户主动展开时，才连同功能说明一起给全。
-   * 之前只有「首次」一条路径，所以主动展开时只能看到半截内容。
-   */
-  const guideShowFull = !guideSeen || guideForcedOpen;
+  const [guideOpen, setGuideOpen] = useState(false);
 
-  /** 收起引导：首次点「知道了」要落盘（下次不再自动弹），任何时候都要清掉主动展开的标记 */
-  const dismissGuide = () => {
-    if (!guideSeen) markGuideSeen();
-    setGuideForcedOpen(false);
-  };
+  /** 收起引导（回到一行常驻入口） */
+  const collapseGuide = () => setGuideOpen(false);
 
   // Esc 关闭（与确认弹窗一致）。监听器只在打开期间挂载，回调里才 setState。
-  // 走 closeCenter：首次关闭时给出「入口在这里」指引，避免新用户关掉后找不到入口。
   // 内嵌态不参与 Esc：它不是弹层，按 Esc 没有"关掉"的语义。
   useEffect(() => {
     if (!open || inline) return;
@@ -676,8 +660,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
         >
           {/* 使用指引 + 使用向导（启动台职责）
               层级：指引块（主色底）→ 卡片 → 卡内「步骤 / 术语胶囊 + 说明」
-              未配置 Agent 时向导常驻，配置完成后整块收起成一行常驻入口（见下方 else 分支） */}
-          {showGuide ? (
+              默认折叠成一行入口；点开后是完整内容，并可随时「收起」 */}
+          {guideOpen ? (
             <div
               className="col-span-full min-w-0 overflow-hidden rounded-xl px-3.5 py-3 space-y-2"
               style={{ backgroundColor: 'var(--accent-light)' }}
@@ -686,15 +670,14 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
                   开始使用（顶栏可切换工作模式）
                 </span>
-                {(!guideSeen || guideForcedOpen) && (
-                  <button
-                    onClick={dismissGuide}
-                    className="pd-btn px-2 py-0.5 rounded text-[10px] shrink-0"
-                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                  >
-                    {guideSeen ? '收起' : '知道了'}
-                  </button>
-                )}
+                <button
+                  onClick={collapseGuide}
+                  className="pd-btn px-2 py-0.5 rounded text-[10px] shrink-0"
+                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  title="收起使用引导，回到一行入口"
+                >
+                  收起
+                </button>
               </div>
 
               {/* 使用向导：① 配置 Agent（前提）→ ② 开始首次会话 */}
@@ -773,69 +756,62 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 </div>
               </div>
 
-              {/* 功能说明：首次展示，以及用户主动展开引导时一并展示
-                  （未配置 Agent 的常驻态只留「使用向导」，避免这一大片长期占屏）；
-                  左栏（五种工作模式）条目更短，按 2:3 分栏给它更窄的一列，右栏拿到更多行宽 */}
-              {guideShowFull && (
-                <div
-                  className="grid gap-2"
-                  style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)' }}
-                >
-                  {GUIDE_GROUPS.map((group) => (
-                    <div
-                      key={group.title}
-                      className="rounded-lg px-2.5 py-2"
-                      style={{ backgroundColor: 'var(--bg-primary)' }}
-                    >
-                      {/* 组标题：主色竖条 + 标题（不再拖一条分隔线，避免整屏线条）。
-                          下间距刻意大于条目之间的段间距（12px vs 6px + 行高半距）：
-                          两者接近时，标题读起来会像"又一条内容"，分不出这组从哪开始。 */}
-                      <div className="flex items-center gap-1.5 mb-3">
-                        <span style={{ width: 2, height: 10, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
-                        <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
-                          {group.title}
-                        </span>
-                      </div>
-                      {/* 条目 = 术语列 + 说明：术语用**加粗文字**而不是灰底胶囊 ——
-                          12 个灰块本身就是噪声，且胶囊容易读成可点的按钮；
-                          定宽成列后左边缘对齐，扫读靠的是列对齐 + 字重差，不靠底色。
-                          术语与说明同字号同行高（只差字重），首行基线才对得齐。 */}
-                      <ul className="space-y-1.5">
-                        {group.items.map((it) => (
-                          <li key={it.term} className="flex items-start gap-2.5">
-                            <span
-                              className="shrink-0 text-[11px] font-semibold leading-relaxed"
-                              style={{ minWidth: 60, color: 'var(--text-primary)' }}
-                            >
-                              {it.term}
-                            </span>
-                            <span className="flex-1 min-w-0 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                              {it.desc}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
+              {/* 功能说明：展开引导时一并展示（默认折叠态不占屏） */}
+              <div
+                className="grid gap-2"
+                style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)' }}
+              >
+                {GUIDE_GROUPS.map((group) => (
+                  <div
+                    key={group.title}
+                    className="rounded-lg px-2.5 py-2"
+                    style={{ backgroundColor: 'var(--bg-primary)' }}
+                  >
+                    {/* 组标题：主色竖条 + 标题（不再拖一条分隔线，避免整屏线条）。
+                        下间距刻意大于条目之间的段间距（12px vs 6px + 行高半距）：
+                        两者接近时，标题读起来会像"又一条内容"，分不出这组从哪开始。 */}
+                    <div className="flex items-center gap-1.5 mb-3">
+                      <span style={{ width: 2, height: 10, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
+                      <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
+                        {group.title}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              )}
+                    {/* 条目 = 术语列 + 说明：术语用**加粗文字**而不是灰底胶囊 ——
+                        12 个灰块本身就是噪声，且胶囊容易读成可点的按钮；
+                        定宽成列后左边缘对齐，扫读靠的是列对齐 + 字重差，不靠底色。
+                        术语与说明同字号同行高（只差字重），首行基线才对得齐。 */}
+                    <ul className="space-y-1.5">
+                      {group.items.map((it) => (
+                        <li key={it.term} className="flex items-start gap-2.5">
+                          <span
+                            className="shrink-0 text-[11px] font-semibold leading-relaxed"
+                            style={{ minWidth: 60, color: 'var(--text-primary)' }}
+                          >
+                            {it.term}
+                          </span>
+                          <span className="flex-1 min-w-0 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                            {it.desc}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
 
-              {guideShowFull && (
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    三层记忆都会自动注入模型上下文（KV 记忆按需检索）。
-                  </span>
-                  <button onClick={goMemory} className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
-                    去记忆管理 ›
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  三层记忆都会自动注入模型上下文（KV 记忆按需检索）。
+                </span>
+                <button onClick={goMemory} className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
+                  去记忆管理 ›
+                </button>
+              </div>
             </div>
           ) : (
-            /* 引导收起后的常驻入口：留在它原本出现的位置（待处理之前），
-               否则「看过一次」等于永久消失，想再对照步骤只能清 localStorage */
+            /* 默认折叠态的常驻入口：点击展开完整引导（使用向导 + 五种模式 + 常用功能） */
             <button
-              onClick={() => setGuideForcedOpen(true)}
+              onClick={() => setGuideOpen(true)}
               className="col-span-full min-w-0 w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-left transition-opacity hover:opacity-90"
               style={{ backgroundColor: 'var(--accent-light)' }}
               title="展开使用引导：配置 Agent 与各功能说明"

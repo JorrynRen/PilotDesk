@@ -22,32 +22,11 @@ import { useWorkflowStore } from './workflowStore';
 import { useGroupChatStore } from './groupChatStore';
 import { useApiProviderStore } from './apiProviderStore';
 
-/** 首次使用指引的展示标记（纯前端，与 `pilotdesk.notifications` 同一约定）。 */
-const GUIDE_STORAGE_KEY = 'pilotdesk.command-center.guide-seen';
-
 /** 成本速览的统计窗口（天）。 */
 const USAGE_DAYS = 7;
 
-function loadFlag(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function saveFlag(key: string): void {
-  try {
-    localStorage.setItem(key, '1');
-  } catch {
-    /* 配额/隐私模式失败可忽略：至多再展示一次 */
-  }
-}
-
 interface CommandCenterState {
   open: boolean;
-  /** 一次性使用指引是否展示过 */
-  guideSeen: boolean;
   /** 近 7 天三维归因（成本速览） */
   usage: UsageAttribution | null;
   loadingUsage: boolean;
@@ -72,9 +51,8 @@ interface CommandCenterState {
   pollLive: () => Promise<void>;
   /** 纯关闭（跳转类操作用：用户已经找到下一步，不需要额外提示） */
   setOpen: (open: boolean) => void;
-  /** 显式关闭（X / Esc / 遮罩）：标记「使用指引已看过」，之后默认页不再展开整块引导 */
+  /** 显式关闭（X / Esc / 遮罩） */
   closeCenter: () => void;
-  markGuideSeen: () => void;
 }
 
 export const useCommandCenterStore = create<CommandCenterState>((set) => {
@@ -117,7 +95,6 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => {
 
   return {
     open: false,
-    guideSeen: loadFlag(GUIDE_STORAGE_KEY),
     usage: null,
     loadingUsage: false,
 
@@ -133,19 +110,7 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => {
     setOpen: (open) => set({ open }),
 
     closeCenter: () => {
-      /**
-       * 显式关闭 = 用户已经知道这个面板存在，立刻标记「使用指引已看过」。
-       *
-       * 不标记的话，会话默认页（内嵌指挥中心）里那块「开始使用」引导会一直以展开态常驻，
-       * 用户每回默认页都被它顶掉半屏。标记后它收成一行常驻入口，想再看点开即可。
-       */
-      if (!loadFlag(GUIDE_STORAGE_KEY)) saveFlag(GUIDE_STORAGE_KEY);
-      set({ open: false, guideSeen: true });
-    },
-
-    markGuideSeen: () => {
-      saveFlag(GUIDE_STORAGE_KEY);
-      set({ guideSeen: true });
+      set({ open: false });
     },
   };
 });
