@@ -121,6 +121,13 @@ async fn watch_once(
             continue;
         }
         let topic = ev["topic"].as_str().unwrap_or("task");
-        let _ = ui_tx.send(json!({ "orgId": org_id, "topic": topic }));
+        // 透传对象 id：前端据此只刷新当前任务 / 当前库
+        let mut payload = json!({ "orgId": org_id, "topic": topic });
+        for key in ["taskId", "kbId"] {
+            if let Some(v) = ev.get(key) {
+                payload[key] = v.clone();
+            }
+        }
+        let _ = ui_tx.send(payload);
     }
 }

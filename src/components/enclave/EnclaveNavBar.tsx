@@ -58,8 +58,10 @@ export function EnclaveNavBar({
       topic?: string;
       type?: string;
       connected?: boolean;
+      taskId?: string;
+      kbId?: string;
     }>('enclave:changed', (ev) => {
-      const { orgId, topic, type, connected } = ev.payload ?? {};
+      const { orgId, topic, type, connected, taskId, kbId } = ev.payload ?? {};
       if (orgId !== activeOrgId) return;
       // 连接状态：不走业务刷新，只更新提示
       if (type === 'realtime') {
@@ -72,8 +74,11 @@ export function EnclaveNavBar({
       lastAt.set(topic, now);
       if (topic === 'task') {
         void useEnclaveTaskStore.getState().loadTasks(orgId);
-        const taskId = useEnclaveTaskStore.getState().activeTaskId;
-        if (taskId) void useEnclaveTaskStore.getState().loadExtras(orgId, taskId);
+        // 只有事件指向当前任务（或未带 id）时才重拉详情，避免别人的任务把当前详情刷掉
+        const activeTask = useEnclaveTaskStore.getState().activeTaskId;
+        if (activeTask && (!taskId || taskId === activeTask)) {
+          void useEnclaveTaskStore.getState().loadExtras(orgId, activeTask);
+        }
       } else if (topic === 'notify') {
         void useEnclaveOrgStore.getState().loadNotifications(orgId);
       } else if (topic === 'org') {
@@ -81,8 +86,9 @@ export function EnclaveNavBar({
         void useEnclaveOrgStore.getState().loadGovernance(orgId);
       } else if (topic === 'kb') {
         const kb = useEnclaveKbStore.getState();
-        // 「全部库」是只读聚合，同样需要跟着刷新
+        // 「全部库」是只读聚合：任何库变化都要刷；具体库只刷自己
         if (!kb.activeKbId) return;
+        if (kbId && kb.activeKbId !== ALL_KB_ID && kbId !== kb.activeKbId) return;
         void kb.search(orgId, kb.query);
         if (kb.activeKbId !== ALL_KB_ID) {
           void kb.loadCandidates(orgId, kb.activeKbId);

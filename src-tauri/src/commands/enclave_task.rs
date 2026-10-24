@@ -31,6 +31,8 @@ where
     T: Serialize + DeserializeOwned,
     F: FnOnce(&Connection, &str) -> Result<T, String>,
 {
+    // 变更提示要在 payload 被成员分支消费前算好（主机本机写入用它广播对象 id）
+    let hint = crate::enclave::host::change_hint(command, &payload);
     let role = state.store.with_conn(|c| authz::role_for_org(c, org_id))?;
     match role {
         Some(authz::Role::Owner) => {
@@ -39,8 +41,8 @@ where
                 local(c, &actor)
             })?;
             // 主机本机写入也要让在线成员知道（成员走 WS 广播，本机 UI 走 Tauri 事件）
-            if let Some(topic) = crate::enclave::host::change_topic(command) {
-                crate::enclave::host::notify_change(state, org_id, topic);
+            if let Some(hint) = hint {
+                crate::enclave::host::notify_change_hint(state, org_id, &hint, None);
             }
             Ok(out)
         }

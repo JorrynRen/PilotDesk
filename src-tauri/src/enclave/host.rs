@@ -280,35 +280,87 @@ pub fn change_topic(command: &str) -> Option<&'static str> {
     None
 }
 
+/// 一次业务变更的提示：主题 + 可选对象 id。
+///
+/// 前端据此只刷新当前对象（当前任务详情 / 当前库），避免整页重拉。
+#[derive(Clone)]
+pub struct ChangeHint {
+    pub topic: String,
+    pub task_id: Option<String>,
+    pub kb_id: Option<String>,
+}
+
+/// 写命令 + 参数 → 变更提示（读命令返回 `None`）。
+pub fn change_hint(command: &str, payload: &Value) -> Option<ChangeHint> {
+    let topic = change_topic(command)?;
+    let pick = |key: &str| {
+        payload
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    Some(ChangeHint {
+        topic: topic.to_string(),
+        task_id: pick("taskId"),
+        kb_id: pick("kbId"),
+    })
+}
+
 /// 广播一次业务变更：本机 UI 收 Tauri 事件，已连接的成员收到 WS `event` 帧。
 ///
-/// 事件只带主题（task / kb / notify / org），不带业务数据——成员端据此重拉，
+/// 事件只带主题与对象 id，不带业务数据——成员端据此重拉，
 /// 保证「不缓存团队数据」的边界不被实时通道打破。
 ///
 /// `except` 用于跳过发起本次变更的那条连接：请求方已经拿到了响应，无需再收一遍事件。
-pub fn notify_change_except(
+fn emit_change(
     state: &EnclaveState,
     org_id: &str,
-    topic: &str,
+    hint: &ChangeHint,
     except: Option<u64>,
 ) {
     let at = chrono::Utc::now().timestamp();
-    if let Some(tx) = state.host.ui_sink() {
-        let _ = tx.send(json!({ "orgId": org_id, "topic": topic, "at": at }));
-    }
-    let frame = json!({
-        "type": "event",
+    let payload = json!({
         "orgId": org_id,
-        "topic": topic,
+        "topic": hint.topic,
+        "taskId": hint.task_id,
+        "kbId": hint.kb_id,
         "at": at,
-    })
-    .to_string();
-    state.host.broadcast(org_id, &frame, except);
+    });
+    if let Some(tx) = state.host.ui_sink() {
+        let _ = tx.send(payload.clone());
+    }
+    let mut frame = payload;
+    if let Some(obj) = frame.as_object_mut() {
+        obj.insert("type".into(), json!("event"));
+        // 空 id 不下发，避免前端把 null 当成「已知对象」
+        obj.retain(|_, v| !v.is_null());
+    }
+    state.host.broadcast(org_id, &frame.to_string(), except);
+}
+
+/// 带对象 id 的变更广播（成员端请求路径用；跳过发起连接）。
+pub fn notify_change_hint(
+    state: &EnclaveState,
+    org_id: &str,
+    hint: &ChangeHint,
+    except: Option<u64>,
+) {
+    emit_change(state, org_id, hint, except);
 }
 
 /// 主机本机写入：本机 UI + 所有在线成员都要刷新。
 pub fn notify_change(state: &EnclaveState, org_id: &str, topic: &str) {
-    notify_change_except(state, org_id, topic, None);
+    emit_change(
+        state,
+        org_id,
+        &ChangeHint {
+            topic: topic.to_string(),
+            task_id: None,
+            kb_id: None,
+        },
+        None,
+    );
 }
 
 /// 该组织当前在线的成员 user id（主机本地读取；成员端经 `org.online` RPC 取）。
@@ -1728,13 +1780,13 @@ async fn handle_conn(
             other => res_err(&req.id, &format!("未知方法：{}", other)),
         };
         // 先回响应，再广播；发起连接本身跳过（它已经拿到响应）
-        let changed = request_topic(&req).filter(|_| reply_ok(&reply));
+        let hint = request_hint(&req).filter(|_| reply_ok(&reply));
         if out_tx.send(reply).is_err() {
             break;
         }
-        if let Some(topic) = changed {
+        if let Some(hint) = hint {
             let org = req.params["orgId"].as_str().unwrap_or(hello.org_id.as_str());
-            notify_change_except(&state, org, topic, Some(sub_id));
+            notify_change_hint(&state, org, &hint, Some(sub_id));
         }
     }
 
@@ -2745,12 +2797,22 @@ fn res_err(id: &str, message: &str) -> String {
     json!({ "type": "res", "id": id, "ok": false, "error": message }).to_string()
 }
 
-/// 这条请求是否可能改动业务数据；返回变更主题（读请求 / 未知方法返回 `None`）。
-fn request_topic(req: &RequestMsg) -> Option<&'static str> {
+/// 这条请求是否可能改动业务数据；返回变更提示（读请求 / 未知方法返回 `None`）。
+fn request_hint(req: &RequestMsg) -> Option<ChangeHint> {
     match req.method.as_str() {
-        "enclave.call" => change_topic(req.params["command"].as_str().unwrap_or("")),
+        "enclave.call" => change_hint(
+            req.params["command"].as_str().unwrap_or(""),
+            &req.params.get("payload").cloned().unwrap_or_else(|| json!({})),
+        ),
         // 上传收尾才真正挂到任务 / 汇报上
-        "file.upload_finish" | "file.upload_keep" => Some("task"),
+        "file.upload_finish" | "file.upload_keep" => Some(ChangeHint {
+            topic: "task".to_string(),
+            task_id: req.params["taskId"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            kb_id: None,
+        }),
         _ => None,
     }
 }
