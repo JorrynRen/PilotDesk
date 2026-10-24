@@ -65,6 +65,10 @@ export function EnclaveOrgPage() {
   const lastRefresh = useEnclaveOrgStore((s) => s.lastRefresh);
   // 登录账号变化 → 必须先校验新身份，再重新加载本机团队数据
   const accountKey = useAccountStore((s) => s.account?.email ?? '');
+  const account = useAccountStore((s) => s.account);
+  const accountLoaded = useAccountStore((s) => s.loaded);
+  /** 未登录（登录检查已完成但没有账号）：成员来自平台组织架构，此时不应展示空表 */
+  const notLoggedIn = accountLoaded && !account;
 
   useEffect(() => {
     let cancelled = false;
@@ -224,7 +228,27 @@ export function EnclaveOrgPage() {
           </div>
         )}
 
-        {orgTab === 'basic' && (
+        {orgTab === 'basic' &&
+          (notLoggedIn ? (
+            <div
+              className="rounded-lg p-6 flex flex-col items-center gap-2 text-center"
+              style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+            >
+              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                登录后可查看组织与成员
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                成员名单来自平台组织架构，登录后会同步到本机（只读快照）；未登录时本页不展示成员表。
+              </span>
+              <button
+                onClick={() => navigate('/settings?tab=account')}
+                className="pd-btn text-xs px-3 py-1 rounded-lg"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                去登录
+              </button>
+            </div>
+          ) : (
           <>
         {/* 组织信息卡 */}
         {org && (
@@ -408,7 +432,7 @@ export function EnclaveOrgPage() {
           </div>
         </div>
           </>
-        )}
+          ))}
 
         {orgTab === 'host' && <OrgGovernanceSection section="host" />}
         {orgTab === 'security' && <OrgGovernanceSection section="security" />}

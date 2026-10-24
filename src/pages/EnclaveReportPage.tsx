@@ -33,6 +33,9 @@ interface Range {
 
 const DAY_SEC = 86_400;
 
+/** 成员 / 已完成任务每页条数 */
+const PAGE_SIZE = 10;
+
 function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -97,6 +100,60 @@ function fmtDone(unixSec: number): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** 表格分页条：显示当前区间与总数，翻页按钮复用组织页的样式 */
+function TablePager({
+  page,
+  total,
+  onChange,
+}: {
+  /** 0 起的当前页 */
+  page: number;
+  total: number;
+  onChange: (next: number) => void;
+}) {
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const start = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const end = Math.min((page + 1) * PAGE_SIZE, total);
+  return (
+    <div
+      className="shrink-0 h-8 px-3 flex items-center gap-2 text-[10px]"
+      style={{ borderTop: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
+    >
+      <span>
+        {start}-{end} / {total}
+      </span>
+      <div className="flex-1" />
+      <button
+        onClick={() => onChange(page - 1)}
+        disabled={page <= 0}
+        className="px-2 py-0.5 rounded"
+        style={{
+          border: '1px solid var(--border)',
+          color: 'var(--text-secondary)',
+          opacity: page <= 0 ? 0.4 : 1,
+        }}
+      >
+        上一页
+      </button>
+      <span className="tabular-nums">
+        {page + 1} / {pageCount}
+      </span>
+      <button
+        onClick={() => onChange(page + 1)}
+        disabled={page >= pageCount - 1}
+        className="px-2 py-0.5 rounded"
+        style={{
+          border: '1px solid var(--border)',
+          color: 'var(--text-secondary)',
+          opacity: page >= pageCount - 1 ? 0.4 : 1,
+        }}
+      >
+        下一页
+      </button>
+    </div>
+  );
+}
+
 export function EnclaveReportPage() {
   const { viewMode, setMode } = useTerminal();
   const navigate = useNavigate();
@@ -116,6 +173,8 @@ export function EnclaveReportPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rootOpen, setRootOpen] = useState(false);
+  const [memberPage, setMemberPage] = useState(0);
+  const [donePage, setDonePage] = useState(0);
 
   const range = useMemo(
     () => (kind === 'custom' ? customRange(fromDate, toDate) : periodRange(kind, offset)),
@@ -128,6 +187,25 @@ export function EnclaveReportPage() {
       return m?.displayName || m?.email || id;
     },
     [members],
+  );
+
+  // 组织 / 周期变化后回到第一页
+  useEffect(() => {
+    setMemberPage(0);
+    setDonePage(0);
+  }, [activeOrgId, range.from, range.to]);
+
+  const memberPages = Math.max(1, Math.ceil((stats?.members.length ?? 0) / PAGE_SIZE));
+  const curMemberPage = Math.min(memberPage, memberPages - 1);
+  const pagedMembers = (stats?.members ?? []).slice(
+    curMemberPage * PAGE_SIZE,
+    (curMemberPage + 1) * PAGE_SIZE,
+  );
+  const donePages = Math.max(1, Math.ceil((stats?.completedTasks.length ?? 0) / PAGE_SIZE));
+  const curDonePage = Math.min(donePage, donePages - 1);
+  const pagedDone = (stats?.completedTasks ?? []).slice(
+    curDonePage * PAGE_SIZE,
+    (curDonePage + 1) * PAGE_SIZE,
   );
 
   useEffect(() => {
@@ -519,7 +597,7 @@ export function EnclaveReportPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {stats.members.map((m) => (
+                      {pagedMembers.map((m) => (
                         <tr
                           key={m.userId}
                           style={{ color: 'var(--text-secondary)', borderTop: '1px solid var(--border)' }}
@@ -551,6 +629,7 @@ export function EnclaveReportPage() {
                     </tbody>
                   </table>
                 </div>
+                <TablePager page={curMemberPage} total={stats.members.length} onChange={setMemberPage} />
               </div>
 
               {/* 周期内完成明细：周报正文的素材 */}
@@ -585,7 +664,7 @@ export function EnclaveReportPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {stats.completedTasks.map((t) => (
+                      {pagedDone.map((t) => (
                         <tr
                           key={t.taskId}
                           style={{ color: 'var(--text-secondary)', borderTop: '1px solid var(--border)' }}
@@ -618,6 +697,7 @@ export function EnclaveReportPage() {
                     </tbody>
                   </table>
                 </div>
+                <TablePager page={curDonePage} total={stats.completedTasks.length} onChange={setDonePage} />
               </div>
             </>
           )}
