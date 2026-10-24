@@ -108,10 +108,9 @@ export function EnclaveNavBar({
   }, [activeOrgId]);
 
   return (
-    <div
-      className="shrink-0 min-h-10 px-3 py-1 flex items-center gap-1.5 flex-wrap"
-      style={{ borderBottom: '1px solid var(--border)' }}
-    >
+    // 导航条本身**不画底边框**：四个页面都把它放在「带 1px 边框 + 圆角」的卡片里，
+    // 这里的 borderBottom 会紧贴卡片自身的下边框，视觉上叠成一条更粗的横线。
+    <div className="shrink-0 min-h-10 px-3 py-1 flex items-center gap-1.5 flex-wrap">
       {TABS.map((t) => {
         const Icon = t.icon;
         const on = active === t.key;
