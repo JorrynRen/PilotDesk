@@ -3518,4 +3518,136 @@ mod tests {
         drop(state);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// 成员写入后，同组织其他在线成员收到变更事件；发起连接自己不再收（避免重复刷新）。
+    #[tokio::test]
+    async fn change_event_reaches_other_members_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "pilotdesk-enclave-realtime-test-{}",
+            crate::utils::new_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = std::sync::Arc::new(
+            super::super::db::EnclaveStore::open(&dir.join("enclave.db")).unwrap(),
+        );
+        store
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO local_identity (user_id, email) VALUES ('1', 'host@example.com')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, host_device_id, host_device_name)
+                     VALUES ('org1', 'Org', '1', 'owner', '1', 'test-device', 'TestDevice')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                for (uid, name) in [("2", "甲"), ("3", "乙")] {
+                    c.execute(
+                        "INSERT INTO member_snapshot (org_id, user_id, role, display_name)
+                         VALUES ('org1', ?1, 'member', ?2)",
+                        params![uid, name],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let state = std::sync::Arc::new(EnclaveState::new(store));
+
+        let host_tls = tls::ensure_host_tls_in(&dir.join("tls")).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn({
+            let st = state.clone();
+            let acceptor = host_tls.acceptor.clone();
+            async move {
+                // 两条成员连接
+                for _ in 0..2 {
+                    if let Ok((stream, peer)) = listener.accept().await {
+                        if let Ok(tls_stream) = acceptor.accept(stream).await {
+                            let st = st.clone();
+                            tokio::spawn(async move { handle_conn(tls_stream, peer, st).await });
+                        }
+                    }
+                }
+            }
+        });
+
+        async fn hello_as(port: u16, user: &str) -> (WsTx, WsRx) {
+            let (ws, _) = tls::connect_pinned(
+                &format!("wss://127.0.0.1:{}", port),
+                None,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+            let (mut tx, mut rx) = ws.split();
+            tx.send(Message::Text(
+                json!({
+                    "type": "hello", "protocol": PROTOCOL,
+                    "orgId": "org1", "userId": user, "token": "",
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            assert_eq!(next_json(&mut rx).await.unwrap()["type"], "hello_ok");
+            (tx, rx)
+        }
+
+        let (mut tx_a, mut rx_a) = hello_as(port, "2").await;
+        let (mut tx_b, mut rx_b) = hello_as(port, "3").await;
+
+        // 甲建任务
+        tx_a.send(Message::Text(
+            json!({
+                "type":"req","id":"w1","method":"enclave.call",
+                "params":{
+                    "orgId":"org1","command":"task.create",
+                    "payload":{"input":{"title":"实时任务"}}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let created = next_json(&mut rx_a).await.unwrap();
+        assert_eq!(created["ok"], true, "create failed: {}", created);
+
+        // 乙收到事件（只带主题，不带业务数据）
+        let ev = tokio::time::timeout(Duration::from_secs(5), next_json(&mut rx_b))
+            .await
+            .expect("乙应在超时前收到事件")
+            .unwrap();
+        assert_eq!(ev["type"], "event");
+        assert_eq!(ev["topic"], "task");
+        assert_eq!(ev["orgId"], "org1");
+        assert!(ev.get("data").is_none(), "事件不得携带业务数据");
+
+        // 甲（发起方）不额外收事件：下一帧必须是它自己的响应
+        tx_a.send(Message::Text(
+            json!({
+                "type":"req","id":"r1","method":"enclave.call",
+                "params":{"orgId":"org1","command":"task.get","payload":{}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let next = tokio::time::timeout(Duration::from_secs(5), next_json(&mut rx_a))
+            .await
+            .expect("甲不应收到事件帧")
+            .unwrap();
+        assert_eq!(next["type"], "res");
+        assert_eq!(next["id"], "r1");
+
+        drop(tx_a);
+        drop(rx_a);
+        drop(tx_b);
+        drop(rx_b);
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

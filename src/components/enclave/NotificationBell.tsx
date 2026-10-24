@@ -40,9 +40,10 @@ export function NotificationBell({
   useEffect(() => {
     if (!orgId) return;
     void useEnclaveOrgStore.getState().loadNotifications(orgId);
+    // 实时通道（enclave:changed / notify）是主路径；这里只做兜底，防止事件丢失
     const timer = window.setInterval(
       () => void useEnclaveOrgStore.getState().loadNotifications(orgId),
-      60_000,
+      5 * 60_000,
     );
     return () => window.clearInterval(timer);
   }, [orgId]);
