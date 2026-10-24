@@ -306,6 +306,8 @@ function TeamFileRelationPanel({
           style={{ minWidth: 240, maxWidth: 340 }}
           placeholder="不属于任何正文"
           title="公文类：这份文件是哪个正文的附件（一个文件只能有一个正文）"
+          searchable
+          searchPlaceholder="搜索文件名…"
         />
         <span style={{ color: 'var(--text-tertiary)' }}>设为附件后，它会缩进显示在正文下面</span>
         <div className="flex-1" />
@@ -367,6 +369,8 @@ function TeamFileRelationPanel({
           style={{ minWidth: 240, maxWidth: 340 }}
           placeholder="选择本文件替代的旧版…"
           title="只做标注：旧版不会被删除，也不会被排除在检索之外"
+          searchable
+          searchPlaceholder="搜索文件名…"
         />
       </div>
 

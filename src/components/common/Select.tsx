@@ -6,7 +6,9 @@
  * - 面板圆角/边框/阴影与选择器本体一致，配色全部走主题变量；
  * - 依据可用空间自动向上/向下展开，空间不足时面板内滚动；
  * - 键盘支持（Esc 关闭、↑/↓ 移动、Enter 选中）+ 点击外部关闭；
- * - portal 到 body，避免被祖先的 overflow: hidden / transform 裁掉。
+ * - portal 到 body，避免被祖先的 overflow: hidden / transform 裁掉；
+ * - 可选内置搜索（`searchable`）：选项多到无法靠滚动找（如知识库文件关系），
+ *   打开即聚焦输入框，按 label 子串过滤；只渲染前 200 项，避免上千个按钮卡顿。
  *
  * 用法：把 `<select value={v} onChange={(e) => setV(e.target.value)}><option value="a">A</option></select>`
  * 换成 `<Select value={v} onChange={setV} options={[{ value: 'a', label: 'A' }]} />`。
@@ -14,7 +16,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Search } from 'lucide-react';
 
 export interface SelectOption {
   value: string;
@@ -51,6 +53,10 @@ export interface SelectProps {
   prefer?: 'auto' | 'up' | 'down';
   /** 面板最小宽度（px），默认与触发按钮同宽 */
   panelMinWidth?: number;
+  /** 面板内显示搜索框（按 label 子串过滤）；选项很多时必开 */
+  searchable?: boolean;
+  /** 搜索框占位文案 */
+  searchPlaceholder?: string;
 }
 
 const PANEL_MAX_H = 280;
@@ -60,6 +66,8 @@ const VIEWPORT_PAD = 8;
 const ITEM_H = 30;
 /** 分组头行高（估算面板高度用） */
 const GROUP_H = 22;
+/** 可搜索时最多渲染的选项数：搜到的仍可继续输入缩小范围，避免上千个按钮卡顿 */
+const MAX_RENDER = 200;
 
 export function Select({
   value,
@@ -74,11 +82,14 @@ export function Select({
   title,
   prefer = 'auto',
   panelMinWidth,
+  searchable = false,
+  searchPlaceholder = '搜索…',
 }: SelectProps) {
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [query, setQuery] = useState('');
   const [rect, setRect] = useState<{ left: number; top: number; width: number; up: boolean; maxH: number } | null>(null);
 
   // 分组与平铺统一成一条扁平列表：键盘导航、active 下标、value 查找都基于它，
@@ -89,6 +100,19 @@ export function Select({
   );
   const groupCount = groups?.length ?? 0;
 
+  /** 搜索过滤后的选项（不搜索时就是 flat）；大小写不敏感的子串匹配 */
+  const visible = useMemo(() => {
+    if (!searchable) return flat;
+    const q = query.trim().toLowerCase();
+    if (!q) return flat;
+    return flat.filter((o) => o.label.toLowerCase().includes(q));
+  }, [flat, searchable, query]);
+  /** 实际渲染 / 键盘可选的选项：搜索模式下截断，避免上千个 DOM 按钮卡顿 */
+  const shown = useMemo(
+    () => (searchable && visible.length > MAX_RENDER ? visible.slice(0, MAX_RENDER) : visible),
+    [searchable, visible],
+  );
+
   const current = flat.find((o) => o.value === value);
 
   const measure = useCallback(() => {
@@ -97,7 +121,10 @@ export function Select({
     const r = el.getBoundingClientRect();
     const below = window.innerHeight - r.bottom - GAP - VIEWPORT_PAD;
     const above = r.top - GAP - VIEWPORT_PAD;
-    const want = Math.min(PANEL_MAX_H, flat.length * ITEM_H + groupCount * GROUP_H + 8);
+    const want = Math.min(
+      PANEL_MAX_H,
+      shown.length * ITEM_H + groupCount * GROUP_H + 8 + (searchable ? 34 : 0),
+    );
     const up = prefer === 'up' ? true : prefer === 'down' ? false : below < want && above > below;
     const avail = up ? above : below;
     setRect({
@@ -107,7 +134,7 @@ export function Select({
       up,
       maxH: Math.max(PANEL_MIN_H, Math.min(want, avail)),
     });
-  }, [flat.length, groupCount, panelMinWidth, prefer]);
+  }, [shown.length, groupCount, panelMinWidth, prefer, searchable]);
 
   // 打开时测量一次；面板渲染后再量一次，避免首帧高度估算不准
   useLayoutEffect(() => {
@@ -126,12 +153,12 @@ export function Select({
         setOpen(false);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setActive((i) => Math.min(flat.length - 1, i + 1));
+        setActive((i) => Math.min(shown.length - 1, i + 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setActive((i) => Math.max(0, i - 1));
       } else if (e.key === 'Enter') {
-        const o = flat[active];
+        const o = shown[active];
         if (o && !o.disabled) {
           onChange(o.value);
           setOpen(false);
@@ -161,7 +188,7 @@ export function Select({
       window.removeEventListener('scroll', onScrollResize, true);
       window.removeEventListener('resize', onScrollResize);
     };
-  }, [open, flat, active, onChange]);
+  }, [open, shown, active, onChange]);
 
   // 尺寸档：xs 与 InputBar/群聊等工具栏里的图标按钮（h=24）齐高，样式（内边距/字号/箭头）一并统一
   const h = size === 'md' ? 34 : size === 'sm' ? 28 : 24;
@@ -229,6 +256,7 @@ export function Select({
         onClick={() => {
           if (disabled) return;
           setOpen((v) => !v);
+          setQuery('');
           setActive(Math.max(0, flat.findIndex((o) => o.value === value)));
         }}
       >
@@ -264,25 +292,72 @@ export function Select({
               boxShadow: '0 10px 28px rgba(0,0,0,0.22)',
             }}
           >
-            {groups && groups.length > 0
-              ? (() => {
-                  let idx = -1;
-                  return groups.map((g) => (
-                    <div key={g.label}>
-                      <div
-                        className="px-2 pt-1.5 pb-0.5 text-[9px] font-medium"
-                        style={{ color: 'var(--text-tertiary)' }}
-                      >
-                        {g.label}
-                      </div>
-                      {g.options.map((o) => {
-                        idx += 1;
-                        return renderItem(o, idx, true);
-                      })}
+            {searchable && (
+              <div className="px-1 pb-1">
+                <div
+                  className="flex items-center gap-1.5 px-2"
+                  style={{
+                    height: 26,
+                    borderRadius: 7,
+                    backgroundColor: 'var(--bg-field)',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  <Search size={11} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+                  <input
+                    autoFocus
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setActive(0);
+                    }}
+                    placeholder={searchPlaceholder}
+                    className="w-full outline-none"
+                    style={{
+                      fontSize: fs,
+                      color: 'var(--text-primary)',
+                      backgroundColor: 'transparent',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+            {searchable && visible.length === 0 ? (
+              <div
+                className="px-2 py-3 text-center"
+                style={{ color: 'var(--text-tertiary)', fontSize: fs }}
+              >
+                没有匹配的选项
+              </div>
+            ) : groups && groups.length > 0 && !(searchable && query.trim()) ? (
+              (() => {
+                let idx = -1;
+                return groups.map((g) => (
+                  <div key={g.label}>
+                    <div
+                      className="px-2 pt-1.5 pb-0.5 text-[9px] font-medium"
+                      style={{ color: 'var(--text-tertiary)' }}
+                    >
+                      {g.label}
                     </div>
-                  ));
-                })()
-              : flat.map((o, i) => renderItem(o, i, false))}
+                    {g.options.map((o) => {
+                      idx += 1;
+                      return renderItem(o, idx, true);
+                    })}
+                  </div>
+                ));
+              })()
+            ) : (
+              shown.map((o, i) => renderItem(o, i, false))
+            )}
+            {searchable && visible.length > shown.length && (
+              <div
+                className="px-2 pt-1 pb-0.5 text-center"
+                style={{ color: 'var(--text-tertiary)', fontSize: 10 }}
+              >
+                匹配 {visible.length} 项，仅显示前 {MAX_RENDER} 项，继续输入可缩小范围
+              </div>
+            )}
           </div>,
           document.body,
         )}
