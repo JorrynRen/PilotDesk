@@ -236,8 +236,13 @@ export function KnowledgeEntryList({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* 筛选区：通用属性一行 + 专属属性一行 */}
-      <div className="shrink-0 px-4 pt-3 pb-2 space-y-2" style={{ borderBottom: '1px solid var(--border)' }}>
+      {/* 筛选区：通用属性一行 + 专属属性一行。
+          用浅底「成带」而不是再画一条全宽硬线：tab 区已经是 1px --border 的区域线，
+          这里再画同色同宽的线，会让人以为筛选项/列表行与 tab 是同一层级。 */}
+      <div
+        className="shrink-0 px-4 pt-3 pb-2 space-y-2"
+        style={{ backgroundColor: 'var(--bg-secondary)' }}
+      >
         <div className="flex items-center gap-2">
           {/* `pd-field` 把聚焦反馈交给容器：全局 `:focus-visible` 的 1px 描边优先级高于 Tailwind 的
               `outline-none`，不加这个类的话描边会落在内层 input 上 —— 看着像"边框在外、焦点圈在内"。 */}
@@ -332,7 +337,7 @@ export function KnowledgeEntryList({
       {checkedKeys.length > 0 && (
         <div
           className="shrink-0 px-4 py-1.5 flex items-center gap-2 text-[11px]"
-          style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}
+          style={{ borderBottom: '1px solid var(--border-light)', backgroundColor: 'var(--bg-tertiary)' }}
         >
           <span style={{ color: 'var(--text-primary)' }}>已选 {checkedKeys.length} 条</span>
           <div className="flex-1" />
@@ -404,7 +409,7 @@ export function KnowledgeEntryList({
               <div
                 key={e.key}
                 className="px-4 py-2.5 transition-colors"
-                style={{ borderBottom: '1px solid var(--border)', backgroundColor: open ? 'var(--bg-secondary)' : 'transparent' }}
+                style={{ borderBottom: '1px solid var(--border-light)', backgroundColor: open ? 'var(--bg-secondary)' : 'transparent' }}
               >
                 <div className="flex items-start gap-2 cursor-pointer" onClick={() => selectRow(e)}>
                   <input

@@ -1498,10 +1498,11 @@ export function EnclaveKbPage() {
             {/* 本机团队文件根目录（全局设置，仅影响本机存放位置；面板与任务页共用） */}
             <EnclaveFilesRootPanel open={rootOpen} />
 
-          {/* 知识库信息（owner / admin 可修改） */}
+          {/* 知识库信息（owner / admin 可修改）。
+              不画底边框：信息区与下面的 tab 栏属于同一个头部区域，
+              中间再来一条 1px --border 会与 tab 栏底部的区域线形成「同级线」错觉。 */}
           <div
             className="shrink-0 px-4 pt-2.5 pb-2"
-            style={{ borderBottom: '1px solid var(--border)' }}
           >
             {kbForm ? (
               <div className="flex flex-col gap-2">
@@ -2460,7 +2461,8 @@ export function EnclaveKbPage() {
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <div
                 className="shrink-0 px-4 py-1.5 flex items-center gap-2"
-                style={{ borderBottom: '1px solid var(--border)' }}
+                // 工具条用浅底成带，不画全宽硬线（与 tab 区线区分层级）
+                style={{ backgroundColor: 'var(--bg-secondary)' }}
               >
                 <SearchField
                   value={keyword}
@@ -2553,7 +2555,7 @@ export function EnclaveKbPage() {
                       key={e.memoryId}
                       className="px-4 py-2.5 transition-colors"
                       style={{
-                        borderBottom: '1px solid var(--border)',
+                        borderBottom: '1px solid var(--border-light)',
                         backgroundColor: open ? 'var(--bg-secondary)' : 'transparent',
                       }}
                     >
@@ -3011,7 +3013,8 @@ export function EnclaveKbPage() {
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <div
                 className="shrink-0 px-4 py-1.5 flex items-center gap-2"
-                style={{ borderBottom: '1px solid var(--border)' }}
+                // 工具条用浅底成带，不画全宽硬线（与 tab 区线区分层级）
+                style={{ backgroundColor: 'var(--bg-secondary)' }}
               >
                 <div className="w-[200px] shrink-0">
                   <Select
@@ -3112,7 +3115,7 @@ export function EnclaveKbPage() {
                         onClick={() => toggleGroup(g.id)}
                         className="w-full px-4 py-1.5 flex items-center gap-1.5 text-left transition-colors"
                         style={{
-                          borderBottom: '1px solid var(--border)',
+                          borderBottom: '1px solid var(--border-light)',
                           backgroundColor: 'var(--bg-tertiary)',
                         }}
                         title={collapsed ? '展开这个目录' : '折叠这个目录'}
@@ -3151,7 +3154,7 @@ export function EnclaveKbPage() {
                               <div
                                 className="py-2 pr-4 flex items-center gap-3"
                                 style={{
-                                  borderBottom: '1px solid var(--border)',
+                                  borderBottom: '1px solid var(--border-light)',
                                   marginLeft: 22,
                                   borderLeft: '1px solid var(--border)',
                                   // 附件比正文多缩一级（同一目录内才成立）

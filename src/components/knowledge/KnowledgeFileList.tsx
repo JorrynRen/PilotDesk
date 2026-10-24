@@ -531,8 +531,13 @@ export function KnowledgeFileList({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* 工具栏：搜索 + 选择 + 批量导出 */}
-      <div className="shrink-0 px-4 py-2 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
+      {/* 工具栏：搜索 + 选择 + 批量导出。
+          用浅底「成带」而不是再画一条全宽硬线：tab 区已经是 1px --border 的区域线，
+          这里再画同色同宽的线，会让人以为筛选项/列表行与 tab 是同一层级。 */}
+      <div
+        className="shrink-0 px-4 py-2 flex items-center gap-2"
+        style={{ backgroundColor: 'var(--bg-secondary)' }}
+      >
         {/* `pd-field` 把聚焦反馈交给容器：全局 `:focus-visible` 的 1px 描边优先级高于 Tailwind 的
             `outline-none`，不加这个类的话描边会落在内层 input 上 —— 看着像"边框在外、焦点圈在内"。 */}
         <div
@@ -675,7 +680,8 @@ export function KnowledgeFileList({
         </div>
       </div>
 
-      <div className="px-4 py-2 text-[10px]" style={{ color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border)' }}>
+      {/* 说明文字不是区块，不画分隔线：否则又多一条与 tab 区同级的横线 */}
+      <div className="px-4 py-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
         原文只存一份，多库共享引用；正文抽取后按「AI 分组」进「知识」列表参与检索。导出不会覆盖目标目录里的同名文件；
         「从库中移除」只解除与本库的关联 —— 不再被任何库引用的文件才会连原文一起删除。
         按属性分目录时，目录名取自该文件所有分块的属性（文件本身没有属性）：
@@ -716,7 +722,7 @@ export function KnowledgeFileList({
                 key={`group:${row.label}`}
                 onClick={() => toggleCollapse(row.label)}
                 className="w-full px-4 py-1.5 flex items-center gap-1.5 text-left transition-colors hover:opacity-90"
-                style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}
+                style={{ borderBottom: '1px solid var(--border-light)', backgroundColor: 'var(--bg-tertiary)' }}
                 title={isCollapsed ? '展开这个目录' : '折叠这个目录'}
               >
                 <ChevronRight
@@ -757,7 +763,7 @@ export function KnowledgeFileList({
             <div
               className="py-2.5 pr-4 flex items-start gap-3"
               style={{
-                borderBottom: '1px solid var(--border)',
+                borderBottom: '1px solid var(--border-light)',
                 backgroundColor: checked ? 'var(--bg-secondary)' : 'transparent',
                 ...rowIndent,
               }}
@@ -996,7 +1002,7 @@ function FileRelationPanel({
       className="px-4 py-2.5 flex flex-col gap-2 text-[11px]"
       // 面板底色不能用 --bg-tertiary：`--bg-field` 就是 tertiary（控件底色），
       // 同值会让面板里的 Select / 输入框与面板融成一片，看不出控件边界。
-      style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+      style={{ borderBottom: '1px solid var(--border-light)', backgroundColor: 'var(--bg-secondary)' }}
     >
       <div className="flex items-center gap-2">
         <span className="shrink-0 w-20" style={{ color: 'var(--text-secondary)' }}>所属正文</span>
