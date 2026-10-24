@@ -78,6 +78,23 @@ pub async fn enclave_identity_refresh(
     crate::enclave::snapshot::refresh_local_identity(db.inner(), state.inner()).await
 }
 
+/// 平台联调自检：登录凭证 / `/me` / 组织列表 / 成员名单；可选顺带重登记主机地址。
+#[tauri::command]
+pub async fn enclave_platform_check(
+    org_id: String,
+    register_host: Option<bool>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::snapshot::PlatformCheck>, String> {
+    Ok(crate::enclave::snapshot::platform_check(
+        db.inner(),
+        state.inner(),
+        &org_id,
+        register_host.unwrap_or(false),
+    )
+    .await)
+}
+
 /// 最近一次治理快照成功同步时间（unix 秒，0 = 从未同步）：供前端判断是否 stale。
 #[tauri::command]
 pub fn enclave_snapshot_freshness(state: State<'_, Arc<EnclaveState>>) -> i64 {

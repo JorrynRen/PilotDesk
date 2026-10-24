@@ -2814,6 +2814,7 @@ pub fn run() {
             commands::enclave::enclave_org_detail,
             commands::enclave::enclave_snapshot_refresh,
             commands::enclave::enclave_identity_refresh,
+            commands::enclave::enclave_platform_check,
             commands::enclave::enclave_snapshot_freshness,
             commands::enclave::enclave_online_members,
             commands::enclave::enclave_host_status,

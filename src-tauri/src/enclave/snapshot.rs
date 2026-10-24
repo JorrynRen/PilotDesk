@@ -153,6 +153,163 @@ pub async fn refresh_local_identity(
     Ok(())
 }
 
+/// 平台联调自检结果（每项一条；单项失败不中断后续检查）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformCheck {
+    pub key: String,
+    pub label: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// 平台联调自检：登录凭证 → `/me` → `/organizations/mine` → 成员名单 →（可选）主机地址登记。
+///
+/// 只读探测，不写业务数据；`register_host = true` 时会真的调用主机登记接口（仅 owner 有意义）。
+pub async fn platform_check(
+    db: &crate::DbState,
+    state: &EnclaveState,
+    org_id: &str,
+    register_host: bool,
+) -> Vec<PlatformCheck> {
+    let mut out: Vec<PlatformCheck> = Vec::new();
+    let token = match require_token(db).await {
+        Ok(t) => t,
+        Err(e) => {
+            out.push(PlatformCheck {
+                key: "auth".into(),
+                label: "登录凭证".into(),
+                ok: false,
+                detail: e,
+            });
+            return out;
+        }
+    };
+    out.push(PlatformCheck {
+        key: "auth".into(),
+        label: "登录凭证".into(),
+        ok: true,
+        detail: "已取得平台访问令牌".into(),
+    });
+
+    match platform::get_json_with_status::<MeResp>("/api/v1/me", Some(&token)).await {
+        Ok(me) => out.push(PlatformCheck {
+            key: "me".into(),
+            label: "登录身份 /me".into(),
+            ok: true,
+            detail: format!("{}（{}）", me.user.nickname, me.user.email),
+        }),
+        Err(e) => out.push(PlatformCheck {
+            key: "me".into(),
+            label: "登录身份 /me".into(),
+            ok: false,
+            detail: e.message,
+        }),
+    }
+
+    match platform::get_json_with_status::<OrgsResp>("/api/v1/organizations/mine", Some(&token)).await
+    {
+        Ok(resp) => match resp
+            .organizations
+            .into_iter()
+            .find(|o| o.id.to_string() == org_id)
+        {
+            Some(o) => {
+                let host = o
+                    .host
+                    .as_ref()
+                    .map(|h| {
+                        if h.address.is_empty() {
+                            format!("{}（地址未上报，端口 {}）", h.device_name, h.port)
+                        } else {
+                            format!("{} @ {}:{}", h.device_name, h.address, h.port)
+                        }
+                    })
+                    .unwrap_or_else(|| "未登记".to_string());
+                out.push(PlatformCheck {
+                    key: "orgs".into(),
+                    label: "组织列表 /organizations/mine".into(),
+                    ok: true,
+                    detail: format!(
+                        "本人在该组织角色 {} · 平台成员数 {} · 平台登记主机 {}",
+                        non_empty(o.role.clone(), "member"),
+                        o.member_count,
+                        host
+                    ),
+                });
+            }
+            None => out.push(PlatformCheck {
+                key: "orgs".into(),
+                label: "组织列表 /organizations/mine".into(),
+                ok: false,
+                detail: "当前账号不在该组织中（或席位 / 组织非 active）".into(),
+            }),
+        },
+        Err(e) => out.push(PlatformCheck {
+            key: "orgs".into(),
+            label: "组织列表 /organizations/mine".into(),
+            ok: false,
+            detail: e.message,
+        }),
+    }
+
+    match fetch_members(org_id.parse::<i64>().unwrap_or(0), &token).await {
+        Ok(MemberFetch::Data(m)) => out.push(PlatformCheck {
+            key: "members".into(),
+            label: "成员名单 /organizations/:id".into(),
+            ok: true,
+            detail: format!("平台下发成员 {} 人", m.len()),
+        }),
+        Ok(MemberFetch::NotIncluded) => out.push(PlatformCheck {
+            key: "members".into(),
+            label: "成员名单 /organizations/:id".into(),
+            ok: false,
+            detail: "平台未下发成员名单（普通成员视角或旧版平台），本机沿用只读快照".into(),
+        }),
+        Err(e) => out.push(PlatformCheck {
+            key: "members".into(),
+            label: "成员名单 /organizations/:id".into(),
+            ok: false,
+            detail: e,
+        }),
+    }
+
+    if register_host {
+        match crate::enclave::host::register_with_platform(db, state, org_id, false).await {
+            Ok(r) if r.claimed => out.push(PlatformCheck {
+                key: "host".into(),
+                label: "主机地址登记 PUT /organizations/:id/host".into(),
+                ok: true,
+                detail: r
+                    .host
+                    .as_ref()
+                    .map(|h| format!("已登记：{} @ {}:{}", h.device_name, h.address, h.port))
+                    .unwrap_or_else(|| "已登记".to_string()),
+            }),
+            Ok(r) => out.push(PlatformCheck {
+                key: "host".into(),
+                label: "主机地址登记 PUT /organizations/:id/host".into(),
+                ok: false,
+                detail: format!(
+                    "已被其他设备登记：{}",
+                    r.host
+                        .as_ref()
+                        .map(|h| h.device_name.clone())
+                        .unwrap_or_else(|| "未知设备".to_string())
+                ),
+            }),
+            Err(e) => out.push(PlatformCheck {
+                key: "host".into(),
+                label: "主机地址登记 PUT /organizations/:id/host".into(),
+                ok: false,
+                detail: e,
+            }),
+        }
+    }
+
+    out
+}
+
 /// 执行一轮治理快照同步：拉组织与成员 → 只读落库。
 ///
 /// 未登录直接返回 `Err("请先登录平台账号")`（来自 [`require_token`]）。

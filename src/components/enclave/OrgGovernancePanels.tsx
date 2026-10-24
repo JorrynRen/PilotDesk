@@ -6,7 +6,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight, CheckCircle2, XCircle } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { Select } from '../common/Select';
 import { useEnclaveOrgStore, AUDIT_PAGE_SIZE } from '../../stores/enclaveOrgStore';
@@ -1193,6 +1194,108 @@ function BackupCard() {
   );
 }
 
+interface PlatformCheckRow {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+/** 平台联调自检：登录凭证 / 组织列表 / 成员名单 / 主机地址登记，四项接口一次跑通 */
+function PlatformCheckCard({ orgId }: { orgId: string }) {
+  const caps = useEnclaveOrgStore((s) => s.caps);
+  const isOwner = caps?.role === 'owner';
+  const [busy, setBusy] = useState<'' | 'check' | 'host'>('');
+  const [rows, setRows] = useState<PlatformCheckRow[] | null>(null);
+
+  const run = async (registerHost: boolean) => {
+    setBusy(registerHost ? 'host' : 'check');
+    try {
+      const out = await invoke<PlatformCheckRow[]>('enclave_platform_check', {
+        orgId,
+        registerHost,
+      });
+      setRows(out);
+    } catch (e) {
+      setRows([{ key: 'error', label: '自检失败', ok: false, detail: errorMessage(e) }]);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <div
+      className="rounded-lg px-3 py-2"
+      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <ShieldCheck size={13} style={{ color: 'var(--accent)' }} />
+        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+          平台联调自检
+        </span>
+        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+          依次探测登录凭证 / 组织列表 / 成员名单{isOwner ? ' / 主机地址登记' : ''}
+        </span>
+        <div className="flex-1" />
+        <button
+          onClick={() => void run(false)}
+          disabled={busy !== ''}
+          className="text-[11px] px-1.5 py-0.5 rounded flex items-center gap-1"
+          style={{
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border)',
+            opacity: busy !== '' ? 0.6 : 1,
+          }}
+        >
+          {busy === 'check' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+          开始自检
+        </button>
+        {isOwner && (
+          <button
+            onClick={() => void run(true)}
+            disabled={busy !== ''}
+            className="text-[11px] px-1.5 py-0.5 rounded flex items-center gap-1"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+              opacity: busy !== '' ? 0.6 : 1,
+            }}
+            title="会真的调用平台主机登记接口（地址 / 端口 / 设备名），仅 owner 有意义"
+          >
+            {busy === 'host' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+            自检并重登记主机
+          </button>
+        )}
+      </div>
+      {rows && (
+        <div className="mt-2 flex flex-col gap-1">
+          {rows.map((r) => (
+            <div key={r.key} className="flex items-start gap-1.5 text-[11px] min-w-0">
+              {r.ok ? (
+                <CheckCircle2
+                  size={11}
+                  className="shrink-0 mt-0.5"
+                  style={{ color: 'var(--status-success, #2f9e44)' }}
+                />
+              ) : (
+                <XCircle size={11} className="shrink-0 mt-0.5" style={{ color: 'var(--status-danger)' }} />
+              )}
+              <span className="shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                {r.label}
+              </span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }} title={r.detail}>
+                {r.detail}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function OrgGovernanceSection({
   section = 'all',
 }: {
@@ -1349,6 +1452,9 @@ export function OrgGovernanceSection({
 
       {/* 主机自动备份（一期前置条件：单点故障的本地兜底） */}
       <BackupCard />
+
+      {/* 平台联调自检：登录 / 组织 / 成员名单 / 主机地址登记 */}
+      <PlatformCheckCard orgId={activeOrgId} />
 
       {/* 主机转移（M8）：迁移包导出导入 + 状态推进 + 旧机销毁 */}
       <TransferCard orgId={activeOrgId} />
