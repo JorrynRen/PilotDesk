@@ -28,6 +28,18 @@ pub struct MemberStat {
     pub avg_hours: f64,
 }
 
+/// 周期内完成的一条任务（周报正文用）。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletedTask {
+    pub task_id: String,
+    pub title: String,
+    pub assignee_id: String,
+    pub completed_at: i64,
+    /// 产出是否已经沉淀到组织知识库
+    pub has_output: bool,
+}
+
 /// 一个周期的团队报告。
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +55,8 @@ pub struct TeamStats {
     pub entries_added: i64,
     pub files_added: i64,
     pub members: Vec<MemberStat>,
+    /// 周期内完成的任务明细（按完成时间倒序，最多 200 条）
+    pub completed_tasks: Vec<CompletedTask>,
 }
 
 /// 统计一个组织在 `[from, to)` 内的数据（授权由调用方完成）。
@@ -131,6 +145,36 @@ pub fn team_stats(
             .then(a.user_id.cmp(&b.user_id))
     });
 
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.id, t.title, COALESCE(t.assignee_id, ''), t.completed_at,
+                    EXISTS(
+                      SELECT 1 FROM knowledge_base_memories m
+                      JOIN knowledge_bases kb ON kb.id = m.knowledge_base_id
+                      WHERE kb.owner_type = 'org' AND kb.owner_id = t.org_id
+                        AND m.memory_id = 'task:' || t.id
+                    )
+             FROM org_tasks t
+             WHERE t.org_id = ?1 AND t.completed_at IS NOT NULL
+               AND t.completed_at >= ?2 AND t.completed_at < ?3
+             ORDER BY t.completed_at DESC
+             LIMIT 200",
+        )
+        .map_err(|e| format!("统计完成明细失败：{}", e))?;
+    let completed_tasks = stmt
+        .query_map(params![org_id, from, to], |r| {
+            Ok(CompletedTask {
+                task_id: r.get(0)?,
+                title: r.get(1)?,
+                assignee_id: r.get(2)?,
+                completed_at: r.get(3)?,
+                has_output: r.get::<_, i64>(4)? != 0,
+            })
+        })
+        .map_err(|e| format!("统计完成明细失败：{}", e))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取完成明细失败：{}", e))?;
+
     Ok(TeamStats {
         from,
         to,
@@ -141,6 +185,7 @@ pub fn team_stats(
         entries_added,
         files_added,
         members,
+        completed_tasks,
     })
 }
 
@@ -224,6 +269,9 @@ mod tests {
         assert_eq!(s.completed, 1);
         assert_eq!(s.reports_confirmed, 1);
         assert_eq!(s.entries_added, 1);
+        assert_eq!(s.completed_tasks.len(), 1, "周期内只有 t1 完成");
+        assert_eq!(s.completed_tasks[0].task_id, "t1");
+        assert!(s.completed_tasks[0].has_output, "t1 的产出已沉淀进组织库");
         assert_eq!(s.members.len(), 2);
         let m2 = s.members.iter().find(|m| m.user_id == "2").unwrap();
         assert_eq!(m2.completed, 1);

@@ -351,6 +351,16 @@ export interface MemberStat {
   avgHours: number;
 }
 
+/** 周期内完成的一条任务（周报正文用） */
+export interface CompletedTaskStat {
+  taskId: string;
+  title: string;
+  assigneeId: string;
+  completedAt: number;
+  /** 产出是否已沉淀到组织知识库 */
+  hasOutput: boolean;
+}
+
 /** 团队报告：一个周期的只读聚合 */
 export interface TeamStats {
   from: number;
@@ -362,6 +372,8 @@ export interface TeamStats {
   entriesAdded: number;
   filesAdded: number;
   members: MemberStat[];
+  /** 周期内完成的任务明细（按完成时间倒序，最多 200 条） */
+  completedTasks: CompletedTaskStat[];
 }
 
 // ── M4：汇报与文件 ──────────────────────────────────────────────

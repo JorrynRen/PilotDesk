@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { BarChart3, ChevronLeft, ChevronRight, ClipboardCopy, Loader2 } from 'lucide-react';
+import { BarChart3, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Download, Loader2 } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
@@ -55,6 +55,13 @@ function hoursLabel(h: number): string {
   if (h < 1) return `${Math.round(h * 60)} 分钟`;
   if (h < 48) return `${h.toFixed(1)} 小时`;
   return `${(h / 24).toFixed(1)} 天`;
+}
+
+/** 完成时间：本地时区 `MM-DD HH:mm` */
+function fmtDone(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export function EnclaveReportPage() {
@@ -168,11 +175,60 @@ export function EnclaveReportPage() {
         (m) =>
           `| ${memberName(m.userId)} | ${m.completed} | ${m.inProgress} | ${m.submitted} | ${m.overdue} | ${hoursLabel(m.avgHours)} |`,
       ),
+      '',
+      '## 已完成任务',
+      '',
+      ...(stats.completedTasks.length > 0
+        ? stats.completedTasks.map(
+            (t) =>
+              `- ${t.title}（${memberName(t.assigneeId)}，${fmtDone(t.completedAt)}）${t.hasOutput ? '' : ' · 产出未沉淀'}`,
+          )
+        : ['- 无']),
     ];
     void navigator.clipboard
       .writeText(lines.join('\n'))
       .then(() => showToast('已复制 Markdown', 'success'))
       .catch(() => showToast('复制失败（浏览器未授权剪贴板）', 'error'));
+  };
+
+  /** 导出 CSV：概览 + 成员 + 完成明细（带 BOM，Excel 打开不乱码） */
+  const exportCsv = () => {
+    if (!stats) return;
+    const quote = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+    const rows: (string | number)[][] = [
+      ['周期', range.label],
+      ['新增任务', stats.created],
+      ['完成任务', stats.completed],
+      ['确认汇报', stats.reportsConfirmed],
+      ['新增知识', stats.entriesAdded],
+      ['新增交付物', stats.filesAdded],
+      [],
+      ['成员', '完成', '进行中', '待确认', '逾期', '平均耗时(小时)'],
+      ...stats.members.map((m) => [
+        memberName(m.userId),
+        m.completed,
+        m.inProgress,
+        m.submitted,
+        m.overdue,
+        m.avgHours ? m.avgHours.toFixed(2) : '',
+      ]),
+      [],
+      ['已完成任务', '负责人', '完成时间', '产出已沉淀'],
+      ...stats.completedTasks.map((t) => [
+        t.title,
+        memberName(t.assigneeId),
+        fmtDone(t.completedAt),
+        t.hasOutput ? '是' : '否',
+      ]),
+    ];
+    const csv = rows.map((r) => r.map(quote).join(',')).join('\r\n');
+    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `团队报告-${range.label}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const cards: { label: string; value: number; hint: string }[] = stats
@@ -284,6 +340,21 @@ export function EnclaveReportPage() {
             <ClipboardCopy size={12} />
             复制 Markdown
           </button>
+          <button
+            onClick={exportCsv}
+            disabled={!stats}
+            className="pd-btn text-xs px-2 py-1 rounded-lg flex items-center gap-1"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+              opacity: stats ? 1 : 0.5,
+            }}
+            title="导出当前周期（概览 + 成员 + 完成明细）为 CSV"
+          >
+            <Download size={12} />
+            导出 CSV
+          </button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-2 pb-2">
@@ -386,6 +457,73 @@ export function EnclaveReportPage() {
                             style={{ color: 'var(--text-tertiary)' }}
                           >
                             该周期没有指派给成员的任务
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 周期内完成明细：周报正文的素材 */}
+              <div
+                className="rounded-lg overflow-hidden"
+                style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+              >
+                <div
+                  className="h-9 px-3 flex items-center gap-2"
+                  style={{ borderBottom: '1px solid var(--border)' }}
+                >
+                  <CheckCircle2 size={13} style={{ color: 'var(--accent)' }} />
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                    已完成任务
+                  </span>
+                  <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    {stats.completedTasks.length}
+                  </span>
+                  <div className="flex-1" />
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    最多展示 200 条；「未沉淀」表示该任务还没有对应的知识条目
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ color: 'var(--text-tertiary)' }}>
+                        <th className="text-left px-3 py-1.5 font-normal">任务</th>
+                        <th className="text-left px-3 py-1.5 font-normal">负责人</th>
+                        <th className="text-left px-3 py-1.5 font-normal">完成时间</th>
+                        <th className="text-left px-3 py-1.5 font-normal">产出</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.completedTasks.map((t) => (
+                        <tr
+                          key={t.taskId}
+                          style={{ color: 'var(--text-secondary)', borderTop: '1px solid var(--border)' }}
+                        >
+                          <td className="px-3 py-1.5 max-w-[420px] truncate" title={t.title}>
+                            {t.title}
+                          </td>
+                          <td className="px-3 py-1.5 whitespace-nowrap">{memberName(t.assigneeId)}</td>
+                          <td className="px-3 py-1.5 whitespace-nowrap tabular-nums">{fmtDone(t.completedAt)}</td>
+                          <td className="px-3 py-1.5 whitespace-nowrap">
+                            {t.hasOutput ? (
+                              <span style={{ color: 'var(--status-success, #2f9e44)' }}>已沉淀</span>
+                            ) : (
+                              <span style={{ color: 'var(--text-tertiary)' }}>未沉淀</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {stats.completedTasks.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            className="px-3 py-5 text-center"
+                            style={{ color: 'var(--text-tertiary)' }}
+                          >
+                            该周期没有完成的任务
                           </td>
                         </tr>
                       )}
