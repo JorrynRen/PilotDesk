@@ -5,7 +5,7 @@
  * 前端不做角色推断；`policy.write` / `emergency.set` 不在列表里就一律禁用。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight, CheckCircle2, XCircle } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
@@ -1204,24 +1204,40 @@ interface PlatformCheckRow {
 /** 平台联调自检：登录凭证 / 组织列表 / 成员名单 / 主机地址登记，四项接口一次跑通 */
 function PlatformCheckCard({ orgId }: { orgId: string }) {
   const caps = useEnclaveOrgStore((s) => s.caps);
+  const orgName = useEnclaveOrgStore((s) => s.detail?.org.name ?? '');
   const isOwner = caps?.role === 'owner';
   const [busy, setBusy] = useState<'' | 'check' | 'host'>('');
   const [rows, setRows] = useState<PlatformCheckRow[] | null>(null);
+  /** 自检代次：切组织后旧请求回来不能覆盖新组织的结果 */
+  const seq = useRef(0);
 
   const run = async (registerHost: boolean) => {
+    const my = ++seq.current;
     setBusy(registerHost ? 'host' : 'check');
     try {
       const out = await invoke<PlatformCheckRow[]>('enclave_platform_check', {
         orgId,
         registerHost,
       });
-      setRows(out);
+      if (my === seq.current) setRows(out);
     } catch (e) {
-      setRows([{ key: 'error', label: '自检失败', ok: false, detail: errorMessage(e) }]);
+      if (my === seq.current) {
+        setRows([{ key: 'error', label: '自检失败', ok: false, detail: errorMessage(e) }]);
+      }
     } finally {
-      setBusy('');
+      if (my === seq.current) setBusy('');
     }
   };
+
+  // 切换组织：上一个组织的自检结果不能留在新组织下 —— 清空后自动跑一轮只读自检
+  useEffect(() => {
+    setRows(null);
+    seq.current += 1;
+    setBusy('');
+    if (orgId) void run(false);
+    // 只有组织变化才重跑；run 的闭包会随渲染更新
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId]);
 
   return (
     <div
@@ -1235,6 +1251,7 @@ function PlatformCheckCard({ orgId }: { orgId: string }) {
         </span>
         <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
           依次探测登录凭证 / 组织列表 / 成员名单{isOwner ? ' / 主机地址登记' : ''}
+          {orgName ? ` · 当前组织「${orgName}」` : ''}
         </span>
         <div className="flex-1" />
         <button
