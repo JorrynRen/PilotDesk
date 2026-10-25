@@ -123,6 +123,19 @@ export function AgentConfigMarket() {
     navigate(`/settings?tab=agents&agent=${encodeURIComponent(agentType)}`);
   };
 
+  /** 「更新」：用市场里的新版本规格覆盖本地配置并重新安装（仅 ACP 官方目录条目可用）。 */
+  const handleUpdate = async (agent: MarketAgent) => {
+    setBusyType(agent.agentType);
+    try {
+      await invoke('agent_market_update', { agentType: agent.agentType });
+      showToast(`${agent.displayName} 已更新`, 'success');
+    } catch (err) {
+      showToast(`更新失败: ${errorMessage(err)}`, 'error');
+    }
+    setBusyType(null);
+    await fetchMarket(false);
+  };
+
   const renderAction = (agent: MarketAgent) => {
     if (!agent.supported) {
       return (
@@ -132,6 +145,7 @@ export function AgentConfigMarket() {
       );
     }
     const busy = busyType === agent.agentType;
+    // 未获取：只是把配置拉下来
     if (!agent.installed) {
       return (
         <SettingsButton
@@ -144,10 +158,30 @@ export function AgentConfigMarket() {
         </SettingsButton>
       );
     }
-    if (agent.pkgStatus !== 'ready') {
+    // 已获取但依赖未就绪：去配置页完成安装（pkgStatus 为空表示手工/历史配置，视为已就绪）
+    if (agent.pkgStatus === 'pending_install' || agent.pkgStatus === 'failed') {
       return (
-        <SettingsButton variant="primary" icon={<ArrowRight size={11} />} onClick={() => openInConfig(agent.agentType)}>
-          去安装
+        <SettingsButton
+          variant="primary"
+          icon={<ArrowRight size={11} />}
+          onClick={() => openInConfig(agent.agentType)}
+          title="前往集成配置完成本机依赖安装"
+        >
+          {agent.pkgStatus === 'failed' ? '重试安装' : '完成配置'}
+        </SettingsButton>
+      );
+    }
+    // 已就绪且市场有更新版本：直接更新
+    if (agent.updateAvailable) {
+      return (
+        <SettingsButton
+          variant="primary"
+          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={busy}
+          onClick={() => handleUpdate(agent)}
+          title={`更新到 v${agent.version}`}
+        >
+          {busy ? '更新中' : '更新'}
         </SettingsButton>
       );
     }
@@ -216,7 +250,7 @@ export function AgentConfigMarket() {
         <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
           {category === 'acp'
             ? '获取后会在本机安装对应适配器（npm 全局包）；安装完成前该 Agent 不可用于会话。'
-            : '兼容模式配置通过命令行子进程调用，获取后同样需要在本机完成安装。'}
+            : '兼容模式配置通过命令行子进程调用，获取后需在本机安装对应的 CLI 工具。'}
         </div>
 
         <div className="space-y-2">
@@ -291,7 +325,15 @@ export function AgentConfigMarket() {
                           </span>
                         )}
                         {agent.updateAvailable && (
-                          <span className="text-[10px]" style={{ color: 'var(--accent)' }}>
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+                            style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
+                            title={
+                              agent.installedVersion
+                                ? `当前 v${agent.installedVersion}，市场 v${agent.version}`
+                                : `市场 v${agent.version}`
+                            }
+                          >
                             可更新
                           </span>
                         )}
