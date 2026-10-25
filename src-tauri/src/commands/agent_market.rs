@@ -200,10 +200,29 @@ impl MarketEntry {
                 })
                 .unwrap_or_default();
             if artifacts.is_empty() {
+                // 有条目但一个平台制品都没解析出来（字段缺失/不是对象）：同样跳过，但要留痕
+                log::warn!(
+                    "[AgentMarket] 跳过 binary 条目：id={} 没有可用的平台制品（archive/cmd 缺失）",
+                    a.id
+                );
                 return None;
             }
             (LifecycleKind::Binary, String::new(), Vec::new(), BTreeMap::new())
         } else {
+            // ACP 协议已预留远程传输（Streamable HTTP 仍是草案），官方目录将来可能出现
+            // 没有本地可执行物的条目（如新增 `http` / `remote` 分发键）。这类当前无法承载，
+            // 只能丢弃；但必须留日志——否则新形态上线后只会表现为「条目凭空消失」。
+            let keys = a
+                .distribution
+                .as_object()
+                .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
+                .unwrap_or_default();
+            log::warn!(
+                "[AgentMarket] 跳过无法识别的分发方式: id={}, name={}, distribution=[{}]（当前仅支持 npx/uvx/binary 本地可执行物）",
+                a.id,
+                a.name,
+                if keys.is_empty() { "空" } else { keys.as_str() }
+            );
             return None;
         };
 

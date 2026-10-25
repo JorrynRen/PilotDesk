@@ -152,7 +152,16 @@ pub enum TransportKind {
     Subprocess,
     /// HTTP / SSE（在线版开放 API、远端 Agent；含未来 A2A 方言位）
     Http,
-    /// Agent Client Protocol（stdio JSON-RPC）
+    /// Agent Client Protocol，**当前只实现 stdio 本地子进程**。
+    ///
+    /// 协议本身是 transport-agnostic 的：官方目前仅正式定义 stdio（客户端把 agent 作为
+    /// 子进程启动），Streamable HTTP 仍是草案、自定义传输需要双方自行约定。
+    /// 因此「ACP 接入」在本应用里恒等于「本机有一个可执行的连接命令」：
+    /// 会话前要校验 `conn.command`（见 `commands::env::probe_launch_command`），
+    /// 门禁也会在缺少启动命令时拒绝建会话。
+    ///
+    /// 远程（云 / 桌面宿主经远端暴露）条目一旦出现在官方目录，此处与上述校验都要重做，
+    /// 不要误以为本枚举已覆盖远程场景。
     Acp,
     /// MCP（能力面；不承载会话）
     Mcp,
