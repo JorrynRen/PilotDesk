@@ -7,6 +7,7 @@ import { errorMessage } from '../../utils/errorMessage';
 
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
 import { AgentIcon } from '../common/AgentIcon';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 /**
  * AgentConfigMarket — Agent 市集。
@@ -64,6 +65,8 @@ function statusLabel(a: MarketAgent): { text: string; tone: 'ok' | 'warn' | 'err
 
 export function AgentConfigMarket() {
   const navigate = useNavigate();
+  /** 全局 Agent 列表是单例缓存，获取后必须主动刷新，否则配置页看不到新条目。 */
+  const { fetchAgents } = useAgentRegistry();
   const [agents, setAgents] = useState<MarketAgent[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyType, setBusyType] = useState<string | null>(null);
@@ -111,6 +114,8 @@ export function AgentConfigMarket() {
     setBusyType(agent.agentType);
     try {
       await invoke('agent_market_acquire', { agentType: agent.agentType });
+      // 先刷新全局 Agent 列表：配置页的深层链接要靠它找到这条草稿。
+      await fetchAgents();
       showToast(`已获取 ${agent.displayName}，请继续完成安装`, 'success');
       navigate(`/settings?tab=agents&agent=${encodeURIComponent(agent.agentType)}`);
     } catch (err) {
