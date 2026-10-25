@@ -771,6 +771,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           <FormField label="恢复参数模板" value={form.resumeArgTemplate || ''} onChange={(v) => onChange({ ...form, resumeArgTemplate: v })} placeholder="如 --resume {session_id}" />
         </div>
       </div>
+        </>
+      )}
 
       {/* 技能引用配置：ACP 官方条目不提供这两项，拉取时按默认值落库（空目录 = ~/.{agentType}/skills/，
           入口 = SKILL.md）；两种接入方式都允许改，方便用户指向自建的技能目录。 */}
@@ -788,8 +790,6 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           ]} />
         </div>
       </div>
-        </>
-      )}
 
       <div className="flex gap-2 justify-end pt-1">
         <SettingsButton variant="secondary" onClick={onCancel}>取消</SettingsButton>
