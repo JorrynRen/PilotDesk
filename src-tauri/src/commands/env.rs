@@ -3,8 +3,10 @@ use crate::agent::lifecycle::{package_without_version, LifecycleKind, LifecycleS
 use crate::commands::agents;
 use crate::db::models::{AgentHealth, EnvInfo};
 use crate::utils::errors::AppError;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
+use tokio::io::AsyncReadExt;
 
 /// Debug logging for env detection
 macro_rules! log_env {
@@ -153,6 +155,16 @@ pub(crate) async fn probe_agent(
     let health = if transport == "acp" {
         // 适配器之外再查宿主 Agent：ACP 适配器通常只是协议壳，真正干活的是宿主 CLI。
         let missing_host = missing_host_package(agent_mgr, lifecycle).await;
+        // 命令能找到还不够：真实跑一次 initialize + session/new，
+        // 才能发现「未登录 / 对端拒绝服务」这类只有握手时才暴露的失败。
+        let handshake_err = if launch_ok {
+            match conn_json {
+                Some(raw) => probe_acp_session(raw).await.err(),
+                None => Some("缺少 ACP 连接配置（conn）".to_string()),
+            }
+        } else {
+            None
+        };
         let reason = if launch.is_none() {
             Some("连接配置缺少启动命令，请重新安装该适配器".to_string())
         } else if !launch_ok {
@@ -166,12 +178,14 @@ pub(crate) async fn probe_agent(
             }
         } else if let Some(pkg) = missing_host.as_deref() {
             Some(format!("宿主 Agent 未安装（{}）", pkg))
+        } else if let Some(err) = handshake_err.as_deref() {
+            Some(format!("ACP 握手失败：{}", err))
         } else {
             None
         };
         AgentHealth {
             installed: version.is_some() || launch_ok,
-            available: launch_ok && missing_host.is_none(),
+            available: launch_ok && missing_host.is_none() && handshake_err.is_none(),
             reason,
         }
     } else {
@@ -194,6 +208,123 @@ pub(crate) async fn probe_agent(
     };
 
     AgentProbe { version, health }
+}
+
+/// 单次 ACP 握手探测的超时（spawn → initialize → session/new）。
+///
+/// 只覆盖协议交互，不含 npx 首次下载安装的耗时；超时即判「对端未响应」，
+/// 因为这轮会话同样会因握手失败而起不来。
+const ACP_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 跑一遍真实的 ACP 握手，用来回答「这个 Agent 现在能不能真的干起活来」。
+///
+/// 只查「命令能不能找到」会漏掉对端拒绝服务的情况：适配器在 PATH 上并不等于可用。
+/// 实测 copilot 未登录时 `initialize` 正常返回，而 `session/new` 直接回
+/// `-32000 Authentication required`——会话必然失败，但 `where copilot` 完全看不出来。
+async fn probe_acp_session(conn_json: &str) -> Result<(), String> {
+    use crate::agent::transport::acp::{method as acp_method, ACP_PROTOCOL_VERSION};
+    use crate::agent::transport::jsonrpc::JsonRpcPeer;
+
+    let v: serde_json::Value =
+        serde_json::from_str(conn_json).map_err(|e| format!("连接配置不是合法 JSON：{}", e))?;
+    let command = v
+        .get("command")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if command.is_empty() {
+        return Err("连接配置缺少启动命令".to_string());
+    }
+    let args: Vec<String> = v
+        .get("args")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_default();
+
+    // 与会话同一套启动方式：Windows 上 npm 全局装的 CLI 往往是 .cmd/.exe 垫片
+    let (program, prefix) = crate::utils::process::resolve_windows_program(&command);
+    let mut cmd = crate::utils::process::hidden_tokio_command(&program);
+    cmd.args(&prefix)
+        .args(&args)
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(env) = v.get("env").and_then(|e| e.as_object()) {
+        for (k, val) in env {
+            if let Some(s) = val.as_str() {
+                cmd.env(k, s);
+            }
+        }
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 ACP 进程失败: {}", e))?;
+
+    // stderr 必须看：对端把真正的失败原因（依赖缺失、登录提示）写在这里
+    let stderr_text = Arc::new(StdMutex::new(String::new()));
+    if let Some(mut err) = child.stderr.take() {
+        let buf = Arc::clone(&stderr_text);
+        tokio::spawn(async move {
+            let mut s = String::new();
+            let _ = err.read_to_string(&mut s).await;
+            if let Ok(mut b) = buf.lock() {
+                b.push_str(&s);
+            }
+        });
+    }
+
+    let peer = JsonRpcPeer::new(child).map_err(|e| format!("ACP 管道初始化失败: {}", e))?;
+
+    let result = async {
+        peer.request_with_timeout(
+            acp_method::INITIALIZE,
+            serde_json::json!({
+                "protocolVersion": ACP_PROTOCOL_VERSION,
+                "clientCapabilities": {
+                    "fs": { "readTextFile": false, "writeTextFile": false }
+                }
+            }),
+            ACP_PROBE_TIMEOUT,
+        )
+        .await?;
+        // 认证 / 宿主可用性通常在这一步才暴露（copilot 即如此），握手只做 initialize 会漏判
+        peer.request_with_timeout(
+            acp_method::SESSION_NEW,
+            serde_json::json!({ "cwd": cwd.to_string_lossy(), "mcpServers": [] }),
+            ACP_PROBE_TIMEOUT,
+        )
+        .await?;
+        Ok::<(), String>(())
+    }
+    .await;
+
+    // 探测完立刻结束进程：绝不留下 serving 态的孤儿适配器
+    peer.kill().await;
+
+    result.map_err(|e| {
+        let extra = stderr_text
+            .lock()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let friendly = if e.contains("Authentication required") || e.contains("auth required") {
+            "对端要求登录授权，请先在终端完成该 Agent 的登录（如 `copilot login`）".to_string()
+        } else {
+            e
+        };
+        if extra.is_empty() {
+            friendly
+        } else {
+            let tail: String = extra.chars().take(200).collect();
+            format!("{}（stderr: {}）", friendly, tail)
+        }
+    })
 }
 
 /// 规格里声明为宿主（role=host）的 npm 包是否都已安装。
@@ -268,6 +399,33 @@ async fn preset_latest_commands() -> std::collections::HashMap<String, String> {
 /// 简单缓存：仅用于避免高频重复检测
 static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::RwLock::new(None);
 const CACHE_TTL: Duration = Duration::from_secs(120);
+
+/// 最近一次检测得到的 Agent 健康度（按 agent_type，各自带时间戳）。
+///
+/// 会话门禁直接读它：ACP 的可用性判定要真跑一遍握手，不能在每次建会话/发消息时重做。
+static LAST_HEALTH: std::sync::RwLock<
+    Option<std::collections::HashMap<String, (Instant, AgentHealth)>>,
+> = std::sync::RwLock::new(None);
+
+/// 记录一个 Agent 的最新健康度（检测与门禁共用）。
+pub(crate) fn remember_agent_health(agent_type: &str, health: &AgentHealth) {
+    if let Ok(mut guard) = LAST_HEALTH.write() {
+        guard
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(agent_type.to_string(), (Instant::now(), health.clone()));
+    }
+}
+
+/// 读取尚未过期的健康度缓存；没有或已过期返回 `None`。
+pub(crate) fn cached_agent_health(agent_type: &str) -> Option<AgentHealth> {
+    let guard = LAST_HEALTH.read().ok()?;
+    let (ts, health) = guard.as_ref()?.get(agent_type)?;
+    if ts.elapsed() >= CACHE_TTL {
+        return None;
+    }
+    Some(health.clone())
+}
+
 
 /// 通过 AgentManager 异步路径执行环境检测
 async fn detect_env_with_console(
@@ -366,6 +524,7 @@ async fn detect_env_with_console(
             }),
         );
         agent_versions.insert(agent_type.clone(), probe.version);
+        remember_agent_health(&agent_type, &probe.health);
         agent_health.insert(agent_type, probe.health);
     }
 

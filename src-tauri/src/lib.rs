@@ -478,6 +478,8 @@ async fn agent_send_message_with_config(
                 .map(|i| i.transport.as_str())
                 .unwrap_or("subprocess"),
             transport_info.as_ref().and_then(|i| i.conn.as_deref()),
+            // 发消息走轻量路径：ACP 握手太贵，交给建会话/环境检测去做并写缓存
+            false,
         )
         .await
         {
@@ -779,6 +781,8 @@ async fn agent_create_session(
                     .map(|i| i.transport.as_str())
                     .unwrap_or("subprocess"),
                 transport_info.as_ref().and_then(|i| i.conn.as_deref()),
+                // 建会话时做一次完整检测（ACP 会真跑握手），结果写缓存供后续消息复用
+                true,
             )
             .await;
             if let Some(err) = gate {

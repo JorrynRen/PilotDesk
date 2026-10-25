@@ -370,6 +370,16 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                               ? `v${dep.version}`
                               : '可用（版本未知）'}
                     </span>
+                    {/* 不可用原因直接展示：登录/授权这类问题藏在 hover 里用户根本发现不了 */}
+                    {!dep.detecting && dep.installed && dep.available === false && dep.healthReason && (
+                      <span
+                        className="text-[10px] truncate max-w-[240px]"
+                        style={{ color: '#EF4444' }}
+                        title={dep.healthReason}
+                      >
+                        {dep.healthReason}
+                      </span>
+                    )}
                     {dep.updateChecking && (
                       <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
                     )}

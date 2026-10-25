@@ -877,17 +877,21 @@ async fn download_icon(agent_type: &str, url: &str) -> Option<String> {
 
 /// 供会话门禁复用的就绪检查：未就绪时返回可直接展示给用户的文案。
 ///
-/// 两道关卡，口径与环境检测一致，避免「检测显示可用、会话却起不来」：
+/// 三道关卡，口径与环境检测一致，避免「检测显示可用、会话却起不来」：
 /// 1. 包状态未就绪（草稿未装完 / 安装失败）直接拦；
-/// 2. 会话真正 spawn 的启动命令在本机解析不到时也拦（ACP 只看适配器包装没装，
-///    不看命令能否找到，就会出现「适配器已安装」但一建会话就失败的情况）。
+/// 2. 有最新检测结果时直接按它放行/拦截——ACP 的可用性要真跑一遍协议握手
+///    （copilot 未登录时 `session/new` 会回 `Authentication required`），
+///    不能在每次建会话/发消息时重做；
+/// 3. `deep` 时（建会话）没有缓存就先做一次完整检测并写入缓存，
+///    之后同一会话内的消息只走缓存或轻量命令探测。
 pub async fn readiness_gate(
     agent_mgr: &crate::agent::AgentManager,
     config: &AgentConfig,
     transport: &str,
     conn_json: Option<&str>,
+    deep: bool,
 ) -> Option<String> {
-    let hint = "请到「设置 › 运行与策略 › 环境检测」处理安装问题后再开始会话。";
+    let hint = "请到「设置 › 运行与策略 › 环境检测」处理后再开始会话。";
     match config.readiness() {
         Readiness::Ready => {}
         Readiness::NotReady { message } => {
@@ -896,6 +900,40 @@ pub async fn readiness_gate(
                 message, config.agent_type
             ));
         }
+    }
+
+    let unavailable = |reason: Option<String>| {
+        Some(format!(
+            "Agent「{}」当前不可用：{}。{}",
+            config.agent_type,
+            reason.unwrap_or_else(|| "启动命令不可用".to_string()),
+            hint
+        ))
+    };
+
+    let cached = crate::commands::env::cached_agent_health(&config.agent_type);
+    if let Some(health) = &cached {
+        if health.available {
+            return None;
+        }
+        // 消息路径直接按旧结论拦（便宜）；建会话时再重新核实一次——
+        // 用户可能刚登录/刚装好，不能拿 120s 前的结论把人挡在门外
+        if !deep {
+            crate::commands::env::clear_env_cache();
+            return unavailable(health.reason.clone());
+        }
+    }
+
+    // 需要真实判定时（建会话；ACP 或缓存已判不可用）做一次完整检测并写缓存
+    if deep && (transport == "acp" || cached.is_some()) {
+        let probe =
+            crate::commands::env::probe_agent(agent_mgr, config, transport, conn_json).await;
+        crate::commands::env::remember_agent_health(&config.agent_type, &probe.health);
+        if !probe.health.available {
+            crate::commands::env::clear_env_cache();
+            return unavailable(probe.health.reason);
+        }
+        return None;
     }
 
     let Some(cmd) = config.launch_command(transport, conn_json) else {
