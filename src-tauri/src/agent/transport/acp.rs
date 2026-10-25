@@ -625,21 +625,48 @@ impl AgentSession for AcpSession {
                 if awaiting {
                     idle_gate.awaiting_user.fetch_add(1, Ordering::Relaxed);
                 }
+                // 终态回传通道与审批请求同源（同一会话的事件流）
+                let tx_resolved = tx_perm.clone();
+                let sid_resolved = sid_perm.clone();
+                let resolved_call_id = call_id.clone();
                 tokio::spawn(async move {
-                    let allowed = match gate {
-                        Some(g) => tokio::time::timeout(
-                            std::time::Duration::from_secs(300),
+                    let (allowed, timed_out) = match gate {
+                        Some(g) => match tokio::time::timeout(
+                            std::time::Duration::from_secs(
+                                crate::agent::transport::ACP_APPROVAL_TIMEOUT_SECS,
+                            ),
                             g.request_approval(&call_id),
                         )
                         .await
-                        .unwrap_or(false),
+                        {
+                            Ok(v) => (v, false),
+                            Err(_) => {
+                                // 超时：清掉注册表里残留的 sender，并按安全默认拒绝
+                                log::warn!(
+                                    "[acp] 权限请求超时未决 → 拒绝: call={}",
+                                    resolved_call_id
+                                );
+                                g.discard(&call_id);
+                                (false, true)
+                            }
+                        },
                         None => {
                             log::warn!("[acp] 权限请求：审批闸门未接入 → 拒绝: {}", params);
-                            false
+                            (false, false)
                         }
                     };
                     if awaiting {
                         IdleState::dec(&idle_gate.awaiting_user);
+                    }
+                    // 必须回传终态：前端审批卡与通知中心的"未决项"靠它翻转。
+                    // 只发 required 不发 resolved，卡片会永远停在未决（超时后显示"等待超时裁决…"）。
+                    if awaiting {
+                        let _ = tx_resolved.send(UnifiedAgentEvent::ApprovalResolved {
+                            session_id: sid_resolved,
+                            call_id: resolved_call_id,
+                            approved: allowed,
+                            timed_out,
+                        });
                     }
                     if let Some(id) = id {
                         peer.respond(id, Ok(permission_response(&options, allowed)))

@@ -1195,6 +1195,27 @@ pub async fn run_transport_session(
                     "toolName": name,
                     "arguments": args,
                     "riskDescription": risk,
+                    // 倒计时基准由后端下发：前端不再写死 120s（ACP 实际等 300s）
+                    "timeoutSecs": crate::agent::transport::ACP_APPROVAL_TIMEOUT_SECS,
+                }),
+            );
+        }
+        UnifiedAgentEvent::ApprovalResolved {
+            call_id,
+            approved,
+            timed_out,
+            ..
+        } => {
+            // 与 required 成对：缺了它审批卡永远停在未决，通知中心也永远不消解
+            let _ = app_evt.emit(
+                "agent-approval-resolved",
+                serde_json::json!({
+                    "sessionId": sid_evt,
+                    "toolId": call_id,
+                    "toolName": "",
+                    "approved": approved,
+                    "timedOut": timed_out,
+                    "risk": "",
                 }),
             );
         }

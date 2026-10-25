@@ -580,15 +580,20 @@ fn agent_running_sessions() -> Vec<String> {
     crate::api_agent::session_runs::running_sessions()
 }
 
-/// 工具调用审批（前端弹窗后回调）
+/// 工具调用审批（前端审批卡点击后回调）。
+///
+/// 返回**是否命中待决请求**：`false` = 已超时 / 已决 / 不存在。
+/// 前端据此区分「已提交」与「已失效」——签名必须与 ApprovalCard 的
+/// `invoke<boolean>` 契约一致，返回 `()` 会让每次点击都显示"该审批已失效"。
 #[tauri::command]
 async fn agent_approve_tool(
     pending: tauri::State<'_, PendingApprovals>,
     session_id: String,
     call_id: String,
     approved: bool,
-) -> Result<(), String> {
-    if pending.approve(&call_id, approved) {
+) -> Result<bool, String> {
+    let found = pending.approve(&call_id, approved);
+    if found {
         log::info!(
             "[Approval] session={}, call={}, approved={}",
             session_id,
@@ -598,7 +603,7 @@ async fn agent_approve_tool(
     } else {
         log::warn!("[Approval] 未找到审批请求: call={}", call_id);
     }
-    Ok(())
+    Ok(found)
 }
 
 /// 迭代上限确认（前端弹窗后回调）
@@ -663,7 +668,10 @@ pub struct PendingApprovals {
 /// 把现有 `PendingApprovals` 适配成传输层的审批闸门（ACP 等对端请求授权时用）。
 ///
 /// `call_id` 与发给前端的 `toolId` **同源**（见实施计划 §十五）——前端以 `toolId` 作 callId，
-/// 故用户在审批卡上点"批准"能对应回这条请求。超时/通道断 → 拒绝（**绝不默认放行**）。
+/// 故用户在审批卡上点"批准"能对应回这条请求。
+///
+/// 超时**不在这里做**：由传输层统一包裹（见 `acp.rs`），这样"用户拒绝"与"超时拒绝"
+/// 才能被区分成两种终态。通道断（pending 被丢弃）→ 拒绝，**绝不默认放行**。
 struct TauriApprovalGate {
     pending: PendingApprovals,
 }
@@ -672,10 +680,14 @@ struct TauriApprovalGate {
 impl crate::agent::transport::ApprovalGate for TauriApprovalGate {
     async fn request_approval(&self, call_id: &str) -> bool {
         let rx = self.pending.register(call_id.to_string());
-        match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
-            Ok(Ok(approved)) => approved,
-            _ => false,
+        match rx.await {
+            Ok(approved) => approved,
+            Err(_) => false,
         }
+    }
+
+    fn discard(&self, call_id: &str) {
+        self.pending.discard(call_id);
     }
 }
 

@@ -124,12 +124,13 @@ function ensureStarted(): void {
     listen<{ sessionId: string; agentSessionId: string }>('agent-session', (event) => {
       dispatch('onSession', event.payload.sessionId, event.payload.agentSessionId);
     }),
-    listen<{ sessionId: string; toolId: string; toolName: string; arguments: string; riskDescription: string }>(
+    listen<{ sessionId: string; toolId: string; toolName: string; arguments: string; riskDescription: string; timeoutSecs?: number }>(
       'agent-approval-required',
       (event) => {
         // 审批集合在总线层写单例 store，不依赖 MainPanel 是否挂载：
         // 用户切到群聊/自定义页时 MainPanel 会卸载，若只在组件里记录，审批会随卸载丢失。
-        const deadline = Date.now() + 120_000;
+        // 倒计时基准取后端下发的等待上限（API 120s / ACP 300s），前端不写死。
+        const deadline = Date.now() + (event.payload.timeoutSecs ?? 120) * 1000;
         useApprovalStore.getState().add(event.payload.sessionId, {
           callId: event.payload.toolId,
           toolName: event.payload.toolName,

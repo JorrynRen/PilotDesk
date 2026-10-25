@@ -1047,6 +1047,8 @@ impl AgentLoop {
                         "toolName": tool_name,
                         "arguments": arguments,
                         "riskDescription": risk_description,
+                        // 与后端等待审批的 120s 对齐（见 lib.rs 的 timeout）
+                        "timeoutSecs": 120,
                     }),
                 );
             }

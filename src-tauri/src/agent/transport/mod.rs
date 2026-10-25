@@ -64,6 +64,16 @@ pub enum UnifiedAgentEvent {
         args: String,
         risk: String,
     },
+    /// 权限请求已决 → `agent-approval-resolved`
+    ///
+    /// 必须与 `ApprovalRequired` 成对发出：前端审批卡与通知中心的"未决项"都靠它翻转。
+    /// 缺了它，卡片会永远停在未决态（超时后显示"等待超时裁决…"），即使工具其实已被放行。
+    ApprovalResolved {
+        session_id: String,
+        call_id: String,
+        approved: bool,
+        timed_out: bool,
+    },
     /// 执行计划更新（ACP `plan`）
     Plan {
         session_id: String,
@@ -192,12 +202,20 @@ impl Default for TransportKind {
 /// 于是 CLI / API / ACP 三条路共用同一套审批 UI 与回收逻辑，无需各自造注册表。
 ///
 /// 返回 `true` = 允许；`false` = 拒绝（含超时、无人在场）。
-/// 实现方应自带超时：**未决**一律按拒绝处理，绝不默认放行。
+/// 实现方**不内置超时**：超时由传输层用 `tokio::time::timeout` 包裹，
+/// 这样"用户拒绝"与"超时拒绝"在 UI 上是两种终态（`timedOut` 标记）。**未决一律按拒绝**，绝不默认放行。
 #[async_trait::async_trait]
 pub trait ApprovalGate: Send + Sync {
     /// 请求一次审批；`call_id` 用于把界面上的决定对应回本次请求。
     async fn request_approval(&self, call_id: &str) -> bool;
+
+    /// 放弃一次已不再等待的请求（超时后回收注册表里的 sender，避免泄漏）。
+    fn discard(&self, _call_id: &str) {}
 }
+
+/// ACP 权限请求等待用户决策的上限（秒）。
+/// 同时下发给前端作为倒计时基准，避免前后端各写一个魔法数字。
+pub const ACP_APPROVAL_TIMEOUT_SECS: u64 = 300;
 
 /// 建立一次会话所需的连接参数。
 ///
