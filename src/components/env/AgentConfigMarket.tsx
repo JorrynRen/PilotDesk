@@ -63,51 +63,75 @@ function statusLabel(a: MarketAgent): { text: string; tone: 'ok' | 'warn' | 'err
   return { text: '已配置', tone: 'ok' };
 }
 
+interface MarketCategoryState {
+  agents: MarketAgent[];
+  loading: boolean;
+  error: string | null;
+}
+
+const MARKET_STATE_INITIAL: Record<MarketCategory, MarketCategoryState> = {
+  acp: { agents: [], loading: false, error: null },
+  cli: { agents: [], loading: false, error: null },
+};
+
 export function AgentConfigMarket() {
   const navigate = useNavigate();
   /** 全局 Agent 列表是单例缓存，获取后必须主动刷新，否则配置页看不到新条目。 */
   const { fetchAgents } = useAgentRegistry();
-  const [agents, setAgents] = useState<MarketAgent[]>([]);
-  const [loading, setLoading] = useState(false);
+  // 两个市场各自独立保存加载态：任一来源超时只影响自己的 Tab，不会让另一个市场空白。
+  const [market, setMarket] = useState<Record<MarketCategory, MarketCategoryState>>(MARKET_STATE_INITIAL);
   const [busyType, setBusyType] = useState<string | null>(null);
   const [category, setCategory] = useState<MarketCategory>('acp');
   const [keyword, setKeyword] = useState('');
 
-  const fetchMarket = useCallback(async (force = false) => {
-    setLoading(true);
+  /** 拉取单个市场（`force` 只对 ACP 官方目录有意义）。 */
+  const fetchCategory = useCallback(async (cat: MarketCategory, force = false) => {
+    setMarket((prev) => ({ ...prev, [cat]: { ...prev[cat], loading: true, error: null } }));
     try {
-      const list = await invoke<MarketAgent[]>('agent_market_list', { force });
-      setAgents(list);
+      const list = await invoke<MarketAgent[]>('agent_market_list', { category: cat, force });
+      setMarket((prev) => ({ ...prev, [cat]: { agents: list, loading: false, error: null } }));
     } catch (err) {
-      showToast(`无法加载 Agent 市集 (${errorMessage(err)})`, 'warning');
+      setMarket((prev) => ({
+        ...prev,
+        [cat]: { ...prev[cat], loading: false, error: errorMessage(err) },
+      }));
     }
-    setLoading(false);
   }, []);
+
+  const refreshAll = useCallback(
+    async (forceRegistry: boolean) => {
+      await Promise.all([
+        fetchCategory('acp', forceRegistry),
+        // CLI 市场只读预置，官方目录刷新与它无关
+        fetchCategory('cli', false),
+      ]);
+    },
+    [fetchCategory]
+  );
 
   useEffect(() => {
     // 不在 effect 体内同步 setState：推到微任务，避免级联渲染告警
-    void Promise.resolve().then(() => fetchMarket(false));
-  }, [fetchMarket]);
+    void Promise.resolve().then(() => refreshAll(false));
+  }, [refreshAll]);
 
-  const counts = useMemo(() => {
-    const acp = agents.filter((a) => a.category === 'acp').length;
-    const cli = agents.filter((a) => a.category === 'cli').length;
-    return { acp, cli };
-  }, [agents]);
+  const current = market[category];
+
+  const counts = useMemo(
+    () => ({ acp: market.acp.agents.length, cli: market.cli.agents.length }),
+    [market]
+  );
 
   const visible = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
-    return agents
-      .filter((a) => a.category === category)
-      .filter(
-        (a) =>
-          !kw ||
-          a.displayName.toLowerCase().includes(kw) ||
-          a.agentType.toLowerCase().includes(kw) ||
-          a.description.toLowerCase().includes(kw) ||
-          a.packages.some((p) => p.package.toLowerCase().includes(kw))
-      );
-  }, [agents, category, keyword]);
+    return current.agents.filter(
+      (a) =>
+        !kw ||
+        a.displayName.toLowerCase().includes(kw) ||
+        a.agentType.toLowerCase().includes(kw) ||
+        a.description.toLowerCase().includes(kw) ||
+        a.packages.some((p) => p.package.toLowerCase().includes(kw))
+    );
+  }, [current.agents, keyword]);
 
   /** 「获取」：落草稿后立刻跳去集成配置完成安装（ACP 需要装适配器，不能在这里静默完成）。 */
   const handleAcquire = async (agent: MarketAgent) => {
@@ -138,7 +162,8 @@ export function AgentConfigMarket() {
       showToast(`更新失败: ${errorMessage(err)}`, 'error');
     }
     setBusyType(null);
-    await fetchMarket(false);
+    // 更新只影响该条目所在市场，按需刷新即可
+    await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
   };
 
   const renderAction = (agent: MarketAgent) => {
@@ -204,10 +229,10 @@ export function AgentConfigMarket() {
         actions={
           <SettingsButton
             variant="secondary"
-            icon={<RefreshCw size={11} className={loading ? 'animate-spin' : undefined} />}
-            onClick={() => fetchMarket(true)}
-            disabled={loading}
-            title="刷新 ACP 官方目录（本地缓存 24 小时，过期自动后台更新）"
+            icon={<RefreshCw size={11} className={market.acp.loading || market.cli.loading ? 'animate-spin' : undefined} />}
+            onClick={() => refreshAll(true)}
+            disabled={market.acp.loading || market.cli.loading}
+            title="刷新两个市场的数据源（ACP 官方目录缓存 24 小时，过期自动后台更新）"
           >
             刷新目录
           </SettingsButton>
@@ -259,9 +284,28 @@ export function AgentConfigMarket() {
         </div>
 
         <div className="space-y-2">
+          {/* 每个市场独立报错：一侧数据源故障不影响另一侧的浏览与获取 */}
+          {current.error && (
+            <div
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11px]"
+              style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            >
+              <AlertCircle size={12} style={{ color: 'var(--danger, #dc2626)' }} />
+              <span className="min-w-0 flex-1" style={{ color: 'var(--danger, #dc2626)' }}>
+                {category === 'acp' ? 'ACP 市场' : '本地 CLI 市场'}加载失败：{current.error}
+              </span>
+              <SettingsButton
+                variant="secondary"
+                icon={<RefreshCw size={11} />}
+                onClick={() => fetchCategory(category, category === 'acp')}
+              >
+                重试
+              </SettingsButton>
+            </div>
+          )}
           {visible.length === 0 ? (
             <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>
-              {loading ? '正在加载 Agent 市集...' : '没有匹配的条目'}
+              {current.loading ? '正在加载 Agent 市集...' : current.error ? '' : '没有匹配的条目'}
             </div>
           ) : (
             visible.map((agent) => {

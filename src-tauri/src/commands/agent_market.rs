@@ -369,32 +369,52 @@ fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, Install
     Ok(out)
 }
 
-/// 拉取并合并两份来源，得到完整的市场条目列表（不含安装状态）。
-async fn load_entries() -> Result<Vec<MarketEntry>, AppError> {
-    let registry = registry::load(false)
-        .await
-        .map_err(AppError::Network)?;
+/// 读取市场条目。`category` 指定时只加载该市场需要的数据源：
+/// - `cli`：只读预置，**不触碰** ACP 官方目录（官方目录超时不会拖垮本地 CLI 市场）；
+/// - `acp`：读官方目录，预置只用于补「官方未收录」的条目，预置失败不致命。
+async fn load_entries(category: Option<&str>) -> Result<Vec<MarketEntry>, AppError> {
+    let want_cli = category == Some("cli");
+    let want_acp = !want_cli;
 
-    let mut entries: Vec<MarketEntry> = registry
-        .agents
-        .iter()
-        .filter_map(MarketEntry::from_registry)
-        .collect();
+    let mut entries: Vec<MarketEntry> = Vec::new();
 
-    let preset_json = crate::utils::market::fetch_agents_config()
-        .await
-        .map_err(AppError::Network)?;
-    let preset_file = serde_json::from_value::<PresetFile>(preset_json)
-        .map_err(|e| AppError::Json(format!("解析 Agent 预置失败: {}", e)))?;
+    if want_acp {
+        let registry = registry::load(false)
+            .await
+            .map_err(AppError::Network)?;
+        entries.extend(
+            registry
+                .agents
+                .iter()
+                .filter_map(MarketEntry::from_registry),
+        );
+    }
 
-    let existing: std::collections::HashSet<String> =
-        entries.iter().map(|e| e.agent_type.clone()).collect();
-    for p in preset_file.agents {
-        // 官方目录已有的条目以官方为准（预置只补缺口）
-        if existing.contains(&p.agent_type) {
-            continue;
+    match crate::utils::market::fetch_agents_config().await {
+        Ok(preset_json) => {
+            let preset_file = serde_json::from_value::<PresetFile>(preset_json)
+                .map_err(|e| AppError::Json(format!("解析 Agent 预置失败: {}", e)))?;
+
+            let existing: std::collections::HashSet<String> =
+                entries.iter().map(|e| e.agent_type.clone()).collect();
+            for p in preset_file.agents {
+                // 官方目录已有的条目以官方为准（预置只补缺口）
+                if existing.contains(&p.agent_type) {
+                    continue;
+                }
+                let entry = MarketEntry::from_preset(p);
+                if category.map_or(true, |c| entry.category == c) {
+                    entries.push(entry);
+                }
+            }
         }
-        entries.push(MarketEntry::from_preset(p));
+        Err(e) => {
+            // CLI 市场完全依赖预置，读不到只能报错；ACP 市场仍可只显示官方目录。
+            if want_cli {
+                return Err(AppError::Network(e));
+            }
+            log::warn!("[agent_market] 预置读取失败，仅展示 ACP 官方目录: {}", e);
+        }
     }
 
     entries.sort_by(|a, b| {
@@ -410,18 +430,20 @@ async fn load_entries() -> Result<Vec<MarketEntry>, AppError> {
 // ──────────────────────────────────────────────
 
 /// 列出 Agent 市集（`force=true` 跳过缓存、直连官方目录刷新）。
+///
+/// `category` 用于把两处市场隔离：`cli` 完全跳过官方目录，`acp` 只拉官方目录
+/// （预置仅补缺口），这样一侧网络超时不会连带另一侧空白。
 #[tauri::command]
 pub async fn agent_market_list(
     state: tauri::State<'_, crate::DbState>,
     force: Option<bool>,
+    category: Option<String>,
 ) -> Result<Vec<MarketAgent>, AppError> {
-    let entries = if force.unwrap_or(false) {
-        // 手动刷新：先强制刷官方目录缓存，再走常规合并（预置仍走市场源）
+    let cat = category.as_deref();
+    if force.unwrap_or(false) && cat != Some("cli") {
         registry::load(true).await.map_err(AppError::Network)?;
-        load_entries().await?
-    } else {
-        load_entries().await?
-    };
+    }
+    let entries = load_entries(cat).await?;
 
     let conn = state.get_conn()?;
     let installed = installed_map(&conn)?;
@@ -457,7 +479,7 @@ pub async fn agent_market_acquire(
         }
     }
 
-    let entries = load_entries().await?;
+    let entries = load_entries(None).await?;
     let entry = entries
         .into_iter()
         .find(|e| e.agent_type == agent_type)
@@ -693,7 +715,7 @@ pub async fn agent_market_update(
         agents::get_agent_inner(&conn, &agent_type)?
             .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?
     };
-    let entries = load_entries().await?;
+    let entries = load_entries(None).await?;
     let entry = entries
         .into_iter()
         .find(|e| e.agent_type == agent_type)
