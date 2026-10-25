@@ -826,8 +826,10 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
   const uninstallLabel = isAcp ? '卸载适配器' : '卸载 CLI 包';
   // 标题必须点明「装的是什么」：ACP 只装适配器，写成「本机安装」会被读成装 Agent 本身
   const installTitle = isAcp ? '本机安装（ACP 适配器）' : '本机安装（CLI 包）';
-  // P1 仅支持 npm / shell；uvx / binary 由市集显示「暂不支持」，这里兜底说明。
-  const supported = lifecycle.kind === 'npm' || lifecycle.kind === 'shell';
+  // npm / shell 由前端判定；binary 由后端按「平台 + .zip + sha256 + 非 .cmd」复核，
+  // 这里放行按钮，不合规时把后端返回的原因回显在下方（不重复一份平台判定）。
+  const supported =
+    lifecycle.kind === 'npm' || lifecycle.kind === 'shell' || lifecycle.kind === 'binary';
   const status = pkgState?.status;
   const ready = status === 'ready';
   const failed = status === 'failed';
@@ -917,6 +919,11 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
       {packages && (
         <div className="text-[10px] mt-1 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
           {lifecycle.kind} · {packages}
+        </div>
+      )}
+      {!packages && lifecycle.kind === 'binary' && (lifecycle.artifacts?.length ?? 0) > 0 && (
+        <div className="text-[10px] mt-1 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
+          binary · {lifecycle.artifacts!.length} 个平台制品（按本机平台自动选取）
         </div>
       )}
       {runtime && (

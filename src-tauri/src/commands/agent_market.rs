@@ -8,14 +8,17 @@
 //!   「安装」时执行安装命令 → 解析 bin / 版本 → 置 ready，并把 ACP 的 conn 同步成解析后的运行时。
 
 use std::collections::BTreeMap;
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tauri::Emitter;
 
 use crate::agent::config::{AgentConfig, CreateAgentPayload, Readiness, UpdateAgentPayload};
 use crate::agent::lifecycle::{
-    DistSource, LifecycleKind, LifecyclePackage, LifecycleSpec, PackageRole, PkgState,
+    Artifact, DistSource, LifecycleKind, LifecyclePackage, LifecycleSpec, PackageRole, PkgState,
     RuntimeSpec, SOURCE_ACP_REGISTRY, SOURCE_PRESET,
 };
 use crate::agent::registry::{self, RegistryAgent};
@@ -153,51 +156,84 @@ struct PresetFile {
 impl MarketEntry {
     fn from_registry(a: &RegistryAgent) -> Option<Self> {
         // 分发方式优先级：npx → uvx → binary（同一 Agent 可能同时提供多种）
+        // binary 分支单独处理：它没有「包名」，而是一组按平台划分的下载制品。
+        let mut artifacts: Vec<Artifact> = Vec::new();
         let (kind, package, args, env) = if let Some(npx) = a.distribution.get("npx") {
             (
                 LifecycleKind::Npm,
-                npx.get("package").and_then(|v| v.as_str())?,
+                npx.get("package").and_then(|v| v.as_str())?.to_string(),
                 string_list(npx.get("args")),
                 string_map(npx.get("env")),
             )
         } else if let Some(uvx) = a.distribution.get("uvx") {
             (
                 LifecycleKind::Uvx,
-                uvx.get("package").and_then(|v| v.as_str())?,
+                uvx.get("package").and_then(|v| v.as_str())?.to_string(),
                 string_list(uvx.get("args")),
                 string_map(uvx.get("env")),
             )
         } else if let Some(binary) = a.distribution.get("binary") {
-            // binary 是「平台键 → {archive,cmd,sha256}」，P3 才实现下载；这里只登记条目
-            let cmd = binary
+            // 「平台键 → {archive, cmd, sha256}」：**逐平台原样收录**，装哪个平台由安装时决定。
+            // 不在映射阶段随手挑一个平台（JSON 键序不定，可能取到 darwin 的 cmd）。
+            artifacts = binary
                 .as_object()
-                .and_then(|o| o.values().next())
-                .and_then(|v| v.get("cmd"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(a.id.as_str());
-            (LifecycleKind::Binary, cmd, Vec::new(), BTreeMap::new())
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(platform, v)| {
+                            let archive = v.get("archive")?.as_str()?.trim().to_string();
+                            let cmd = v.get("cmd")?.as_str()?.trim().to_string();
+                            if archive.is_empty() || cmd.is_empty() {
+                                return None;
+                            }
+                            Some(Artifact {
+                                platform: platform.clone(),
+                                archive,
+                                cmd,
+                                sha256: v
+                                    .get("sha256")
+                                    .and_then(|s| s.as_str())
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty()),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if artifacts.is_empty() {
+                return None;
+            }
+            (LifecycleKind::Binary, String::new(), Vec::new(), BTreeMap::new())
         } else {
             return None;
         };
 
-        let spec = LifecycleSpec {
-            kind,
-            packages: vec![LifecyclePackage {
+        let packages = if package.is_empty() {
+            Vec::new()
+        } else {
+            vec![LifecyclePackage {
                 role: PackageRole::Adapter,
-                package: package.to_string(),
+                package: package.clone(),
                 bin: None,
                 args: args.clone(),
                 env,
-            }],
+            }]
+        };
+
+        let spec = LifecycleSpec {
+            kind,
             // npm 条目不写死运行时：安装后由 bin 解析决定（解析失败退 npm exec）。
-            // uvx/binary 在 P1 不可安装，运行规格留空。
-            runtime: match kind {
-                LifecycleKind::Uvx => Some(RuntimeSpec {
+            // uvx 分发确定不做，这里只留可读的运行时形态供展示；binary 的运行时在安装后
+            // 由解压出来的绝对路径直接写进 conn。
+            runtime: if kind == LifecycleKind::Uvx {
+                Some(RuntimeSpec {
                     command: "uvx".to_string(),
-                    args: std::iter::once(package.to_string()).chain(args).collect(),
-                }),
-                _ => None,
+                    args: std::iter::once(package).chain(args).collect(),
+                })
+            } else {
+                None
             },
+            artifacts,
+            packages,
             ..Default::default()
         };
 
@@ -263,9 +299,10 @@ impl MarketEntry {
     }
 
     fn to_market_agent(&self, installed: &InstalledInfo) -> MarketAgent {
-        // 没有包名也没有安装命令 = 老版预置/只能手工配置，不能给「获取」入口
-        let has_install_spec =
-            !self.lifecycle.packages.is_empty() || self.lifecycle.install_cmd.is_some();
+        // 没有包名、没有安装命令、也没有平台制品 = 老版预置/只能手工配置，不能给「获取」入口
+        let has_install_spec = !self.lifecycle.packages.is_empty()
+            || self.lifecycle.install_cmd.is_some()
+            || !self.lifecycle.artifacts.is_empty();
         let support = if has_install_spec {
             self.lifecycle.supported()
         } else {
@@ -561,6 +598,332 @@ pub async fn agent_market_acquire(
     Ok(created)
 }
 
+// ──────────────────────────────────────────────
+//  二进制安装（P3 受限子集：当前平台 + zip + sha256）
+// ──────────────────────────────────────────────
+
+/// 安装包体积上限（防大文件与超长响应把内存吃满）
+const ARTIFACT_MAX_BYTES: usize = 512 * 1024 * 1024;
+/// 解压后总体积上限（防 zip 炸弹）
+const ARTIFACT_MAX_EXTRACT_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// 下载并安装二进制制品：下载 → sha256 校验 → 解压 → 回写启动绝对路径。
+///
+/// 与 npm/shell 的区别：没有包管理器可代劳，落盘由应用自己完成。
+/// 目录固定 `<app_root>/agents/<agent_type>/<version>/`；卸载删整棵 `<agent_type>`。
+pub(crate) async fn install_binary(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, crate::DbState>,
+    agent_type: &str,
+    display_name: &str,
+    spec: &LifecycleSpec,
+    version: Option<&str>,
+) -> Result<(), AppError> {
+    let result = install_binary_inner(app, state, agent_type, display_name, spec, version).await;
+    if let Err(err) = &result {
+        let msg = format!("安装失败: {}", err);
+        let _ = set_pkg_state(state, agent_type, PkgState::failed(msg.clone(), crate::utils::now()));
+        let _ = app.emit(
+            "install-progress",
+            json!({
+                "agent": agent_type,
+                "message": msg,
+                "progress": 100,
+                "error": true
+            }),
+        );
+    }
+    result
+}
+
+async fn install_binary_inner(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, crate::DbState>,
+    agent_type: &str,
+    display_name: &str,
+    spec: &LifecycleSpec,
+    version: Option<&str>,
+) -> Result<(), AppError> {
+    let artifact = spec
+        .current_artifact()
+        .ok_or_else(|| AppError::Config(spec.binary_block_reason()))?;
+
+    let root = crate::agent::lifecycle::binary_install_root(agent_type);
+    let tag = sanitize_version_tag(version.unwrap_or(""));
+    let target = root.join(&tag);
+
+    let _ = app.emit(
+        "install-progress",
+        json!({
+            "agent": agent_type,
+            "message": format!("正在下载 {}...", display_name),
+            "progress": 15
+        }),
+    );
+    let bytes = download_bytes(&artifact.archive).await?;
+
+    let _ = app.emit(
+        "install-progress",
+        json!({ "agent": agent_type, "message": "正在校验安装包...", "progress": 55 }),
+    );
+    verify_sha256(&bytes, artifact.sha256.as_deref().unwrap_or_default())?;
+
+    let _ = app.emit(
+        "install-progress",
+        json!({ "agent": agent_type, "message": "正在解压安装包...", "progress": 75 }),
+    );
+    if target.exists() {
+        std::fs::remove_dir_all(&target)
+            .map_err(|e| AppError::External(format!("清理旧版本目录失败: {}", e)))?;
+    }
+    std::fs::create_dir_all(&target)
+        .map_err(|e| AppError::External(format!("创建安装目录失败: {}", e)))?;
+    extract_zip(&bytes, &target)?;
+
+    let exe = resolve_artifact_cmd(&target, &artifact.cmd).ok_or_else(|| {
+        AppError::External(format!(
+            "安装包内未找到启动文件：{}（请按官方文档手工安装）",
+            artifact.cmd
+        ))
+    })?;
+    prune_other_versions(&root, &tag);
+
+    let mut ready = PkgState::ready(crate::utils::now());
+    ready.install_dir = Some(target.to_string_lossy().to_string());
+    ready.installed_version = version
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    set_pkg_state(state, agent_type, ready)?;
+
+    // ACP：启动命令换成解压出来的绝对路径（检测与门禁按文件存在性判定）
+    {
+        let conn = state.get_conn()?;
+        let info = agents::get_agent_transport_inner(&conn, agent_type)?;
+        if info.transport == "acp" {
+            // 保留用户陆续加过的启动参数：更新时只换可执行文件，不重置手写配置
+            let existing_args: Vec<String> = info
+                .conn
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .and_then(|v| v.get("args").and_then(|a| a.as_array()).cloned())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let conn_json = json!({
+                "command": exe.to_string_lossy(),
+                "args": existing_args,
+                "env": spec.merged_env(),
+            });
+            agents::set_agent_transport_inner(
+                &conn,
+                agent_type,
+                "acp",
+                Some(&conn_json.to_string()),
+            )?;
+        }
+    }
+
+    crate::commands::env::clear_env_cache();
+    let _ = app.emit(
+        "install-progress",
+        json!({
+            "agent": agent_type,
+            "message": format!("{} 已就绪", display_name),
+            "progress": 100
+        }),
+    );
+    Ok(())
+}
+
+/// 卸载二进制：删整棵安装目录并把包状态退回「待安装」。
+pub(crate) fn uninstall_binary(
+    state: &tauri::State<'_, crate::DbState>,
+    agent_type: &str,
+) -> Result<(), AppError> {
+    let root = crate::agent::lifecycle::binary_install_root(agent_type);
+    if root.exists() {
+        std::fs::remove_dir_all(&root)
+            .map_err(|e| AppError::External(format!("删除安装目录失败: {}", e)))?;
+    }
+    let conn = state.get_conn()?;
+    set_pkg_state_inner(&conn, agent_type, &PkgState::pending(crate::utils::now()))?;
+    crate::commands::env::clear_env_cache();
+    Ok(())
+}
+
+/// 流式下载并有体积上限：不要先 `bytes()` 再判大小（恶意超大会先撑爆内存）。
+///
+/// 与市场清单不同，这里**走系统代理**：发布包多托管在 GitHub / 厂商 CDN，
+/// 国内网络常需要代理才能连通，硬编码 `no_proxy` 会让用户完全装不上。
+async fn download_bytes(url: &str) -> Result<Vec<u8>, AppError> {
+    use futures::StreamExt;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(600))
+        .user_agent("PilotDesk-AgentMarket/1.0")
+        .build()
+        .map_err(|e| AppError::External(format!("创建下载客户端失败: {}", e)))?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| {
+            AppError::External(format!(
+                "下载安装包失败（网络或代理不可用）：{}。可改用官方文档手工安装",
+                e
+            ))
+        })?;
+    if !resp.status().is_success() {
+        return Err(AppError::External(format!(
+            "下载安装包失败: HTTP {}（可改用官方文档手工安装）",
+            resp.status().as_u16()
+        )));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| AppError::External(format!("读取安装包失败: {}", e)))?;
+        if out.len() + chunk.len() > ARTIFACT_MAX_BYTES {
+            return Err(AppError::External(format!(
+                "安装包超过 {} MB 上限，已中止",
+                ARTIFACT_MAX_BYTES / 1024 / 1024
+            )));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    if out.is_empty() {
+        return Err(AppError::External("下载到的安装包为空".to_string()));
+    }
+    Ok(out)
+}
+
+fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), AppError> {
+    let expected = expected.trim().to_ascii_lowercase();
+    if expected.is_empty() {
+        return Err(AppError::Config(
+            "安装包缺少校验值（sha256），拒绝安装".to_string(),
+        ));
+    }
+    let actual = format!("{:x}", Sha256::digest(bytes));
+    if actual != expected {
+        let short = |s: &str| s.chars().take(12).collect::<String>();
+        return Err(AppError::External(format!(
+            "安装包校验失败（期望 {}…，实际 {}…），已中止",
+            short(&expected),
+            short(&actual)
+        )));
+    }
+    Ok(())
+}
+
+/// 解压 zip 到目标目录。只接受归档内的相对路径（zip slip 防护）。
+fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), AppError> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| AppError::External(format!("安装包不是有效的 zip: {}", e)))?;
+    let mut total: u64 = 0;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| AppError::External(format!("读取安装包失败: {}", e)))?;
+        let Some(rel) = entry.enclosed_name() else {
+            return Err(AppError::External(format!(
+                "安装包含有非法路径：{}",
+                entry.name()
+            )));
+        };
+        if entry.is_dir() {
+            continue;
+        }
+        total = total.saturating_add(entry.size());
+        if total > ARTIFACT_MAX_EXTRACT_BYTES {
+            return Err(AppError::External("安装包解压后体积过大，已中止".to_string()));
+        }
+        let out_path = dest.join(&rel);
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AppError::External(format!("创建目录失败: {}", e)))?;
+        }
+        let mut out = std::fs::File::create(&out_path)
+            .map_err(|e| AppError::External(format!("写入文件失败: {}", e)))?;
+        std::io::copy(&mut entry, &mut out)
+            .map_err(|e| AppError::External(format!("解压失败: {}", e)))?;
+    }
+    Ok(())
+}
+
+/// 归档内 `cmd` → 本机文件路径。声明路径与实际大小写/层级不符时按文件名兜底找一次。
+fn resolve_artifact_cmd(dir: &Path, cmd: &str) -> Option<PathBuf> {
+    let normalized = cmd.replace('\\', "/");
+    let trimmed = normalized.trim_start_matches("./").trim_start_matches('/');
+    let direct = dir.join(trimmed);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let name = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    find_file_recursive(dir, name, 0)
+}
+
+fn find_file_recursive(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
+    if depth > 4 {
+        return None;
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file_recursive(&path, name, depth + 1) {
+                return Some(found);
+            }
+        } else if path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case(name))
+            .unwrap_or(false)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// 版本目录名：去掉路径分隔符等不安全字符；空版本落到 `latest`。
+fn sanitize_version_tag(version: &str) -> String {
+    let cleaned: String = version
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "latest".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// 更新时只保留当前版本目录，避免旧版本一直占磁盘。
+fn prune_other_versions(root: &Path, keep: &str) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && entry.file_name().to_string_lossy() != keep {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
 /// 安装执行体（`agent_market_install` 与 `agent_market_update` 共用）：
 /// 执行安装命令 → 解析 bin / 已装版本 → 置 `ready` → 回写 ACP 的启动命令。
 ///
@@ -572,7 +935,13 @@ async fn run_install(
     agent_type: &str,
     display_name: &str,
     spec: &LifecycleSpec,
+    version: Option<&str>,
 ) -> Result<(), AppError> {
+    // 二进制没有包管理器可代劳：下载/校验/解压由应用自己做，不走 shell
+    if spec.kind == LifecycleKind::Binary {
+        return install_binary(app, state, agent_type, display_name, spec, version).await;
+    }
+
     let install_cmd = spec
         .commands()
         .map_err(AppError::Config)?
@@ -763,6 +1132,7 @@ pub async fn agent_market_install(
         &agent_type,
         &config.display_name,
         &spec,
+        Some(config.version.as_str()).filter(|v| !v.trim().is_empty()),
     )
     .await?;
 
@@ -859,6 +1229,7 @@ pub async fn agent_market_update(
         &agent_type,
         &config.display_name,
         &entry.lifecycle,
+        Some(entry.version.as_str()).filter(|v| !v.trim().is_empty()),
     )
     .await?;
 

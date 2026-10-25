@@ -15,7 +15,8 @@
 //! ```
 //!
 //! P1 支持 `npm` 与 `shell`（`shell` 用于携带显式命令的历史预置，如 hermes 的 pip 形态）；
-//! `uvx` / `binary` 在 P1 返回「暂不支持」，由市场置灰（P2/P3 再补）。
+//! P2（`uvx`）**确定不做**（官方目录仅 2 条命中，且 uvx 无「安装态」语义）；
+//! P3（`binary`）支持受限子集：当前平台 + `.zip` + 带 sha256 + 启动器不是 `.cmd` 壳。
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -26,9 +27,9 @@ use std::collections::BTreeMap;
 pub enum LifecycleKind {
     /// npm 全局安装（P1 主力）
     Npm,
-    /// uvx（P2）
+    /// uvx（**不做**：保留取值以兼容存量 JSON，安装一律拒绝）
     Uvx,
-    /// 直接下载二进制（P3）
+    /// 直接下载二进制（P3：受限子集）
     Binary,
     /// 显式命令（安装/卸载/更新/版本探测由规格直接给出）
     Shell,
@@ -87,6 +88,53 @@ pub struct RuntimeSpec {
     pub args: Vec<String>,
 }
 
+/// 平台制品（仅 `binary` 用）：官方目录里按平台给出的下载归档。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Artifact {
+    /// 平台键，与官方目录一致：`windows-x86_64` / `darwin-aarch64` / `linux-x86_64` …
+    pub platform: String,
+    /// 归档下载地址
+    pub archive: String,
+    /// 归档内可执行文件的相对路径（可能带 `./` 或子目录）
+    pub cmd: String,
+    /// sha256（十六进制）。缺失时不做自动安装——无法校验完整性
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+/// 当前系统的平台键（与官方目录的取值同源）。
+pub fn current_platform_key() -> String {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
+    } else {
+        "unknown"
+    };
+    format!("{}-{}", os, arch)
+}
+
+/// 二进制安装根目录：`<app_root>/agents/<agent_type>`。
+///
+/// 版本子目录在其下（便于更新时整体切换）；卸载直接删整棵，避免依赖 pkg_state 是否完整。
+pub fn binary_install_root(agent_type: &str) -> std::path::PathBuf {
+    crate::utils::paths::app_root_dir()
+        .join("agents")
+        .join(agent_type)
+}
+
 /// 生命周期规格。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +142,9 @@ pub struct LifecycleSpec {
     pub kind: LifecycleKind,
     #[serde(default)]
     pub packages: Vec<LifecyclePackage>,
+    /// 平台制品（仅 binary 用；按 `platform` 取当前系统那一份）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<Artifact>,
     /// 显式运行时（市场预置可给出；npm 条目通常留空，安装后由 bin 解析决定）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeSpec>,
@@ -134,6 +185,9 @@ pub struct PkgState {
     /// 包名 → 可执行文件名（安装后由 `npm view <pkg> bin --json` 解析）
     #[serde(default)]
     pub bins: BTreeMap<String, String>,
+    /// 二进制安装目录（仅 `binary`：卸载时直接删这棵目录）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,6 +205,7 @@ impl PkgState {
         Self {
             status: STATUS_PENDING_INSTALL.to_string(),
             bins: BTreeMap::new(),
+            install_dir: None,
             installed_version: None,
             last_error: None,
             updated_at: now_ts,
@@ -212,12 +267,55 @@ impl LifecycleSpec {
     }
 
     /// P1 是否支持该 kind 的安装流程。
+    ///
+    /// `binary` 只支持受限子集（当前平台 + zip + 带 sha256 + 非 `.cmd` 启动器）：
+    /// 这些条件缺一条，装下去就是「装完跑不起来」或「无法校验来源」，不如让市场明确置灰。
     pub fn supported(&self) -> Result<(), String> {
         match self.kind {
             LifecycleKind::Npm | LifecycleKind::Shell => Ok(()),
-            LifecycleKind::Uvx => Err("uvx 安装将在后续版本支持".to_string()),
-            LifecycleKind::Binary => Err("二进制下载将在后续版本支持".to_string()),
+            LifecycleKind::Uvx => Err("uvx 分发当前不支持，请按该 Agent 官方文档手工安装".to_string()),
+            LifecycleKind::Binary => match self.current_artifact() {
+                Some(_) => Ok(()),
+                None => Err(self.binary_block_reason()),
+            },
         }
+    }
+
+    /// 当前系统可直接安装的制品（P3 受限子集的判定入口）。
+    pub fn current_artifact(&self) -> Option<&Artifact> {
+        if self.kind != LifecycleKind::Binary {
+            return None;
+        }
+        let key = current_platform_key();
+        let artifact = self.artifacts.iter().find(|a| a.platform == key)?;
+        if !artifact.archive.to_lowercase().ends_with(".zip") {
+            return None;
+        }
+        if artifact.sha256.as_deref().unwrap_or("").trim().is_empty() {
+            return None;
+        }
+        if artifact.cmd.to_lowercase().ends_with(".cmd") {
+            return None;
+        }
+        Some(artifact)
+    }
+
+    /// 二进制不可自动安装的具体原因（市场与安装报错共用，避免两处说法不一致）。
+    pub fn binary_block_reason(&self) -> String {
+        let key = current_platform_key();
+        let Some(artifact) = self.artifacts.iter().find(|a| a.platform == key) else {
+            return format!("该条目未提供当前系统（{}）的安装包，请按官方文档手工安装", key);
+        };
+        if !artifact.archive.to_lowercase().ends_with(".zip") {
+            return "当前仅支持 .zip 安装包，请按官方文档手工安装".to_string();
+        }
+        if artifact.sha256.as_deref().unwrap_or("").trim().is_empty() {
+            return "该安装包未提供校验值（sha256），无法校验完整性，请按官方文档手工安装".to_string();
+        }
+        if artifact.cmd.to_lowercase().ends_with(".cmd") {
+            return "该安装包的启动器是 .cmd 脚本，当前不支持自动安装，请按官方文档手工安装".to_string();
+        }
+        "该安装包暂不支持自动安装，请按官方文档手工安装".to_string()
     }
 
     /// 派生四类命令。
@@ -269,9 +367,10 @@ impl LifecycleSpec {
                     .clone()
                     .filter(|s| !s.trim().is_empty()),
             }),
+            // 二进制由安装器下载解压，不走 shell 命令；uvx 不支持
+            // （两者都返回 Err，调用方应先按 kind 分派，别拿 commands() 当通用入口）
             LifecycleKind::Uvx | LifecycleKind::Binary => {
-                self.supported()?;
-                unreachable!("supported() 已拦住 P1 未支持的 kind")
+                Err("该分发方式不使用命令式安装".to_string())
             }
         }
     }

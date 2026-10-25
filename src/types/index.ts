@@ -411,9 +411,22 @@ export interface RuntimeSpec {
   args?: string[];
 }
 
+/** 平台制品（仅 binary）：官方目录按平台给出的下载归档。 */
+export interface Artifact {
+  /** 平台键：windows-x86_64 / darwin-aarch64 / linux-x86_64 … */
+  platform: string;
+  archive: string;
+  /** 归档内可执行文件的相对路径 */
+  cmd: string;
+  /** sha256（缺失时客户端不自动安装） */
+  sha256?: string;
+}
+
 export interface LifecycleSpec {
   kind: 'npm' | 'uvx' | 'binary' | 'shell';
   packages?: LifecyclePackage[];
+  /** 平台制品（仅 binary） */
+  artifacts?: Artifact[];
   runtime?: RuntimeSpec;
   /** shell 专用：显式命令 */
   installCmd?: string;
@@ -428,6 +441,8 @@ export interface PkgState {
   status: 'pending_install' | 'ready' | 'failed' | string;
   /** 包名 → 可执行文件名 */
   bins?: Record<string, string>;
+  /** 二进制安装目录（仅 binary） */
+  installDir?: string;
   installedVersion?: string;
   lastError?: string;
   updatedAt: number;

@@ -760,17 +760,30 @@ pub async fn install_agent(
     // 接管要按本地接入方式取同名预置（同名可能同时存在 ACP 与 CLI 两条）
     let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
 
-    // 历史手工配置没有生命周期规格：先按同名预置接管，再取安装/卸载命令
-    let spec = match config.lifecycle.as_ref() {
-        Some(spec) => spec.commands().map_err(AppError::Config)?,
+    // 历史手工配置没有生命周期规格：先按同名预置接管，再取安装命令
+    let lifecycle = match config.lifecycle.clone() {
+        Some(spec) => spec,
         None => crate::commands::agent_market::adopt_preset_spec(&state, &agent_type, &transport)
             .await?
-            .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
-            .commands()
-            .map_err(AppError::Config)?,
+            .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?,
     };
 
-    let cmd = spec
+    // 二进制没有命令可执行：下载/校验/解压由安装器完成
+    if lifecycle.kind == LifecycleKind::Binary {
+        return crate::commands::agent_market::install_binary(
+            &app,
+            &state,
+            &agent_type,
+            &config.display_name,
+            &lifecycle,
+            Some(config.version.as_str()).filter(|v| !v.trim().is_empty()),
+        )
+        .await;
+    }
+
+    let cmd = lifecycle
+        .commands()
+        .map_err(AppError::Config)?
         .install
         .ok_or_else(|| AppError::Config(format!("{} 未配置安装命令", agent_type)))?;
 
@@ -816,16 +829,38 @@ pub async fn uninstall_agent(
     let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
 
     // 历史手工配置没有生命周期规格：先按同名预置接管，再取卸载命令
-    let spec = match config.lifecycle.as_ref() {
-        Some(spec) => spec.commands().map_err(AppError::Config)?,
+    let lifecycle = match config.lifecycle.clone() {
+        Some(spec) => spec,
         None => crate::commands::agent_market::adopt_preset_spec(&state, &agent_type, &transport)
             .await?
-            .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
-            .commands()
-            .map_err(AppError::Config)?,
+            .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?,
     };
 
-    let cmd = spec
+    // 二进制：卸载 = 删掉应用目录下的整棵安装目录（没有包管理器可代劳）
+    if lifecycle.kind == LifecycleKind::Binary {
+        let _ = app.emit(
+            "install-progress",
+            serde_json::json!({
+                "agent": agent_type,
+                "message": format!("正在卸载 {}...", config.display_name),
+                "progress": 50
+            }),
+        );
+        crate::commands::agent_market::uninstall_binary(&state, &agent_type)?;
+        let _ = app.emit(
+            "install-progress",
+            serde_json::json!({
+                "agent": agent_type,
+                "message": format!("{} 卸载完成", config.display_name),
+                "progress": 100
+            }),
+        );
+        return Ok(());
+    }
+
+    let cmd = lifecycle
+        .commands()
+        .map_err(AppError::Config)?
         .uninstall
         .ok_or_else(|| AppError::Config(format!("{} 未配置卸载命令", agent_type)))?;
 
