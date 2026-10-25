@@ -876,13 +876,56 @@ async fn download_icon(agent_type: &str, url: &str) -> Option<String> {
 }
 
 /// 供会话门禁复用的就绪检查：未就绪时返回可直接展示给用户的文案。
-pub fn readiness_gate(config: &AgentConfig) -> Option<String> {
+///
+/// 两道关卡，口径与环境检测一致，避免「检测显示可用、会话却起不来」：
+/// 1. 包状态未就绪（草稿未装完 / 安装失败）直接拦；
+/// 2. 会话真正 spawn 的启动命令在本机解析不到时也拦（ACP 只看适配器包装没装，
+///    不看命令能否找到，就会出现「适配器已安装」但一建会话就失败的情况）。
+pub async fn readiness_gate(
+    agent_mgr: &crate::agent::AgentManager,
+    config: &AgentConfig,
+    transport: &str,
+    conn_json: Option<&str>,
+) -> Option<String> {
+    let hint = "请到「设置 › 运行与策略 › 环境检测」处理安装问题后再开始会话。";
     match config.readiness() {
-        Readiness::Ready => None,
-        Readiness::NotReady { message } => Some(format!(
-            "{}（Agent：{}）。请到「设置 › Agent」完成安装后再开始会话。",
-            message, config.agent_type
-        )),
+        Readiness::Ready => {}
+        Readiness::NotReady { message } => {
+            return Some(format!(
+                "{}（Agent：{}）。请到「设置 › Agent」完成安装后再开始会话。",
+                message, config.agent_type
+            ));
+        }
+    }
+
+    let Some(cmd) = config.launch_command(transport, conn_json) else {
+        return Some(format!(
+            "Agent「{}」缺少可用的启动命令，无法开始会话。{}",
+            config.agent_type, hint
+        ));
+    };
+
+    // npm/npx 兜底命令：包没装上时 `where npm` 一样成功，不能据此放行
+    let bins_empty = config
+        .pkg_state
+        .as_ref()
+        .map(|s| s.bins.is_empty())
+        .unwrap_or(true);
+    if matches!(cmd.as_str(), "npm" | "npm.cmd" | "npx" | "npx.cmd") && bins_empty {
+        return Some(format!(
+            "Agent「{}」的适配器尚未安装完成，无法开始会话。{}",
+            config.agent_type, hint
+        ));
+    }
+
+    let probe = crate::commands::env::resolve_command_probe(&cmd);
+    if crate::commands::env::probe_command_ok(agent_mgr, &probe).await {
+        None
+    } else {
+        Some(format!(
+            "Agent「{}」的启动命令「{}」在本机不可用，无法开始会话。{}",
+            config.agent_type, cmd, hint
+        ))
     }
 }
 

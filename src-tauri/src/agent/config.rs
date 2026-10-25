@@ -114,6 +114,42 @@ pub enum Readiness {
     NotReady { message: String },
 }
 
+/// 从运行命令模板里取可执行名（第一个 token）：`claude -p ...` → `claude`。
+///
+/// 手工配置的本地 CLI 没有生命周期规格，只能靠它推断「是否可用」。
+pub fn executable_from_template(template: &str) -> Option<String> {
+    let first = template
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c| c == '"' || c == '\'');
+    if first.is_empty() || first.contains('{') {
+        return None;
+    }
+    Some(first.to_string())
+}
+
+impl AgentConfig {
+    /// 会话真正 spawn 的启动命令：
+    /// - ACP：`conn.command`（安装完成时已回写为解析后的运行时可执行名）；
+    /// - 本地 CLI：运行模板的第一个 token。
+    ///
+    /// 返回 `None` 表示这份配置没有可判定的启动命令（如在线 API 形态），
+    /// 调用方不应据此判定不可用。
+    pub fn launch_command(&self, transport: &str, conn: Option<&str>) -> Option<String> {
+        if transport == "acp" {
+            let raw = conn?;
+            let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+            let cmd = v.get("command")?.as_str()?.trim().to_string();
+            if cmd.is_empty() {
+                return None;
+            }
+            Some(cmd)
+        } else {
+            executable_from_template(&self.run_cmd_template)
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAgentPayload {

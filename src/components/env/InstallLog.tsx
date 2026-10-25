@@ -90,7 +90,7 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
         <div className="flex items-center gap-1.5">
           <Terminal size={12} style={{ color: 'var(--text-tertiary)' }} />
           <span className="text-[10px] " style={{ color: 'var(--text-secondary)' }}>
-            操作日志
+            检测日志
           </span>
           {isActive && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full animate-pulse" style={{ backgroundColor: '#3B82F622', color: '#3B82F6' }}>

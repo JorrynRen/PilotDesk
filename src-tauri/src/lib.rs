@@ -465,9 +465,24 @@ async fn agent_send_message_with_config(
     let config = commands::agents::get_agent_inner(&conn, &agent_type)
         .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
         .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
-    // 就绪门禁：市场草稿未安装完成时直接拦下，返回结构化错误供前端引导去安装
-    if let Some(err) = commands::agent_market::readiness_gate(&config) {
-        return Err(err);
+    // 就绪门禁：市场草稿未安装完成、或会话启动命令在本机解析不到时直接拦下，
+    // 返回结构化错误供前端引导去安装（口径与「环境检测」一致）
+    let transport_info = commands::agents::get_agent_transport_inner(&conn, &agent_type).ok();
+    {
+        let mgr = agent_mgr.lock().await;
+        if let Some(err) = commands::agent_market::readiness_gate(
+            &mgr,
+            &config,
+            transport_info
+                .as_ref()
+                .map(|i| i.transport.as_str())
+                .unwrap_or("subprocess"),
+            transport_info.as_ref().and_then(|i| i.conn.as_deref()),
+        )
+        .await
+        {
+            return Err(err);
+        }
     }
     // cwd 为空时统一使用全局工作区路径
     let resolved_cwd = if cwd.as_deref().map_or(true, |s| s.is_empty()) {
@@ -749,10 +764,24 @@ async fn agent_create_session(
     agent_type: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
-    // 就绪门禁：市场获取但未完成安装的草稿不允许建会话（结构化错误交给前端引导安装）
+    // 就绪门禁：草稿未完成安装、或启动命令在本机不可用时不允许建会话
+    // （结构化错误交给前端引导安装；口径与「环境检测」一致）
     if let Ok(conn) = state.get_conn() {
         if let Ok(Some(cfg)) = commands::agents::get_agent_inner(&conn, &agent_type) {
-            if let Some(err) = commands::agent_market::readiness_gate(&cfg) {
+            let transport_info =
+                commands::agents::get_agent_transport_inner(&conn, &agent_type).ok();
+            let mgr = agent_mgr.lock().await;
+            let gate = commands::agent_market::readiness_gate(
+                &mgr,
+                &cfg,
+                transport_info
+                    .as_ref()
+                    .map(|i| i.transport.as_str())
+                    .unwrap_or("subprocess"),
+                transport_info.as_ref().and_then(|i| i.conn.as_deref()),
+            )
+            .await;
+            if let Some(err) = gate {
                 return Err(err);
             }
         }
