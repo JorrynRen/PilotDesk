@@ -14,6 +14,8 @@ interface DependencyStatus {
   key: string;
   version: string | null;
   installed: boolean;
+  /** 是否有可执行的安装规格（市场下发的 lifecycle）；手工配置的 Agent 为 false */
+  installable?: boolean;
   action?: string;
   installing?: boolean;
   /** Update check state */
@@ -186,6 +188,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         key: agent.agentType,
         version,
         installed: !!version,
+        // 安装/卸载命令已从「用户手填」改为「市集下发」，没有 lifecycle 的手工 Agent 无法在此安装
+        installable: !!agent.lifecycle,
         action: version ? 'update' as const : 'install' as const,
         installing: installing === agent.agentType,
         latestVersion: latestVer,
@@ -203,7 +207,13 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     setInstalling(key);
     addLog(`开始安装 ${name}...`, 'info');
     try {
-      await invoke('install_agent', { agentType: key });
+      // 市集下发的 Agent 走完整安装流程（解析 bin、回写运行时、置 ready）；
+      // 其余（如 Git / Python 等非 Agent 工具）仍走通用的 install_agent。
+      if (agent?.pkgState) {
+        await invoke('agent_market_install', { agentType: key });
+      } else {
+        await invoke('install_agent', { agentType: key });
+      }
       addLog(`${name} 安装成功`, 'success');
       await fetchEnv();
       // 安装完成后直接触发版本检测（autoDetected 守卫阻止 useEffect 重复执行）
@@ -328,7 +338,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
               {/* Right: action buttons */}
               <div className="flex items-center gap-1.5 shrink-0">
-                {!dep.installed && (
+                {!dep.installed && dep.installable !== false && (
                   <SettingsButton
                     onClick={() => requestEnvAction(dep.key, 'install')}
                     disabled={!!dep.installing}
@@ -340,6 +350,11 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       <><Download size={11} /> 安装</>
                     )}
                   </SettingsButton>
+                )}
+                {!dep.installed && dep.installable === false && (
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    手工配置
+                  </span>
                 )}
                 {dep.hasUpdate && dep.installed && (
                   <>

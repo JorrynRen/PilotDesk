@@ -385,23 +385,68 @@ export async function getRoomUsage(roomId: string): Promise<RoomUsage> {
   return await _invoke('get_room_usage', { roomId });
 }
 
+/** 生命周期规格（安装/更新/卸载/版本探测命令的派生依据 + 运行时启动规格）。 */
+export interface LifecyclePackage {
+  /** adapter=ACP 适配器；host=被适配的宿主 CLI */
+  role: 'adapter' | 'host';
+  /** npm/pip 包名（可带版本后缀，如 pkg@1.2.3） */
+  package: string;
+  /** 安装后解析出的可执行文件名（官方目录不提供，由 npm view bin 解析） */
+  bin?: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export interface RuntimeSpec {
+  command: string;
+  args?: string[];
+}
+
+export interface LifecycleSpec {
+  kind: 'npm' | 'uvx' | 'binary' | 'shell';
+  packages?: LifecyclePackage[];
+  runtime?: RuntimeSpec;
+  /** shell 专用：显式命令 */
+  installCmd?: string;
+  uninstallCmd?: string;
+  updateCmd?: string;
+  versionCmd?: string;
+  latestVersionCmd?: string;
+}
+
+/** 本机包安装状态（市场「获取」后为 pending_install，安装完成置 ready）。 */
+export interface PkgState {
+  status: 'pending_install' | 'ready' | 'failed' | string;
+  /** 包名 → 可执行文件名 */
+  bins?: Record<string, string>;
+  installedVersion?: string;
+  lastError?: string;
+  updatedAt: number;
+}
+
+/** 配置来源。 */
+export interface DistSource {
+  source: 'acp-registry' | 'preset' | 'manual' | string;
+  registryId?: string;
+  registryVersion?: string;
+  iconUrl?: string;
+  installedAt: number;
+}
+
 /** Agent config from the backend agents table */
 export interface AgentConfig {
   agentType: string;
   displayName: string;
   description: string;
-  cliCommand: string;
-  npmPackage: string | null;
-  pipPackage: string | null;
-  installCmd: string;
-  uninstallCmd: string;
-  updateCmd: string;
-  versionCmd: string;
-  latestVersionCmd: string;
+  /** v11：生命周期规格（装什么、怎么跑） */
+  lifecycle?: LifecycleSpec | null;
+  /** v11：本地安装状态；为空表示手工配置（视为就绪） */
+  pkgState?: PkgState | null;
+  /** v11：配置来源 */
+  distSource?: DistSource | null;
   runCmdTemplate: string;
   outputParser: string;
   outputFilterRegex: string;
-  versionPattern: string;
   supportsSessionContinuity: boolean;
   sessionIdSource: string;
   sessionIdEventType: string;

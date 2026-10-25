@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen, Store as StoreIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Terminal, Repeat, BookOpen, Store as StoreIcon, Play } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { errorMessage } from '../../utils/errorMessage';
 
-import type { AgentConfig } from '../../types';
+import type { AgentConfig, LifecycleSpec, PkgState } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
 import { Select } from '../common/Select';
 import {
@@ -33,12 +34,47 @@ import { CSS } from '@dnd-kit/utilities';
 
 export function AgentManager() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { agents, loading, fetchAgents } = useAgentRegistry();
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<AgentConfig> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addForm, setAddForm] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
+
+  // ── 市场草稿的安装 ──
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [installMsg, setInstallMsg] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const un = listen<{ agent: string; message: string }>('install-progress', (e) => {
+      const { agent, message } = e.payload;
+      setInstallMsg((m) => ({ ...m, [agent]: message }));
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, []);
+
+  /** 执行本机安装（npm/shell），完成后刷新状态；失败原因由后端落到 pkgState.lastError。 */
+  const handleInstall = async (agentType: string) => {
+    setInstalling(agentType);
+    try {
+      await invoke('agent_market_install', { agentType });
+      showToast('安装完成，Agent 已就绪', 'success');
+    } catch (err) {
+      showToast(`安装失败: ${errorMessage(err)}`, 'error');
+    }
+    setInstalling(null);
+    const fresh = await fetchAgents();
+    // 编辑面板若正开着这个 Agent，同步包状态——否则用户会一直看到「待安装」。
+    const updated = fresh.find((a) => a.agentType === agentType);
+    setEditForm((prev) =>
+      prev && prev.agentType === agentType
+        ? { ...prev, pkgState: updated?.pkgState, lifecycle: updated?.lifecycle }
+        : prev
+    );
+  };
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -83,6 +119,19 @@ export function AgentManager() {
     setEditForm({ ...agent });
   };
 
+  // 深链 `/settings?tab=agents&agent=<agentType>`：市场「获取」后直接落到该 Agent 的编辑/安装态。
+  // 用 ref 保证只自动打开一次，避免用户关掉表单后又被 URL 反复拉回来。
+  const deepHandled = useRef<string | null>(null);
+  const deepAgent = searchParams.get('agent');
+  useEffect(() => {
+    if (!deepAgent || loading || deepHandled.current === deepAgent) return;
+    const target = agents.find((a) => a.agentType === deepAgent);
+    if (!target) return;
+    deepHandled.current = deepAgent;
+    setEditingType(target.agentType);
+    setEditForm({ ...target });
+  }, [deepAgent, loading, agents]);
+
   const handleSave = async () => {
     if (!editForm || !editingType) return;
     setSaving(true);
@@ -96,18 +145,9 @@ export function AgentManager() {
           icon: editForm.icon,
           isEnabled: editForm.isEnabled,
           sortOrder: editForm.sortOrder,
-          cliCommand: editForm.cliCommand,
-          npmPackage: editForm.npmPackage,
-          pipPackage: editForm.pipPackage,
-          installCmd: editForm.installCmd,
-          uninstallCmd: editForm.uninstallCmd,
-          updateCmd: editForm.updateCmd,
-          versionCmd: editForm.versionCmd,
-          latestVersionCmd: editForm.latestVersionCmd,
           runCmdTemplate: editForm.runCmdTemplate,
           outputParser: editForm.outputParser,
           outputFilterRegex: editForm.outputFilterRegex,
-          versionPattern: editForm.versionPattern,
           sessionIdSource: editForm.sessionIdSource,
           sessionIdEventType: editForm.sessionIdEventType,
           sessionIdField: editForm.sessionIdField,
@@ -159,8 +199,7 @@ export function AgentManager() {
   };
 
   const handleAdd = async () => {
-    // ACP 不用 CLI 命令（它取 conn 里的 command），故校验按接入方式区分——
-    // 否则纯 ACP 的 Agent 会被这条校验卡住：必须填一个永不使用的 CLI 命令才能创建。
+    // ACP 用 conn 里的 command；兼容模式的命令写在「运行命令模板」里（{message} 占位）。
     const isAcp = (addForm.transport || 'subprocess') === 'acp';
     let acpCommand = '';
     if (isAcp) {
@@ -170,24 +209,23 @@ export function AgentManager() {
         acpCommand = ''; // conn 非法就当作没填，由下面的提示拦住
       }
     }
-    const missing =
-      !addForm.agentType || !addForm.displayName || (isAcp ? !acpCommand : !addForm.cliCommand);
+    const missing = !addForm.agentType || !addForm.displayName || (isAcp && !acpCommand);
     if (missing) {
       showToast(
-        isAcp ? '请填写 Agent 标识、名称和连接命令（command）' : '请填写 Agent 标识、名称和 CLI 命令',
+        isAcp ? '请填写 Agent 标识、名称和连接命令（command）' : '请填写 Agent 标识和名称',
         'error'
       );
       return;
     }
     setSaving(true);
     try {
-      // transport/conn 不属于 CreateAgentPayload，先摘掉（后端只认 CLI 那批字段）
+      // transport/conn 不属于 CreateAgentPayload，先摘掉（后端只认接入方式之外的字段）
       const addPayload: Partial<AgentConfig> = { ...addForm };
       delete addPayload.transport;
       delete addPayload.conn;
-      // cliCommand 一律带默认空串：ACP 接入方式不填 CLI 命令（字段被隐藏），
-      // 缺省时后端会判为「缺少字段」而报错，故这里显式补空串。
-      await invoke('add_agent', { payload: { ...addPayload, cliCommand: addForm.cliCommand || '', icon: addForm.icon || '', version: addForm.version || '' } });
+      await invoke('add_agent', {
+        payload: { ...addPayload, icon: addForm.icon || '', version: addForm.version || '' },
+      });
       // 新建成功后再落库接入方式（添加态没有既存行，只能建完再设）
       if (addForm.agentType) {
         await invoke('set_agent_transport', {
@@ -378,6 +416,9 @@ export function AgentManager() {
                       handleToggleEnabled={handleToggleEnabled}
                       handleEdit={handleEdit}
                       requestDelete={requestDelete}
+                      onInstall={handleInstall}
+                      installing={installing}
+                      installMsg={installMsg[agent.agentType]}
                     />
                   </React.Fragment>
                 );
@@ -395,13 +436,16 @@ export function AgentManager() {
 //  Sub-components
 // ──────────────────────────────────────────────
 
-function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
+function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall, installing, installMsg }: {
   form: Partial<AgentConfig>;
   onChange: (f: Partial<AgentConfig>) => void;
   onSubmit: () => void;
   onCancel: () => void;
   saving: boolean;
   mode: 'add' | 'edit';
+  onInstall?: (agentType: string) => void;
+  installing?: string | null;
+  installMsg?: string;
 }) {
   // ── 接入方式（设计文档 §4.2）──
   // state 就放在 `form` 里（TS 类型已加可选的 transport/conn），由**父组件**在创建/更新成功后
@@ -495,31 +539,23 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
     onChange({ ...form, conn: JSON.stringify(o) });
   };
 
-  // ACP 预置：命令 + 默认参数。选中即预填，**仍可编辑覆盖**（预填 ≠ 锁死）。
-  // 依据：hermes 的 `hermes acp` 已真机实测；gemini 的 `--acp` 见官方文档；
-  //      claude/codex 均以上游官方包、官方推荐的 npx 形态启动（本机 ACP initialize 实测可通）：
-  //      @agentclientprotocol/claude-agent-acp（旧 @zed-industries/claude-code-acp 已弃用改名）、
-  //      @agentclientprotocol/codex-acp。参数不猜，改动请附来源。
-  const ACP_PRESETS: Array<{ label: string; command: string; args: string }> = [
-    { label: 'Hermes', command: 'hermes', args: 'acp' },
-    { label: 'Gemini CLI', command: 'gemini', args: '--acp' },
-    { label: 'Claude Code', command: 'npx', args: '-y @agentclientprotocol/claude-agent-acp' },
-    { label: 'Codex', command: 'npx', args: '-y @agentclientprotocol/codex-acp' },
-  ];
-  const connSetPreset = (command: string, args: string) => {
-    const o = parseConn();
-    o.command = command;
-    o.args = args.split(/\s+/).filter(Boolean);
-    onChange({ ...form, conn: JSON.stringify(o) });
-  };
-  // 用 command|args 共同匹配（两个预置可能共用命令，如 npx）；不命中即视为「自定义」
-  const curPreset = ACP_PRESETS.find(
-    (p) => p.command === connGet('command') && p.args === connArgsText()
-  );
-  const curPresetKey = curPreset ? curPreset.label : '__custom__';
+  // ACP 的命令/参数由市场下发（官方目录条目安装后会自动填入解析结果），
+  // 集成配置页只保留「自定义填写」入口——预置不再硬编码在前端。
 
   return (
     <div className="w-full space-y-4">
+      {/* 市场获取的实例：本机安装状态与后续动作（预置/官方目录的安装规格由市集下发，
+          这里不再让用户手填安装命令）。 */}
+      {mode === 'edit' && form.lifecycle && (
+        <InstallStatusSection
+          agentType={form.agentType!}
+          pkgState={form.pkgState}
+          lifecycle={form.lifecycle}
+          onInstall={onInstall}
+          installing={!!installing && installing === form.agentType}
+          message={installMsg}
+        />
+      )}
       {/* 接入方式：**添加与编辑都显示，且置于最前**——先确认方式，再填该方式需要的字段。
           编辑态必须显示：ACP 的关键字段（command / args）只存在于本区块，
           若只在添加态渲染，编辑既有 ACP Agent 时这些字段就无处可看、无处可改。
@@ -543,28 +579,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           />
           {(form.transport || 'subprocess') === 'acp' && (
             <div className="mt-2 space-y-2">
-              <SelectField
-                label="接入方式预置"
-                value={curPresetKey}
-                onChange={(v) => {
-                  if (v === '__custom__') {
-                    connSet('command', ''); // 清空让用户自己填
-                    return;
-                  }
-                  const p = ACP_PRESETS.find((x) => x.label === v);
-                  if (p) connSetPreset(p.command, p.args);
-                }}
-                options={[
-                  ...ACP_PRESETS.map((p) => ({
-                    value: p.label,
-                    label: `${p.label}（${p.command}${p.args ? ' ' + p.args : ''}）`,
-                  })),
-                  { value: '__custom__', label: '自定义…' },
-                ]}
-              />
               {/* 工作目录不在此配置：运行时 cwd 取「会话/项目工作目录」（为空回退全局工作区），
                   见 lib.rs resolved_cwd。此处若再放一个 cwd 字段是无消费方的死配置。 */}
-              {/* 命令输入框**始终显示**（选预置也显示）：便于查看/微调解析后的真实命令 */}
+              {/* 预置与官方目录条目统一由「资源市集 › CLI Agent 配置」下发，本页只保留自定义填写。 */}
               <FormField
                 label="命令（command，可直接修改）"
                 value={connGet('command')}
@@ -572,7 +589,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
                 placeholder="如 hermes / npx / claude-code-acp"
               />
               <FormField
-                label="参数（args，空格分隔；切换上方预置会自动预填，可直接改）"
+                label="参数（args，空格分隔）"
                 value={connArgsText()}
                 onChange={connSetArgs}
                 placeholder="如 acp"
@@ -614,11 +631,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="如 Claude Code" />
         </div>
         <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="如 Anthropic 官方 CLI Agent，支持多文件编辑" />
-        {/* CLI 命令只对「兼容模式」有意义；ACP 的命令在上方「接入方式」区的 command 里填，
-            两处都叫"命令"会让用户不知道填哪个——故 ACP 时隐藏此项。 */}
-        {(form.transport || 'subprocess') === 'subprocess' ? (
-          <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 claude" />
-        ) : (
+        {/* 命令不再作为独立字段：兼容模式由「运行命令模板」决定实际执行，
+            ACP 由「接入方式」区的 command + args 决定；安装/版本规格统一由市集下发。 */}
+        {(form.transport || 'subprocess') === 'acp' && (
           <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
             ACP 接入方式的命令请在「接入方式」区填写（command + args），此处无需 CLI 命令。
           </div>
@@ -645,17 +660,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           ACP 自描述（连接靠 command/args 建立），包名/输出解析/session id/技能目录都不适用。 */}
       {(form.transport || 'subprocess') === 'subprocess' && (
         <>
-      {/* 包参数配置 */}
-      <div>
-        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
-          <Package size={11} style={{ color: 'var(--accent)' }} />
-          <span>包参数配置</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <FormField label="npm 包名" value={form.npmPackage || ''} onChange={(v) => onChange({ ...form, npmPackage: v || null })} placeholder="如 @anthropic-ai/claude-code" />
-          <FormField label="pip 包名" value={form.pipPackage || ''} onChange={(v) => onChange({ ...form, pipPackage: v || null })} placeholder="如 hermes-agent" />
-        </div>
-      </div>
+      {/* 包名与安装/版本命令不再手填：全部由市集下发的 lifecycle 规格决定
+          （见顶部「本机安装」区，安装按钮就在那里）。 */}
 
       {/* 会话参数配置 */}
       <div>
@@ -696,26 +702,6 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         </div>
       </div>
 
-      {/* 生命周期命令配置 */}
-      <div>
-        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
-          <Activity size={11} style={{ color: 'var(--accent)' }} />
-          <span>生命周期命令配置</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <FormField label="安装命令" value={form.installCmd || ''} onChange={(v) => onChange({ ...form, installCmd: v })} placeholder="如 npm install -g @anthropic-ai/claude-code" />
-          <FormField label="卸载命令" value={form.uninstallCmd || ''} onChange={(v) => onChange({ ...form, uninstallCmd: v })} placeholder="如 npm uninstall -g @anthropic-ai/claude-code" />
-        </div>
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="更新命令" value={form.updateCmd || ''} onChange={(v) => onChange({ ...form, updateCmd: v })} placeholder="如 npm update -g @anthropic-ai/claude-code" />
-          <FormField label="版本检测命令" value={form.versionCmd || ''} onChange={(v) => onChange({ ...form, versionCmd: v })} placeholder="如 claude --version" />
-        </div>
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="最新版本查询命令" value={form.latestVersionCmd || ''} onChange={(v) => onChange({ ...form, latestVersionCmd: v })} placeholder="如 npm view @anthropic-ai/claude-code version" />
-          <FormField label="版本号提取正则" value={form.versionPattern || ''} onChange={(v) => onChange({ ...form, versionPattern: v })} placeholder="如 (\\d+\\.\\d+\\.\\d+)" />
-        </div>
-      </div>
-
       {/* 技能引用配置 */}
       <div>
         <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
@@ -740,6 +726,88 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           {saving ? <><Loader2 size={11} className="animate-spin" /> {mode === 'add' ? '添加中' : '保存中'}</> : (mode === 'add' ? '确认添加' : '保存')}
         </SettingsButton>
       </div>
+    </div>
+  );
+}
+
+/** 「本机安装」区：呈现包安装状态并提供安装/重试动作。
+ *  安装规格（包名、安装/版本命令、运行参数）由市集下发，这里只呈现结果、不提供编辑。 */
+function InstallStatusSection({ agentType, pkgState, lifecycle, onInstall, installing, message }: {
+  agentType: string;
+  pkgState?: PkgState | null;
+  lifecycle: LifecycleSpec;
+  onInstall?: (agentType: string) => void;
+  installing?: boolean;
+  message?: string;
+}) {
+  // P1 仅支持 npm / shell；uvx / binary 由市集显示「暂不支持」，这里兜底说明。
+  const supported = lifecycle.kind === 'npm' || lifecycle.kind === 'shell';
+  const status = pkgState?.status;
+  const ready = status === 'ready';
+  const failed = status === 'failed';
+  const packages = (lifecycle.packages ?? []).map((p) => p.package).join(' + ');
+  const runtime = lifecycle.runtime
+    ? [lifecycle.runtime.command, ...(lifecycle.runtime.args ?? [])].join(' ')
+    : '';
+  const tone = ready
+    ? 'var(--success, #16a34a)'
+    : failed
+      ? 'var(--danger, #dc2626)'
+      : 'var(--warning, #d97706)';
+  const statusText = ready
+    ? `已就绪${pkgState?.installedVersion ? ` v${pkgState.installedVersion}` : ''}`
+    : failed
+      ? '安装失败'
+      : status === 'pending_install'
+        ? '待安装'
+        : '未安装';
+
+  return (
+    <div
+      className="p-2.5 rounded-lg"
+      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-secondary)' }}>本机安装</span>
+        <span className="text-[10px]" style={{ color: tone }}>{statusText}</span>
+        <span className="flex-1" />
+        {!ready && (
+          <SettingsButton
+            onClick={() => onInstall?.(agentType)}
+            variant="primary"
+            disabled={!supported || installing}
+            icon={installing ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+            title={supported ? undefined : '当前版本暂不支持该安装方式'}
+          >
+            {installing ? '安装中' : failed ? '重试' : '安装'}
+          </SettingsButton>
+        )}
+      </div>
+      {!supported && (
+        <div className="text-[10px] mt-1" style={{ color: 'var(--warning, #d97706)' }}>
+          该条目为 {lifecycle.kind} 安装方式，当前版本暂不支持，后续版本提供。
+        </div>
+      )}
+      {packages && (
+        <div className="text-[10px] mt-1 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
+          {lifecycle.kind} · {packages}
+        </div>
+      )}
+      {runtime && (
+        <div className="text-[10px] mt-0.5 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
+          运行：{runtime}
+        </div>
+      )}
+      {pkgState?.lastError && (
+        <div className="text-[10px] mt-1 break-all" style={{ color: 'var(--danger, #dc2626)' }}>
+          {pkgState.lastError}
+        </div>
+      )}
+      {installing && message && (
+        <div className="text-[10px] mt-1 break-all" style={{ color: 'var(--text-secondary)' }}>
+          {message}
+        </div>
+      )}
     </div>
   );
 }
@@ -789,10 +857,29 @@ function SelectField({ label, value, onChange, options }: {
   );
 }
 
+/** 卡片副行的命令：优先取市集下发的运行规格，手工配置回退到 Agent 标识。 */
+function runtimeLabel(agent: AgentConfig): string {
+  const rt = agent.lifecycle?.runtime;
+  if (rt?.command) return [rt.command, ...(rt.args ?? [])].join(' ');
+  return agent.agentType;
+}
+
+/** 本地安装状态：`pkgState` 为空表示手工配置（视为就绪，不显示状态）。 */
+function agentStatus(agent: AgentConfig): { text: string; tone: 'ok' | 'warn' | 'error' } | null {
+  const s = agent.pkgState;
+  if (!s) return null;
+  if (s.status === 'ready') {
+    return { text: `已就绪${s.installedVersion ? ` v${s.installedVersion}` : ''}`, tone: 'ok' };
+  }
+  if (s.status === 'failed') return { text: '安装失败', tone: 'error' };
+  if (s.status === 'pending_install') return { text: '待安装', tone: 'warn' };
+  return { text: s.status, tone: 'warn' };
+}
+
 // ──────────────────────────────────────────────
 //  SortableAgentItem — 可拖拽排序的 Agent 卡片
 // ──────────────────────────────────────────────
-function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete }: {
+function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete, onInstall, installing, installMsg }: {
   agent: AgentConfig;
   isEditing: boolean;
   editForm: Partial<AgentConfig> | null;
@@ -803,6 +890,9 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
   handleToggleEnabled: (agent: AgentConfig) => void;
   handleEdit: (agent: AgentConfig) => void;
   requestDelete: (agentType: string) => void;
+  onInstall: (agentType: string) => void;
+  installing: string | null;
+  installMsg?: string;
 }) {
   const {
     attributes,
@@ -821,6 +911,9 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
     zIndex: isDragging ? 10 : 'auto',
   };
 
+  const status = agentStatus(agent);
+  const busy = installing === agent.agentType;
+
   return (
     <div ref={setNodeRef} style={style}>
       {isEditing ? (
@@ -832,6 +925,9 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
             onCancel={() => { setEditingType(null); setEditForm(null as unknown as Partial<AgentConfig>); }}
             saving={saving}
             mode="edit"
+            onInstall={onInstall}
+            installing={installing}
+            installMsg={installMsg}
           />
         </SettingsCard>
       ) : (
@@ -875,14 +971,42 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
                     </span>
                   )}
                 </div>
-                <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                  {agent.cliCommand} · {agent.description}
+                <div className="text-[10px] flex items-center gap-1.5 min-w-0" style={{ color: 'var(--text-secondary)' }}>
+                  <span className="font-mono shrink-0">{runtimeLabel(agent)}</span>
+                  {status && (
+                    <span
+                      className="shrink-0"
+                      style={{
+                        color:
+                          status.tone === 'ok'
+                            ? 'var(--success, #16a34a)'
+                            : status.tone === 'error'
+                              ? 'var(--danger, #dc2626)'
+                              : 'var(--warning, #d97706)',
+                      }}
+                    >
+                      {status.text}
+                    </span>
+                  )}
+                  {agent.description && <span className="truncate">· {agent.description}</span>}
                 </div>
               </div>
             </div>
 
             {/* Actions */}
             <div className="flex items-center gap-1 shrink-0">
+              {/* 市场草稿：未就绪时把「安装」放在最前面，避免用户先进编辑页再找按钮 */}
+              {status && status.tone !== 'ok' && (
+                <SettingsButton
+                  onClick={() => onInstall(agent.agentType)}
+                  variant="primary"
+                  disabled={busy}
+                  icon={busy ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+                  title="在本机安装该 Agent 的依赖包"
+                >
+                  {busy ? '安装中' : status.tone === 'error' ? '重试' : '安装'}
+                </SettingsButton>
+              )}
               <SettingsButton
                 onClick={() => handleToggleEnabled(agent)}
                 variant={agent.isEnabled ? 'primary' : 'secondary'}

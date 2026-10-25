@@ -1,238 +1,294 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Download } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Download, RefreshCw, Search, CheckCircle2, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
-import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { errorMessage } from '../../utils/errorMessage';
 
-import type { AgentConfig } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
+import { AgentIcon } from '../common/AgentIcon';
 
 /**
- * AgentConfigMarket — CLI Agent 配置市场（在线拉取）。
+ * AgentConfigMarket — Agent 市集。
  *
- * 原先是「设置 › Agent」里内嵌的一段区块（AgentManager 的下半部分）。
- * 资源市集把各「获取」入口统一收拢后，这里独立成一个组件，供
- * 「资源市集 › CLI Agent 配置」tab 使用；设置页只保留本地 Registry 的管理。
- *
- * 行为与抽出前完全一致：后端 `fetch_agents_config` 负责服务器源/降级/重试，
- * 前端只做「本地已注册 vs 市场版本」的比对与安装/覆盖。
+ * 两类配置同架陈列：`ACP`（官方目录 + 官方缺失的预置）与 `CLI`（兼容模式预置）。
+ * 「获取」只落草稿（后端记 pending_install 并下载图标），随即跳转到
+ * 「设置 › 集成配置」的该 Agent 上继续完成安装 —— 安装本身是本地动作，不在这里静默做。
  */
-export function AgentConfigMarket() {
-  const { agents, fetchAgents } = useAgentRegistry();
-  const [marketAgents, setMarketAgents] = useState<AgentConfig[]>([]);
-  const [marketLoading, setMarketLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
 
-  /** 从 Rust 后端获取 Agent 市场配置（服务器源/降级/重试由 market.rs 统一管理） */
-  const fetchMarket = useCallback(async () => {
-    setMarketLoading(true);
+type MarketCategory = 'acp' | 'cli';
+
+interface MarketPackageView {
+  role: string;
+  package: string;
+  args?: string[];
+}
+
+interface MarketAgent {
+  agentType: string;
+  displayName: string;
+  description: string;
+  category: MarketCategory | string;
+  transport: string;
+  kind: string;
+  version: string;
+  icon?: string | null;
+  source: 'acp-registry' | 'preset' | string;
+  repository?: string | null;
+  website?: string | null;
+  license?: string | null;
+  authors: string[];
+  packages: MarketPackageView[];
+  supported: boolean;
+  unsupportedReason?: string | null;
+  installed: boolean;
+  installedVersion?: string | null;
+  pkgStatus?: string | null;
+  updateAvailable: boolean;
+}
+
+const CATEGORY_TABS: { key: MarketCategory; label: string; hint: string }[] = [
+  { key: 'acp', label: 'ACP 配置', hint: 'Agent Client Protocol 适配器与适配入口' },
+  { key: 'cli', label: 'CLI 配置', hint: '兼容模式（子进程命令行）配置' },
+];
+
+/** 包状态文案：市场草稿的安装进度对用户可见。 */
+function statusLabel(a: MarketAgent): { text: string; tone: 'ok' | 'warn' | 'error' } | null {
+  if (!a.installed) return null;
+  if (a.pkgStatus === 'ready') return { text: '已就绪', tone: 'ok' };
+  if (a.pkgStatus === 'failed') return { text: '安装失败', tone: 'error' };
+  if (a.pkgStatus === 'pending_install') return { text: '待安装', tone: 'warn' };
+  return { text: '已配置', tone: 'ok' };
+}
+
+export function AgentConfigMarket() {
+  const navigate = useNavigate();
+  const [agents, setAgents] = useState<MarketAgent[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [busyType, setBusyType] = useState<string | null>(null);
+  const [category, setCategory] = useState<MarketCategory>('acp');
+  const [keyword, setKeyword] = useState('');
+
+  const fetchMarket = useCallback(async (force = false) => {
+    setLoading(true);
     try {
-      const data = await invoke<{ agents?: AgentConfig[] }>('fetch_agents_config');
-      setMarketAgents(data.agents || []);
+      const list = await invoke<MarketAgent[]>('agent_market_list', { force });
+      setAgents(list);
     } catch (err) {
-      showToast(`无法连接 Agent 市场，请检查网络连接 (${errorMessage(err)})`, 'warning');
+      showToast(`无法加载 Agent 市集 (${errorMessage(err)})`, 'warning');
     }
-    setMarketLoading(false);
+    setLoading(false);
   }, []);
 
-  /**
-   * 进入市场即自动拉取一次。
-   * 原先是「点刷新才显示」，但市场 tab 的预期就是打开即见货架 —— 手动刷新只该用于重试/更新。
-   */
   useEffect(() => {
-    // 不在 effect 体内同步 setState（fetchMarket 开头就 setMarketLoading(true)，
-    // 会被 `react-hooks/set-state-in-effect` 判为级联渲染）：推到微任务，同一个任务、早于绘制。
-    void Promise.resolve().then(() => fetchMarket());
+    // 不在 effect 体内同步 setState：推到微任务，避免级联渲染告警
+    void Promise.resolve().then(() => fetchMarket(false));
   }, [fetchMarket]);
 
-  /** 比较两个版本号（支持 v1, v1.1, v1.1.1 格式），返回 true 表示 a > b */
-  const isNewerVersion = (a: string, b: string): boolean => {
-    const normalize = (v: string) => {
-      const parts = v.replace(/^v/i, '').split('.').map(Number);
-      // 补零对齐：v1 → [1,0,0], v1.1 → [1,1,0]
-      while (parts.length < 3) parts.push(0);
-      return parts;
-    };
-    const pa = normalize(a), pb = normalize(b);
-    for (let i = 0; i < 3; i++) {
-      if (pa[i] > pb[i]) return true;
-      if (pa[i] < pb[i]) return false;
+  const counts = useMemo(() => {
+    const acp = agents.filter((a) => a.category === 'acp').length;
+    const cli = agents.filter((a) => a.category === 'cli').length;
+    return { acp, cli };
+  }, [agents]);
+
+  const visible = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return agents
+      .filter((a) => a.category === category)
+      .filter(
+        (a) =>
+          !kw ||
+          a.displayName.toLowerCase().includes(kw) ||
+          a.agentType.toLowerCase().includes(kw) ||
+          a.description.toLowerCase().includes(kw) ||
+          a.packages.some((p) => p.package.toLowerCase().includes(kw))
+      );
+  }, [agents, category, keyword]);
+
+  /** 「获取」：落草稿后立刻跳去集成配置完成安装（ACP 需要装适配器，不能在这里静默完成）。 */
+  const handleAcquire = async (agent: MarketAgent) => {
+    setBusyType(agent.agentType);
+    try {
+      await invoke('agent_market_acquire', { agentType: agent.agentType });
+      showToast(`已获取 ${agent.displayName}，请继续完成安装`, 'success');
+      navigate(`/settings?tab=agents&agent=${encodeURIComponent(agent.agentType)}`);
+    } catch (err) {
+      showToast(`获取失败: ${errorMessage(err)}`, 'error');
     }
-    return false; // equal
+    setBusyType(null);
   };
 
-  /** 从市场更新（强制覆盖本地，不检查版本） */
-  const handleRestoreFromMarket = async (agent: AgentConfig) => {
-    setSaving(true);
-    try {
-      await invoke('update_agent', {
-        payload: {
-          agentType: agent.agentType,
-          displayName: agent.displayName,
-          description: agent.description,
-          cliCommand: agent.cliCommand,
-          npmPackage: agent.npmPackage,
-          pipPackage: agent.pipPackage,
-          installCmd: agent.installCmd,
-          uninstallCmd: agent.uninstallCmd,
-          updateCmd: agent.updateCmd,
-          versionCmd: agent.versionCmd,
-          latestVersionCmd: agent.latestVersionCmd,
-          runCmdTemplate: agent.runCmdTemplate,
-          outputParser: agent.outputParser,
-          outputFilterRegex: agent.outputFilterRegex,
-          versionPattern: agent.versionPattern,
-          sessionIdSource: agent.sessionIdSource,
-          sessionIdEventType: agent.sessionIdEventType,
-          sessionIdField: agent.sessionIdField,
-          resumeArgTemplate: agent.resumeArgTemplate,
-          skillsDir: agent.skillsDir,
-          skillEntryFile: agent.skillEntryFile,
-          skillDisplayMode: agent.skillDisplayMode,
-          color: agent.color,
-          icon: agent.icon,
-          sortOrder: agent.sortOrder,
-          isEnabled: agent.isEnabled,
-          version: agent.version,
-        },
-      });
-      showToast(`已恢复 ${agent.displayName} 初始配置 (v${agent.version})`, 'success');
-      fetchAgents();
-    } catch (err) {
-      showToast(`恢复失败: ${errorMessage(err)}`, 'error');
-    }
-    setSaving(false);
+  const openInConfig = (agentType: string) => {
+    navigate(`/settings?tab=agents&agent=${encodeURIComponent(agentType)}`);
   };
 
-  const handleInstallFromMarket = async (agent: AgentConfig) => {
-    setSaving(true);
-    try {
-      const local = agents.find(a => a.agentType === agent.agentType);
-      if (local) {
-        // 已存在 → 检查版本
-        if (!isNewerVersion(agent.version, local.version)) {
-          showToast(`${agent.displayName} 已是最新版本 (${local.version})`, 'info');
-          setSaving(false);
-          return;
-        }
-        // 更新
-        await invoke('update_agent', {
-          payload: {
-            agentType: agent.agentType,
-            displayName: agent.displayName,
-            description: agent.description,
-            cliCommand: agent.cliCommand,
-            npmPackage: agent.npmPackage,
-            pipPackage: agent.pipPackage,
-            installCmd: agent.installCmd,
-            uninstallCmd: agent.uninstallCmd,
-            updateCmd: agent.updateCmd,
-            versionCmd: agent.versionCmd,
-            latestVersionCmd: agent.latestVersionCmd,
-            runCmdTemplate: agent.runCmdTemplate,
-            outputParser: agent.outputParser,
-            outputFilterRegex: agent.outputFilterRegex,
-            versionPattern: agent.versionPattern,
-            sessionIdSource: agent.sessionIdSource,
-            sessionIdEventType: agent.sessionIdEventType,
-            sessionIdField: agent.sessionIdField,
-            resumeArgTemplate: agent.resumeArgTemplate,
-            skillsDir: agent.skillsDir,
-            skillEntryFile: agent.skillEntryFile,
-            skillDisplayMode: agent.skillDisplayMode,
-            color: agent.color,
-            icon: agent.icon,
-            sortOrder: agent.sortOrder,
-            isEnabled: agent.isEnabled,
-            version: agent.version,
-          },
-        });
-        showToast(`已更新 ${agent.displayName} (${local.version} → ${agent.version})`, 'success');
-      } else {
-        // 新安装
-        await invoke('add_agent', { payload: { ...agent, version: agent.version } });
-        showToast(`已安装 ${agent.displayName} (${agent.version})`, 'success');
-      }
-      fetchAgents();
-    } catch (err) {
-      showToast(`操作失败: ${errorMessage(err)}`, 'error');
+  const renderAction = (agent: MarketAgent) => {
+    if (!agent.supported) {
+      return (
+        <SettingsButton variant="secondary" disabled title={agent.unsupportedReason || '暂不支持'}>
+          暂不支持
+        </SettingsButton>
+      );
     }
-    setSaving(false);
+    const busy = busyType === agent.agentType;
+    if (!agent.installed) {
+      return (
+        <SettingsButton
+          variant="primary"
+          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+          disabled={busy}
+          onClick={() => handleAcquire(agent)}
+        >
+          获取
+        </SettingsButton>
+      );
+    }
+    if (agent.pkgStatus !== 'ready') {
+      return (
+        <SettingsButton variant="primary" icon={<ArrowRight size={11} />} onClick={() => openInConfig(agent.agentType)}>
+          去安装
+        </SettingsButton>
+      );
+    }
+    return (
+      <SettingsButton variant="secondary" onClick={() => openInConfig(agent.agentType)}>
+        管理
+      </SettingsButton>
+    );
   };
 
   return (
     <div className="h-full overflow-y-auto p-4 pd-scroll-stable">
       <SettingsSection
-        title="Agent 配置市场"
+        title="Agent 市集"
         actions={
           <SettingsButton
             variant="secondary"
-            icon={<Download size={11} />}
-            onClick={() => { fetchMarket(); }}
-            disabled={marketLoading}
+            icon={<RefreshCw size={11} className={loading ? 'animate-spin' : undefined} />}
+            onClick={() => fetchMarket(true)}
+            disabled={loading}
+            title="刷新 ACP 官方目录（本地缓存 24 小时，过期自动后台更新）"
           >
-            {marketLoading ? '加载中...' : '加载市场'}
+            刷新目录
           </SettingsButton>
         }
       >
+        {/* 分类 + 搜索 */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="flex items-center gap-1">
+            {CATEGORY_TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setCategory(t.key)}
+                className={'pd-tab' + (category === t.key ? ' pd-tab-active' : '')}
+                title={t.hint}
+              >
+                {t.label}
+                <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  {counts[t.key]}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="relative flex-1 min-w-[160px]">
+            <Search
+              size={11}
+              className="absolute left-2 top-1/2 -translate-y-1/2"
+              style={{ color: 'var(--text-tertiary)' }}
+            />
+            <input
+              className="pd-input w-full pl-6"
+              placeholder="搜索名称 / 标识 / 包名"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
+          {category === 'acp'
+            ? '获取后会在本机安装对应适配器（npm 全局包）；安装完成前该 Agent 不可用于会话。'
+            : '兼容模式配置通过命令行子进程调用，获取后同样需要在本机完成安装。'}
+        </div>
+
         <div className="space-y-2">
-          {marketAgents.length === 0 ? (
+          {visible.length === 0 ? (
             <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>
-              {marketLoading ? '正在加载市场配置...' : '市场暂无可用的 Agent 配置，可点「加载市场」重试'}
+              {loading ? '正在加载 Agent 市集...' : '没有匹配的条目'}
             </div>
           ) : (
-            marketAgents.map((agent) => {
-              const local = agents.find(a => a.agentType === agent.agentType);
-              const isInstalled = !!local;
-              const hasUpdate = isInstalled && isNewerVersion(agent.version, local.version);
+            visible.map((agent) => {
+              const status = statusLabel(agent);
               return (
                 <SettingsCard key={`market-${agent.agentType}`}>
-                  <div className="flex items-center gap-3 w-full">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                            {agent.displayName}
+                  <div className="flex items-start gap-3 w-full">
+                    <div
+                      className="w-7 h-7 rounded-md shrink-0 flex items-center justify-center overflow-hidden"
+                      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                    >
+                      {/* 图标三种形态（远程 URL / 本地 file: / 文本）统一由 AgentIcon 处理 */}
+                      <AgentIcon
+                        icon={agent.icon || undefined}
+                        size={20}
+                        fallback={
+                          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                            {agent.displayName.slice(0, 1).toUpperCase()}
                           </span>
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            v{agent.version}
+                        }
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                          {agent.displayName}
+                        </span>
+                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          v{agent.version || '—'}
+                        </span>
+                        <span
+                          className="text-[10px] px-1 rounded"
+                          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-tertiary)' }}
+                          title={agent.source === 'acp-registry' ? '来自 ACP 官方目录' : 'PilotDesk 内置预置'}
+                        >
+                          {agent.source === 'acp-registry' ? 'ACP 官方' : '预置'}
+                        </span>
+                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          {agent.kind}
+                        </span>
+                        {status && (
+                          <span
+                            className="text-[10px] inline-flex items-center gap-0.5"
+                            style={{
+                              color:
+                                status.tone === 'ok'
+                                  ? 'var(--success, #16a34a)'
+                                  : status.tone === 'error'
+                                    ? 'var(--danger, #dc2626)'
+                                    : 'var(--warning, #d97706)',
+                            }}
+                          >
+                            {status.tone === 'ok' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                            {status.text}
                           </span>
-                        </div>
-                        <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                        )}
+                        {agent.updateAvailable && (
+                          <span className="text-[10px]" style={{ color: 'var(--accent)' }}>
+                            可更新
+                          </span>
+                        )}
+                      </div>
+                      {agent.description && (
+                        <div className="text-[10px] mt-0.5 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
                           {agent.description}
                         </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {hasUpdate ? (
-                        <SettingsButton
-                          variant="primary"
-                          onClick={() => handleInstallFromMarket(agent)}
-                          disabled={saving}
-                        >
-                          更新 (v{local.version} → v{agent.version})
-                        </SettingsButton>
-                      ) : isInstalled ? (
-                        <SettingsButton
-                          variant="secondary"
-                          onClick={() => handleRestoreFromMarket(agent)}
-                          disabled={saving}
-                          title="用市场配置覆盖本地修改，恢复出厂配置"
-                        >
-                          从市场更新
-                        </SettingsButton>
-                      ) : (
-                        <SettingsButton
-                          variant="primary"
-                          onClick={() => handleInstallFromMarket(agent)}
-                          disabled={saving}
-                        >
-                          拉取并注册
-                        </SettingsButton>
+                      )}
+                      {agent.packages.length > 0 && (
+                        <div className="text-[10px] mt-0.5 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
+                          {agent.kind === 'npm' ? 'npm' : agent.kind} · {agent.packages.map((p) => p.package).join(' + ')}
+                        </div>
                       )}
                     </div>
+                    <div className="shrink-0">{renderAction(agent)}</div>
                   </div>
                 </SettingsCard>
               );
