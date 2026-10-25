@@ -679,6 +679,55 @@ async fn run_install(
     Ok(())
 }
 
+/// 历史手工创建的 Agent 没有生命周期规格：按**同名预置**接管安装/卸载命令。
+///
+/// 只写回「安装规格」（lifecycle / pkg_state / dist_source），不动用户配的运行命令、
+/// 会话参数与展示信息 —— 把这些配置接管过来，市集与环境检测页才能对它做安装/更新/卸载。
+/// 返回接管后的规格；市集里没有同名可安装预置时返回 `None`。
+pub(crate) async fn adopt_preset_spec(
+    state: &tauri::State<'_, crate::DbState>,
+    agent_type: &str,
+    transport: &str,
+) -> Result<Option<LifecycleSpec>, AppError> {
+    // 按本地接入方式取对应市场的预置：同名 agentType 可能同时存在 ACP 与 CLI 两条，
+    // 取错就会把 ACP 适配器规格写进本地 CLI 配置（反之亦然）。
+    let category = if transport == "acp" { "acp" } else { "cli" };
+    let entries = load_entries(Some(category)).await?;
+    let Some(entry) = entries
+        .into_iter()
+        .find(|e| e.agent_type == agent_type && e.source == SOURCE_PRESET)
+    else {
+        return Ok(None);
+    };
+    // 老版预置没有安装规格，无从接管
+    if entry.lifecycle.packages.is_empty() && entry.lifecycle.install_cmd.is_none() {
+        return Ok(None);
+    }
+    entry.lifecycle.supported().map_err(AppError::Config)?;
+
+    let now_ts = crate::utils::now();
+    {
+        let conn = state.get_conn()?;
+        agents::update_agent_inner(
+            &conn,
+            UpdateAgentPayload {
+                agent_type: agent_type.to_string(),
+                lifecycle: Some(entry.lifecycle.clone()),
+                pkg_state: Some(PkgState::pending(now_ts)),
+                dist_source: Some(DistSource {
+                    source: entry.source.clone(),
+                    registry_id: None,
+                    registry_version: None,
+                    icon_url: entry.icon_url.clone(),
+                    installed_at: now_ts,
+                }),
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(Some(entry.lifecycle))
+}
+
 /// 「安装」：执行安装命令，随后解析 bin / 已安装版本并把包状态置为 `ready`。
 #[tauri::command]
 pub async fn agent_market_install(
@@ -687,15 +736,24 @@ pub async fn agent_market_install(
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
 ) -> Result<AgentConfig, AppError> {
-    let config = {
+    let (config, transport) = {
         let conn = state.get_conn()?;
-        agents::get_agent_inner(&conn, &agent_type)?
-            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?
+        let config = agents::get_agent_inner(&conn, &agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
+        // 接管要按本地接入方式取同名预置（同名可能同时存在 ACP 与 CLI 两条）
+        let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
+        (config, transport)
     };
-    let spec = config
-        .lifecycle
-        .clone()
-        .ok_or_else(|| AppError::Config(format!("『{}』没有生命周期规格", agent_type)))?;
+    // 历史手工配置没有规格时按同名预置接管（先写回本地再安装）
+    let spec = match config.lifecycle.clone() {
+        Some(spec) => spec,
+        None => adopt_preset_spec(&state, &agent_type, &transport).await?.ok_or_else(|| {
+            AppError::Config(format!(
+                "『{}』没有生命周期规格，市集中也没有同名可安装预置",
+                agent_type
+            ))
+        })?,
+    };
     spec.supported().map_err(AppError::Config)?;
 
     run_install(
@@ -723,21 +781,32 @@ pub async fn agent_market_update(
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
 ) -> Result<AgentConfig, AppError> {
-    let config = {
+    let (config, transport) = {
         let conn = state.get_conn()?;
-        agents::get_agent_inner(&conn, &agent_type)?
-            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?
+        let config = agents::get_agent_inner(&conn, &agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
+        let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
+        (config, transport)
     };
     let entries = load_entries(None).await?;
-    let entry = entries
+    // 同名可能同时存在 ACP 与 CLI 两条：优先取与本地接入方式一致的条目，
+    // 否则本地 CLI 配置可能被 ACP 适配器规格覆盖。
+    let mut candidates: Vec<MarketEntry> = entries
         .into_iter()
-        .find(|e| e.agent_type == agent_type)
-        .ok_or_else(|| AppError::NotFound(format!("市场中未找到 Agent「{}」", agent_type)))?;
-    if entry.registry_version.is_none() {
+        .filter(|e| e.agent_type == agent_type)
+        .collect();
+    let entry = match candidates.iter().position(|e| e.transport == transport) {
+        Some(pos) => candidates.remove(pos),
+        None => candidates.into_iter().next().ok_or_else(|| {
+            AppError::NotFound(format!("市场中未找到 Agent「{}」", agent_type))
+        })?,
+    };
+    if entry.registry_version.is_none() && entry.source != SOURCE_PRESET {
         return Err(AppError::InvalidInput(
             "该条目没有市场版本信息，无需更新".to_string(),
         ));
     }
+    let is_registry = entry.registry_version.is_some();
     entry.lifecycle.supported().map_err(AppError::Config)?;
 
     let now_ts = crate::utils::now();
@@ -773,7 +842,12 @@ pub async fn agent_market_update(
                 icon: None,
                 sort_order: None,
                 is_enabled: None,
-                version: Some(entry.version.clone()),
+                // 预置条目没有市场版本号，别用它覆盖用户本地记录的版本
+                version: if is_registry {
+                    Some(entry.version.clone())
+                } else {
+                    None
+                },
             },
         )?;
     }

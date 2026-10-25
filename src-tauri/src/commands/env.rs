@@ -725,13 +725,20 @@ pub async fn install_agent(
     let conn = state.get_conn()?;
     let config = agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
+    // 接管要按本地接入方式取同名预置（同名可能同时存在 ACP 与 CLI 两条）
+    let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
 
-    let cmd = config
-        .lifecycle
-        .as_ref()
-        .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
-        .commands()
-        .map_err(AppError::Config)?
+    // 历史手工配置没有生命周期规格：先按同名预置接管，再取安装/卸载命令
+    let spec = match config.lifecycle.as_ref() {
+        Some(spec) => spec.commands().map_err(AppError::Config)?,
+        None => crate::commands::agent_market::adopt_preset_spec(&state, &agent_type, &transport)
+            .await?
+            .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
+            .commands()
+            .map_err(AppError::Config)?,
+    };
+
+    let cmd = spec
         .install
         .ok_or_else(|| AppError::Config(format!("{} 未配置安装命令", agent_type)))?;
 
@@ -773,13 +780,20 @@ pub async fn uninstall_agent(
     let conn = state.get_conn()?;
     let config = agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
+    // 接管要按本地接入方式取同名预置（同名可能同时存在 ACP 与 CLI 两条）
+    let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
 
-    let cmd = config
-        .lifecycle
-        .as_ref()
-        .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
-        .commands()
-        .map_err(AppError::Config)?
+    // 历史手工配置没有生命周期规格：先按同名预置接管，再取卸载命令
+    let spec = match config.lifecycle.as_ref() {
+        Some(spec) => spec.commands().map_err(AppError::Config)?,
+        None => crate::commands::agent_market::adopt_preset_spec(&state, &agent_type, &transport)
+            .await?
+            .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
+            .commands()
+            .map_err(AppError::Config)?,
+    };
+
+    let cmd = spec
         .uninstall
         .ok_or_else(|| AppError::Config(format!("{} 未配置卸载命令", agent_type)))?;
 

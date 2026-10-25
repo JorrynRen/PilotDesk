@@ -113,6 +113,23 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   }, []);
   const isAcpAgent = (agentType: string) => transportMap[agentType] === 'acp';
 
+  // 本地 CLI 市集里「同名且可安装」的预置：历史手工创建的 Agent 靠它接管安装/更新/卸载
+  const [presetInstallable, setPresetInstallable] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let alive = true;
+    invoke<Array<{ agentType: string; supported: boolean }>>('agent_market_list', { category: 'cli' })
+      .then((rows) => {
+        if (!alive) return;
+        const m: Record<string, boolean> = {};
+        rows.forEach((r) => { m[r.agentType] = !!r.supported; });
+        setPresetInstallable(m);
+      })
+      .catch(() => {
+        // 市集不可用就维持「手工配置」，不影响环境检测本身
+      });
+    return () => { alive = false; };
+  }, []);
+
   const fetchEnvWithLog = useCallback(async () => {
     // Force fresh detection by clearing cache
     await invoke('clear_env_detect_cache').catch(() => {});
@@ -219,8 +236,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         installed,
         available,
         healthReason: health?.reason ?? null,
-        // 安装/卸载命令已从「用户手填」改为「市集下发」，没有 lifecycle 的手工 Agent 无法在此安装
-        installable: !!agent.lifecycle,
+        // 安装/卸载命令来自市集下发的 lifecycle；历史手工 Agent 若市集有同名可安装预置，
+        // 按「接管」处理（后端真正执行前会先把预置规格写回本地）
+        installable: !!agent.lifecycle || presetInstallable[agent.agentType] === true,
         uninstallLabel: isAcpAgent(agent.agentType) ? '卸载适配器' : '卸载 CLI 包',
         action: installed ? 'update' as const : 'install' as const,
         installing: installing === agent.agentType,
@@ -233,26 +251,27 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     }),
   ];
 
-  const handleInstall = async (key: string) => {
+  const handleInstall = async (key: string, mode: 'install' | 'update' = 'install') => {
     const agent = agents.find(a => a.agentType === key);
     const name = agent?.displayName || key;
     setInstalling(key);
-    addLog(`开始安装 ${name}...`, 'info');
+    addLog(`开始${mode === 'update' ? '更新' : '安装'} ${name}...`, 'info');
     try {
       // 市集下发的 Agent 走完整安装流程（解析 bin、回写运行时、置 ready）；
+      // 历史手工 Agent 若市集有同名预置也走它（后端先接管预置规格再安装）；
       // 其余（如 Git / Python 等非 Agent 工具）仍走通用的 install_agent。
-      if (agent?.pkgState) {
-        await invoke('agent_market_install', { agentType: key });
+      if (agent?.pkgState || presetInstallable[key]) {
+        await invoke(mode === 'update' ? 'agent_market_update' : 'agent_market_install', { agentType: key });
       } else {
         await invoke('install_agent', { agentType: key });
       }
-      addLog(`${name} 安装成功`, 'success');
+      addLog(`${name} ${mode === 'update' ? '更新' : '安装'}成功`, 'success');
       await fetchEnv();
       // 安装完成后直接触发版本检测（autoDetected 守卫阻止 useEffect 重复执行）
       checkAgentUpdate(key);
     } catch (err) {
       const msg = errorMessage(err);
-      addLog(`${name} 安装失败: ${msg}`, 'error');
+      addLog(`${name} ${mode === 'update' ? '更新' : '安装'}失败: ${msg}`, 'error');
     }
     setInstalling(null);
   };
@@ -312,7 +331,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     });
     if (!ok) return;
     if (action === 'uninstall') await handleUninstall(key);
-    else await handleInstall(key);
+    else await handleInstall(key, action === 'update' ? 'update' : 'install');
   };
 
   return (
