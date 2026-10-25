@@ -321,11 +321,17 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       : action === 'update' ? `确定要更新 ${name} 到最新版本吗？`
       : action === 'reinstall' ? `确定要重新安装 ${name} 吗？`
       : `确定要安装 ${name} 吗？`;
+    // ACP 官方目录只提供**适配器**的安装信息，没有宿主 Agent 的安装/卸载/更新命令，
+    // 所以这一路只能装适配器。不提前说清楚，用户会以为装完就能用。
+    const acpCaution =
+      action !== 'uninstall' && isAcpAgent(key)
+        ? '\n\n注意：这里只安装 ACP 适配器，不包含该 Agent 本体。若它需要单独的命令行工具或账号，请自行安装并在终端完成登录，否则建立会话会在握手阶段失败。'
+        : '';
     const confirmText =
       action === 'uninstall' ? '卸载' : action === 'update' ? '更新' : action === 'reinstall' ? '重装' : '安装';
     const ok = await confirmDialog({
       title,
-      message,
+      message: `${message}${acpCaution}`,
       confirmText,
       danger: action === 'uninstall',
     });

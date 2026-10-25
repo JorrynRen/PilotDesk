@@ -612,6 +612,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
       {mode === 'edit' && form.lifecycle && (
         <InstallStatusSection
           agentType={form.agentType!}
+          displayName={form.displayName}
           transport={form.transport ?? 'subprocess'}
           pkgState={form.pkgState}
           lifecycle={form.lifecycle}
@@ -803,8 +804,10 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
 
 /** 「本机安装」区：呈现包安装状态并提供安装/重试动作。
  *  安装规格（包名、安装/版本命令、运行参数）由市集下发，这里只呈现结果、不提供编辑。 */
-function InstallStatusSection({ agentType, transport, pkgState, lifecycle, canUpdate, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
+function InstallStatusSection({ agentType, displayName, transport, pkgState, lifecycle, canUpdate, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
   agentType: string;
+  /** 用于提示「装的是适配器，不是这个 Agent 本身」 */
+  displayName?: string;
   transport: string;
   pkgState?: PkgState | null;
   lifecycle: LifecycleSpec;
@@ -821,6 +824,8 @@ function InstallStatusSection({ agentType, transport, pkgState, lifecycle, canUp
   const isAcp = transport === 'acp';
   // 卸载的对象按接入方式说清楚：ACP 卸的是适配器，CLI 卸的是它自己那个包
   const uninstallLabel = isAcp ? '卸载适配器' : '卸载 CLI 包';
+  // 标题必须点明「装的是什么」：ACP 只装适配器，写成「本机安装」会被读成装 Agent 本身
+  const installTitle = isAcp ? '本机安装（ACP 适配器）' : '本机安装（CLI 包）';
   // P1 仅支持 npm / shell；uvx / binary 由市集显示「暂不支持」，这里兜底说明。
   const supported = lifecycle.kind === 'npm' || lifecycle.kind === 'shell';
   const status = pkgState?.status;
@@ -849,7 +854,7 @@ function InstallStatusSection({ agentType, transport, pkgState, lifecycle, canUp
       style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
     >
       <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-secondary)' }}>本机安装</span>
+        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-secondary)' }}>{installTitle}</span>
         <span className="text-[10px]" style={{ color: tone }}>{statusText}</span>
         <span className="flex-1" />
         {!ready && (
@@ -858,7 +863,13 @@ function InstallStatusSection({ agentType, transport, pkgState, lifecycle, canUp
             variant="primary"
             disabled={!supported || installing || uninstalling || updating}
             icon={installing ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
-            title={supported ? undefined : '当前版本暂不支持该安装方式'}
+            title={
+              supported
+                ? isAcp
+                  ? '仅安装 ACP 适配器；宿主 Agent 的安装与登录需另行完成'
+                  : undefined
+                : '当前版本暂不支持该安装方式'
+            }
           >
             {installing ? '安装中' : failed ? '重试' : '安装'}
           </SettingsButton>
@@ -886,6 +897,13 @@ function InstallStatusSection({ agentType, transport, pkgState, lifecycle, canUp
           </SettingsButton>
         )}
       </div>
+      {isAcp && (
+        <div className="text-[10px] mt-1.5" style={{ color: 'var(--warning, #d97706)' }}>
+          这里只安装 ACP 适配器，不包含 {displayName || agentType} 本体：若该 Agent 需要单独的
+          命令行工具或账号，请先在本机安装，并在终端完成登录；否则建立会话会在握手阶段失败
+          （具体原因见「环境检测」）。
+        </div>
+      )}
       {(ready || failed) && (
         <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
           卸载只移除本机{isAcp ? '适配器' : 'CLI 包'}，Agent 配置与接入方式保留。
