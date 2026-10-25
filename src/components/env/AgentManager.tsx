@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Terminal, Repeat, BookOpen, Store as StoreIcon, Play } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -44,6 +44,7 @@ export function AgentManager() {
 
   // ── 市场草稿的安装 ──
   const [installing, setInstalling] = useState<string | null>(null);
+  const [uninstalling, setUninstalling] = useState<string | null>(null);
   const [installMsg, setInstallMsg] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -75,6 +76,33 @@ export function AgentManager() {
         : prev
     );
   };
+  /** 卸载本机依赖（适配器 / CLI 包）：保留 Agent 配置，只把包状态退回「待安装」。 */
+  const handleUninstall = async (agentType: string) => {
+    const name = agents.find((a) => a.agentType === agentType)?.displayName || agentType;
+    const ok = await confirmDialog({
+      title: '确认卸载',
+      message: `将从本机卸载 ${name} 对应的适配器 / CLI 包。Agent 配置会保留，卸载后需重新安装才能用于会话。`,
+      confirmText: '卸载',
+      danger: true,
+    });
+    if (!ok) return;
+    setUninstalling(agentType);
+    try {
+      await invoke('uninstall_agent', { agentType });
+      showToast('已卸载本机依赖', 'success');
+    } catch (err) {
+      showToast(`卸载失败: ${errorMessage(err)}`, 'error');
+    }
+    setUninstalling(null);
+    const fresh = await fetchAgents();
+    const updated = fresh.find((a) => a.agentType === agentType);
+    setEditForm((prev) =>
+      prev && prev.agentType === agentType
+        ? { ...prev, pkgState: updated?.pkgState, lifecycle: updated?.lifecycle }
+        : prev
+    );
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -120,17 +148,18 @@ export function AgentManager() {
   };
 
   // 深链 `/settings?tab=agents&agent=<agentType>`：市场「获取」后直接落到该 Agent 的编辑/安装态。
-  // 用 ref 保证只自动打开一次，避免用户关掉表单后又被 URL 反复拉回来。
-  const deepHandled = useRef<string | null>(null);
+  // 用状态记录已打开的深链，避免用户关掉表单后又被 URL 反复拉回来。
+  // 这是"由外部输入派生本地状态"的渲染期修正，放在渲染阶段而不是 effect（effect 内同步 setState 会级联渲染）。
+  const [deepOpened, setDeepOpened] = useState<string | null>(null);
   const deepAgent = searchParams.get('agent');
-  useEffect(() => {
-    if (!deepAgent || loading || deepHandled.current === deepAgent) return;
+  if (deepAgent && !loading && deepOpened !== deepAgent) {
     const target = agents.find((a) => a.agentType === deepAgent);
-    if (!target) return;
-    deepHandled.current = deepAgent;
-    setEditingType(target.agentType);
-    setEditForm({ ...target });
-  }, [deepAgent, loading, agents]);
+    if (target) {
+      setDeepOpened(deepAgent);
+      setEditingType(target.agentType);
+      setEditForm({ ...target });
+    }
+  }
 
   const handleSave = async () => {
     if (!editForm || !editingType) return;
@@ -417,7 +446,9 @@ export function AgentManager() {
                       handleEdit={handleEdit}
                       requestDelete={requestDelete}
                       onInstall={handleInstall}
+                      onUninstall={handleUninstall}
                       installing={installing}
+                      uninstalling={uninstalling}
                       installMsg={installMsg[agent.agentType]}
                     />
                   </React.Fragment>
@@ -436,7 +467,7 @@ export function AgentManager() {
 //  Sub-components
 // ──────────────────────────────────────────────
 
-function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall, installing, installMsg }: {
+function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall, onUninstall, installing, uninstalling, installMsg }: {
   form: Partial<AgentConfig>;
   onChange: (f: Partial<AgentConfig>) => void;
   onSubmit: () => void;
@@ -444,7 +475,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
   saving: boolean;
   mode: 'add' | 'edit';
   onInstall?: (agentType: string) => void;
+  onUninstall?: (agentType: string) => void;
   installing?: string | null;
+  uninstalling?: string | null;
   installMsg?: string;
 }) {
   // ── 接入方式（设计文档 §4.2）──
@@ -552,7 +585,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           pkgState={form.pkgState}
           lifecycle={form.lifecycle}
           onInstall={onInstall}
+          onUninstall={onUninstall}
           installing={!!installing && installing === form.agentType}
+          uninstalling={!!uninstalling && uninstalling === form.agentType}
           message={installMsg}
         />
       )}
@@ -732,12 +767,14 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
 
 /** 「本机安装」区：呈现包安装状态并提供安装/重试动作。
  *  安装规格（包名、安装/版本命令、运行参数）由市集下发，这里只呈现结果、不提供编辑。 */
-function InstallStatusSection({ agentType, pkgState, lifecycle, onInstall, installing, message }: {
+function InstallStatusSection({ agentType, pkgState, lifecycle, onInstall, onUninstall, installing, uninstalling, message }: {
   agentType: string;
   pkgState?: PkgState | null;
   lifecycle: LifecycleSpec;
   onInstall?: (agentType: string) => void;
+  onUninstall?: (agentType: string) => void;
   installing?: boolean;
+  uninstalling?: boolean;
   message?: string;
 }) {
   // P1 仅支持 npm / shell；uvx / binary 由市集显示「暂不支持」，这里兜底说明。
@@ -775,11 +812,22 @@ function InstallStatusSection({ agentType, pkgState, lifecycle, onInstall, insta
           <SettingsButton
             onClick={() => onInstall?.(agentType)}
             variant="primary"
-            disabled={!supported || installing}
+            disabled={!supported || installing || uninstalling}
             icon={installing ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
             title={supported ? undefined : '当前版本暂不支持该安装方式'}
           >
             {installing ? '安装中' : failed ? '重试' : '安装'}
+          </SettingsButton>
+        )}
+        {(ready || failed) && (
+          <SettingsButton
+            onClick={() => onUninstall?.(agentType)}
+            variant="danger"
+            disabled={installing || uninstalling}
+            icon={uninstalling ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+            title="卸载本机安装的适配器 / CLI 包（保留 Agent 配置）"
+          >
+            {uninstalling ? '卸载中' : '卸载'}
           </SettingsButton>
         )}
       </div>
@@ -879,7 +927,7 @@ function agentStatus(agent: AgentConfig): { text: string; tone: 'ok' | 'warn' | 
 // ──────────────────────────────────────────────
 //  SortableAgentItem — 可拖拽排序的 Agent 卡片
 // ──────────────────────────────────────────────
-function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete, onInstall, installing, installMsg }: {
+function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete, onInstall, onUninstall, installing, uninstalling, installMsg }: {
   agent: AgentConfig;
   isEditing: boolean;
   editForm: Partial<AgentConfig> | null;
@@ -891,7 +939,9 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
   handleEdit: (agent: AgentConfig) => void;
   requestDelete: (agentType: string) => void;
   onInstall: (agentType: string) => void;
+  onUninstall: (agentType: string) => void;
   installing: string | null;
+  uninstalling: string | null;
   installMsg?: string;
 }) {
   const {
@@ -926,7 +976,9 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
             saving={saving}
             mode="edit"
             onInstall={onInstall}
+            onUninstall={onUninstall}
             installing={installing}
+            uninstalling={uninstalling}
             installMsg={installMsg}
           />
         </SettingsCard>
