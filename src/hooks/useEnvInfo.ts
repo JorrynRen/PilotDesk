@@ -54,18 +54,29 @@ function setupListeners() {
       gitVersion: data.gitVersion ?? null,
       pythonVersion: data.pythonVersion ?? null,
       agentVersions: globalState.info?.agentVersions ?? {},
+      agentHealth: globalState.info?.agentHealth ?? {},
+      agentLatestVersions: globalState.info?.agentLatestVersions,
     };
     notifyListeners();
   }).then((unlisten) => unlistenFns.push(unlisten));
 
-  // Per-agent version (arrives incrementally, before base tools)
-  listen<{ agentType: string; version: string | null }>('env-agent-version', (event) => {
-    const { agentType, version } = event.payload;
+  // Per-agent version + 健康度（安装 / 可用）
+  listen<{ agentType: string; version: string | null; installed?: boolean; available?: boolean; reason?: string | null }>('env-agent-version', (event) => {
+    const { agentType, version, installed, available, reason } = event.payload;
     globalState.info = {
       nodeVersion: globalState.info?.nodeVersion ?? null,
       gitVersion: globalState.info?.gitVersion ?? null,
       pythonVersion: globalState.info?.pythonVersion ?? null,
       agentVersions: { ...(globalState.info?.agentVersions ?? {}), [agentType]: version },
+      agentHealth: {
+        ...(globalState.info?.agentHealth ?? {}),
+        [agentType]: {
+          installed: installed ?? version !== null,
+          available: available ?? version !== null,
+          reason: reason ?? null,
+        },
+      },
+      agentLatestVersions: globalState.info?.agentLatestVersions,
     };
     globalState.agentStatus = {
       ...globalState.agentStatus,

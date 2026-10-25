@@ -86,6 +86,18 @@ pub struct Inspiration {
     pub market_id: Option<String>,
 }
 
+/// 单个 Agent 的环境健康度：安装（包/适配器）与可用（启动命令可解析）分开判断。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHealth {
+    /// 依赖是否已安装（npm 包 / CLI 命令）
+    pub installed: bool,
+    /// Agent 是否真正可用（启动命令能在本机解析）
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvInfo {
@@ -93,6 +105,9 @@ pub struct EnvInfo {
     pub git_version: Option<String>,
     pub python_version: Option<String>,
     pub agent_versions: std::collections::HashMap<String, Option<String>>,
+    /// 每个 Agent 的安装 / 可用状态（按 agent_type）
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub agent_health: std::collections::HashMap<String, AgentHealth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_latest_versions: Option<std::collections::HashMap<String, Option<String>>>,
 }

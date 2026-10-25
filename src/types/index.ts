@@ -202,12 +202,21 @@ export interface Inspiration {
   updatedAt: number;
 }
 
+/** 单个 Agent 的环境健康度：安装（包/适配器）与可用（启动命令可解析）分开判断。 */
+export interface AgentHealth {
+  installed: boolean;
+  available: boolean;
+  reason?: string | null;
+}
+
 export interface EnvInfo {
   nodeVersion: string | null;
   gitVersion: string | null;
   pythonVersion: string | null;
   /** Dynamic agent versions keyed by agent_type */
   agentVersions: Record<string, string | null>;
+  /** 每个 Agent 的安装 / 可用状态 keyed by agent_type */
+  agentHealth?: Record<string, AgentHealth>;
   /** Dynamic agent latest versions keyed by agent_type */
   agentLatestVersions?: Record<string, string | null>;
 }

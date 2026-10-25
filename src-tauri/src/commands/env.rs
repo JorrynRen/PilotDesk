@@ -1,5 +1,6 @@
+use crate::agent::lifecycle::LifecycleKind;
 use crate::commands::agents;
-use crate::db::models::EnvInfo;
+use crate::db::models::{AgentHealth, EnvInfo};
 use crate::utils::errors::AppError;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -43,6 +44,32 @@ fn clean_version_string(raw: &str) -> String {
 // ──────────────────────────────────────────────
 //  环境检测
 // ──────────────────────────────────────────────
+
+/// 从运行命令模板里取可执行名（第一个 token）：`claude -p ...` → `claude`。
+/// 手工配置的本地 CLI 没有生命周期规格，只能靠它推断「是否可用」。
+fn executable_from_template(template: &str) -> Option<String> {
+    let first = template
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c| c == '"' || c == '\'');
+    if first.is_empty() || first.contains('{') {
+        return None;
+    }
+    Some(first.to_string())
+}
+
+/// 只探测启动命令是否存在，**不启动 Agent**（部分 ACP 适配器一启动就进 serving 态）。
+async fn command_resolvable(agent_mgr: &crate::agent::AgentManager, command: &str) -> bool {
+    let probe = if cfg!(windows) {
+        format!("where {}", command)
+    } else {
+        format!("command -v {}", command)
+    };
+    agent_mgr
+        .execute_command_output_async(&probe, "", 10, "启动命令探测")
+        .await
+        .is_ok()
+}
 
 /// 简单缓存：仅用于避免高频重复检测
 static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::RwLock::new(None);
@@ -101,52 +128,133 @@ async fn detect_env_with_console(
     // Agent 版本查询（futures::join_all 并行）
     let conn = state.get_conn()?;
     let db_agents = agents::list_agents_inner(&conn).unwrap_or_default();
+    // 接入方式决定检测口径：ACP 查适配器，本地 CLI 查可执行命令
+    let transport_map: std::collections::HashMap<String, String> =
+        agents::list_agent_transports_inner(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.agent_type, r.transport))
+            .collect();
 
     let mut agent_futures = Vec::new();
     for agent in &db_agents {
         if !agent.is_enabled {
             continue;
         }
-        // 版本探测命令由生命周期派生：npm 走 `npm ls -g --json`（**不执行 `<bin> --version`**，
-        // 部分适配器会进 serving 状态卡住）；shell 类走规格里的显式命令。
-        let Some(probe) = agent
-            .lifecycle
+        let transport = transport_map
+            .get(&agent.agent_type)
+            .cloned()
+            .unwrap_or_else(|| "subprocess".to_string());
+        let lifecycle = agent.lifecycle.clone();
+        let bins = agent
+            .pkg_state
+            .as_ref()
+            .map(|s| s.bins.clone())
+            .unwrap_or_default();
+
+        // 版本探测命令：优先生命周期派生。**手工配置的本地 CLI 没有规格**，
+        // 退回运行模板里的可执行名 + `--version`（此前这类 Agent 会被直接跳过 → 永远「未安装」）。
+        let probe = lifecycle
             .as_ref()
             .and_then(|l| l.commands().ok())
             .and_then(|c| c.version_probe)
-        else {
-            continue;
+            .or_else(|| {
+                if transport == "subprocess" {
+                    executable_from_template(&agent.run_cmd_template)
+                        .map(|exe| format!("{} --version", exe))
+                } else {
+                    None
+                }
+            });
+
+        // 可用性探测目标：ACP 只看真实解析出的启动命令：
+        // - npm 条目安装后由 bin 解析决定（未装时 bins 为空 → 不可用，避免误报可用）；
+        // - shell 条目（如 hermes-acp）的运行时就是宿主命令。
+        // **不用 npm exec 兜底**——那只能说明 npm 存在，不能说明适配器可用。
+        let runtime_cmd = if transport == "acp" {
+            bins.values().next().cloned().or_else(|| {
+                let l = lifecycle.as_ref()?;
+                if l.kind != LifecycleKind::Shell {
+                    return None;
+                }
+                l.runtime.as_ref().map(|r| r.command.clone())
+            })
+        } else {
+            executable_from_template(&agent.run_cmd_template).or_else(|| {
+                lifecycle
+                    .as_ref()
+                    .and_then(|l| l.resolved_runtime(&bins))
+                    .map(|r| r.command)
+            })
         };
-        let lifecycle = agent.lifecycle.clone();
+
         let label = format!("{} 版本查询", agent.agent_type);
         let agent_type = agent.agent_type.clone();
         agent_futures.push(async move {
-            let version = agent_mgr
-                .execute_command_output_async(&probe, "", 15, &label)
-                .await
-                .ok()
-                .map(|v| {
-                    lifecycle
-                        .as_ref()
-                        .and_then(|l| l.parse_installed_version(&v))
-                        .unwrap_or_else(|| clean_version_string(&v))
-                });
-            (agent_type, version)
+            let (version, available) = tokio::join!(
+                async {
+                    match probe {
+                        Some(probe) => agent_mgr
+                            .execute_command_output_async(&probe, "", 15, &label)
+                            .await
+                            .ok()
+                            .map(|v| {
+                                lifecycle
+                                    .as_ref()
+                                    .and_then(|l| l.parse_installed_version(&v))
+                                    .unwrap_or_else(|| clean_version_string(&v))
+                            }),
+                        None => None,
+                    }
+                },
+                async {
+                    match runtime_cmd {
+                        Some(cmd) if !cmd.trim().is_empty() => {
+                            command_resolvable(agent_mgr, &cmd).await
+                        }
+                        _ => false,
+                    }
+                }
+            );
+            // 启动命令可解析也算「已安装」：本地 CLI 可能没走包管理器安装，
+            // 版本探测失败但命令确实存在（此前这类配置永远显示未安装）。
+            let installed = version.is_some() || available;
+            let reason = if !installed {
+                Some("未安装".to_string())
+            } else if !available {
+                Some("已安装，但启动命令不可用".to_string())
+            } else {
+                None
+            };
+            (
+                agent_type,
+                version,
+                AgentHealth {
+                    installed,
+                    available,
+                    reason,
+                },
+            )
         });
     }
 
     let agent_results = futures::future::join_all(agent_futures).await;
 
     let mut agent_versions = std::collections::HashMap::new();
-    for (agent_type, version) in agent_results {
+    let mut agent_health = std::collections::HashMap::new();
+    for (agent_type, version, health) in agent_results {
         let _ = app.emit(
             "env-agent-version",
             serde_json::json!({
                 "agentType": agent_type,
                 "version": version,
+                "installed": health.installed,
+                "available": health.available,
+                "reason": health.reason,
             }),
         );
-        agent_versions.insert(agent_type, version);
+        agent_versions.insert(agent_type.clone(), version);
+        agent_health.insert(agent_type, health);
     }
 
     log_env!(
@@ -162,6 +270,7 @@ async fn detect_env_with_console(
         git_version,
         python_version,
         agent_versions,
+        agent_health,
         agent_latest_versions: None,
     };
 

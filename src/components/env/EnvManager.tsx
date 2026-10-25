@@ -14,6 +14,10 @@ interface DependencyStatus {
   key: string;
   version: string | null;
   installed: boolean;
+  /** 启动命令是否可解析（已安装 ≠ 可用：适配器装了但运行时缺失时不可用） */
+  available?: boolean;
+  /** 不可用/未安装的原因 */
+  healthReason?: string | null;
   /** 是否有可执行的安装规格（市场下发的 lifecycle）；手工配置的 Agent 为 false */
   installable?: boolean;
   action?: string;
@@ -180,6 +184,10 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     // Dynamic agents from DB
     ...agents.filter(a => a.isEnabled).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map((agent) => {
       const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
+      // 安装（包/适配器）与可用（启动命令）分开：ACP 装好适配器但运行时缺失时显示「不可用」
+      const health = envInfo?.agentHealth?.[agent.agentType];
+      const installed = health?.installed ?? !!version;
+      const available = health?.available ?? !!version;
       const latestVer = envInfo?.agentLatestVersions?.[agent.agentType] ?? latestVersions[agent.agentType]?.version ?? null;
       const latestRelease = latestVersions[agent.agentType]?.releaseTime ?? null;
       const updateCheck = updateChecking[agent.agentType] ?? false;
@@ -187,10 +195,12 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         name: agent.displayName,
         key: agent.agentType,
         version,
-        installed: !!version,
+        installed,
+        available,
+        healthReason: health?.reason ?? null,
         // 安装/卸载命令已从「用户手填」改为「市集下发」，没有 lifecycle 的手工 Agent 无法在此安装
         installable: !!agent.lifecycle,
-        action: version ? 'update' as const : 'install' as const,
+        action: installed ? 'update' as const : 'install' as const,
         installing: installing === agent.agentType,
         latestVersion: latestVer,
         latestReleaseTime: latestRelease,
@@ -316,8 +326,20 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     )}
                   </div>
                   <div className="flex items-center gap-1">
-                    <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                      {dep.detecting ? '检查中' : (dep.installed ? `v${dep.version}` : '未安装')}
+                    <span
+                      className="text-[10px]"
+                      style={{ color: !dep.installed || dep.available === false ? '#EF4444' : 'var(--text-secondary)' }}
+                      title={!dep.detecting ? (dep.healthReason ?? undefined) : undefined}
+                    >
+                      {dep.detecting
+                        ? '检查中'
+                        : !dep.installed
+                          ? '未安装'
+                          : dep.available === false
+                            ? '不可用'
+                            : dep.version
+                              ? `v${dep.version}`
+                              : '可用（版本未知）'}
                     </span>
                     {dep.updateChecking && (
                       <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
