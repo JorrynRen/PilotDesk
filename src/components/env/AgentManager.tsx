@@ -45,6 +45,7 @@ export function AgentManager() {
   // ── 市场草稿的安装 ──
   const [installing, setInstalling] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState<string | null>(null);
+  const [updating, setUpdating] = useState<string | null>(null);
   const [installMsg, setInstallMsg] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -99,6 +100,30 @@ export function AgentManager() {
     setEditForm((prev) =>
       prev && prev.agentType === agentType
         ? { ...prev, pkgState: updated?.pkgState, lifecycle: updated?.lifecycle }
+        : prev
+    );
+  };
+
+  /** 更新：按市场最新规格覆盖本地配置后重装（仅市场提供版本信息的条目）。 */
+  const handleUpdate = async (agentType: string) => {
+    setUpdating(agentType);
+    try {
+      await invoke('agent_market_update', { agentType });
+      showToast('已更新到市场最新版本', 'success');
+    } catch (err) {
+      showToast(`更新失败: ${errorMessage(err)}`, 'error');
+    }
+    setUpdating(null);
+    const fresh = await fetchAgents();
+    const updated = fresh.find((a) => a.agentType === agentType);
+    setEditForm((prev) =>
+      prev && prev.agentType === agentType
+        ? {
+            ...prev,
+            pkgState: updated?.pkgState,
+            lifecycle: updated?.lifecycle,
+            distSource: updated?.distSource,
+          }
         : prev
     );
   };
@@ -447,8 +472,10 @@ export function AgentManager() {
                       requestDelete={requestDelete}
                       onInstall={handleInstall}
                       onUninstall={handleUninstall}
+                      onUpdate={handleUpdate}
                       installing={installing}
                       uninstalling={uninstalling}
+                      updating={updating}
                       installMsg={installMsg[agent.agentType]}
                     />
                   </React.Fragment>
@@ -467,7 +494,7 @@ export function AgentManager() {
 //  Sub-components
 // ──────────────────────────────────────────────
 
-function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall, onUninstall, installing, uninstalling, installMsg }: {
+function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, installMsg }: {
   form: Partial<AgentConfig>;
   onChange: (f: Partial<AgentConfig>) => void;
   onSubmit: () => void;
@@ -476,8 +503,10 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
   mode: 'add' | 'edit';
   onInstall?: (agentType: string) => void;
   onUninstall?: (agentType: string) => void;
+  onUpdate?: (agentType: string) => void;
   installing?: string | null;
   uninstalling?: string | null;
+  updating?: string | null;
   installMsg?: string;
 }) {
   // ── 接入方式（设计文档 §4.2）──
@@ -582,12 +611,16 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
       {mode === 'edit' && form.lifecycle && (
         <InstallStatusSection
           agentType={form.agentType!}
+          transport={form.transport ?? 'subprocess'}
           pkgState={form.pkgState}
           lifecycle={form.lifecycle}
+          canUpdate={!!form.distSource?.registryVersion}
           onInstall={onInstall}
           onUninstall={onUninstall}
+          onUpdate={onUpdate}
           installing={!!installing && installing === form.agentType}
           uninstalling={!!uninstalling && uninstalling === form.agentType}
+          updating={!!updating && updating === form.agentType}
           message={installMsg}
         />
       )}
@@ -767,16 +800,24 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
 
 /** 「本机安装」区：呈现包安装状态并提供安装/重试动作。
  *  安装规格（包名、安装/版本命令、运行参数）由市集下发，这里只呈现结果、不提供编辑。 */
-function InstallStatusSection({ agentType, pkgState, lifecycle, onInstall, onUninstall, installing, uninstalling, message }: {
+function InstallStatusSection({ agentType, transport, pkgState, lifecycle, canUpdate, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
   agentType: string;
+  transport: string;
   pkgState?: PkgState | null;
   lifecycle: LifecycleSpec;
+  /** 市场是否提供可更新的版本信息（预置/手工配置没有，就不给「更新」按钮） */
+  canUpdate?: boolean;
   onInstall?: (agentType: string) => void;
   onUninstall?: (agentType: string) => void;
+  onUpdate?: (agentType: string) => void;
   installing?: boolean;
   uninstalling?: boolean;
+  updating?: boolean;
   message?: string;
 }) {
+  const isAcp = transport === 'acp';
+  // 卸载的对象按接入方式说清楚：ACP 卸的是适配器，CLI 卸的是它自己那个包
+  const uninstallLabel = isAcp ? '卸载适配器' : '卸载 CLI 包';
   // P1 仅支持 npm / shell；uvx / binary 由市集显示「暂不支持」，这里兜底说明。
   const supported = lifecycle.kind === 'npm' || lifecycle.kind === 'shell';
   const status = pkgState?.status;
@@ -812,22 +853,33 @@ function InstallStatusSection({ agentType, pkgState, lifecycle, onInstall, onUni
           <SettingsButton
             onClick={() => onInstall?.(agentType)}
             variant="primary"
-            disabled={!supported || installing || uninstalling}
+            disabled={!supported || installing || uninstalling || updating}
             icon={installing ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
             title={supported ? undefined : '当前版本暂不支持该安装方式'}
           >
             {installing ? '安装中' : failed ? '重试' : '安装'}
           </SettingsButton>
         )}
+        {ready && canUpdate && (
+          <SettingsButton
+            onClick={() => onUpdate?.(agentType)}
+            variant="secondary"
+            disabled={installing || uninstalling || updating}
+            icon={updating ? <Loader2 size={11} className="animate-spin" /> : <Repeat size={11} />}
+            title="按市场最新规格重新安装（Agent 配置保留）"
+          >
+            {updating ? '更新中' : '更新'}
+          </SettingsButton>
+        )}
         {(ready || failed) && (
           <SettingsButton
             onClick={() => onUninstall?.(agentType)}
             variant="danger"
-            disabled={installing || uninstalling}
+            disabled={installing || uninstalling || updating}
             icon={uninstalling ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
-            title="卸载本机安装的适配器 / CLI 包（保留 Agent 配置）"
+            title={`${uninstallLabel}（保留 Agent 配置，卸载后需重新安装才能用于会话）`}
           >
-            {uninstalling ? '卸载中' : '卸载'}
+            {uninstalling ? '卸载中' : uninstallLabel}
           </SettingsButton>
         )}
       </div>
@@ -927,7 +979,7 @@ function agentStatus(agent: AgentConfig): { text: string; tone: 'ok' | 'warn' | 
 // ──────────────────────────────────────────────
 //  SortableAgentItem — 可拖拽排序的 Agent 卡片
 // ──────────────────────────────────────────────
-function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete, onInstall, onUninstall, installing, uninstalling, installMsg }: {
+function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, installMsg }: {
   agent: AgentConfig;
   isEditing: boolean;
   editForm: Partial<AgentConfig> | null;
@@ -940,8 +992,10 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
   requestDelete: (agentType: string) => void;
   onInstall: (agentType: string) => void;
   onUninstall: (agentType: string) => void;
+  onUpdate: (agentType: string) => void;
   installing: string | null;
   uninstalling: string | null;
+  updating: string | null;
   installMsg?: string;
 }) {
   const {
@@ -977,8 +1031,10 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
             mode="edit"
             onInstall={onInstall}
             onUninstall={onUninstall}
+            onUpdate={onUpdate}
             installing={installing}
             uninstalling={uninstalling}
+            updating={updating}
             installMsg={installMsg}
           />
         </SettingsCard>
