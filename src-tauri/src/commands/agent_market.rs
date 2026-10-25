@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::Emitter;
 
-use crate::agent::config::{AgentConfig, CreateAgentPayload, Readiness};
+use crate::agent::config::{AgentConfig, CreateAgentPayload, Readiness, UpdateAgentPayload};
 use crate::agent::lifecycle::{
     DistSource, LifecycleKind, LifecyclePackage, LifecycleSpec, PackageRole, PkgState,
     RuntimeSpec, SOURCE_ACP_REGISTRY, SOURCE_PRESET,
@@ -291,7 +291,10 @@ impl MarketEntry {
             installed: installed.exists,
             installed_version: installed.installed_version.clone(),
             pkg_status: installed.pkg_status.clone(),
+            // 只有来自 ACP 官方目录的条目才有「市场版本」可比：预置的 `version` 是配置版本号，
+            // 拿它和 npm 里的实际包版本比较会产生假的「可更新」。
             update_available: installed.exists
+                && self.registry_version.is_some()
                 && !self.version.trim().is_empty()
                 && installed
                     .installed_version
@@ -523,26 +526,18 @@ pub async fn agent_market_acquire(
     Ok(created)
 }
 
-/// 「安装」：执行安装命令，随后解析 bin / 已安装版本并把包状态置为 `ready`。
+/// 安装执行体（`agent_market_install` 与 `agent_market_update` 共用）：
+/// 执行安装命令 → 解析 bin / 已装版本 → 置 `ready` → 回写 ACP 的启动命令。
 ///
 /// 失败时**落 `failed` 状态并保留错误原因**（前端据此展示重试），同时把错误返回给调用方。
-#[tauri::command]
-pub async fn agent_market_install(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, crate::DbState>,
-    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
-    agent_type: String,
-) -> Result<AgentConfig, AppError> {
-    let config = {
-        let conn = state.get_conn()?;
-        agents::get_agent_inner(&conn, &agent_type)?
-            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?
-    };
-    let spec = config
-        .lifecycle
-        .clone()
-        .ok_or_else(|| AppError::Config(format!("『{}』没有生命周期规格", agent_type)))?;
-    spec.supported().map_err(AppError::Config)?;
+async fn run_install(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, crate::DbState>,
+    agent_mgr: &tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: &str,
+    display_name: &str,
+    spec: &LifecycleSpec,
+) -> Result<(), AppError> {
     let install_cmd = spec
         .commands()
         .map_err(AppError::Config)?
@@ -553,7 +548,7 @@ pub async fn agent_market_install(
         "install-progress",
         json!({
             "agent": agent_type,
-            "message": format!("正在安装 {}...", config.display_name),
+            "message": format!("正在安装 {}...", display_name),
             "progress": 20
         }),
     );
@@ -566,7 +561,7 @@ pub async fn agent_market_install(
     if let Err(e) = result {
         drop(mgr);
         let msg = format!("安装失败: {}", e);
-        set_pkg_state(&state, &agent_type, PkgState::failed(msg.clone(), crate::utils::now()))?;
+        set_pkg_state(state, agent_type, PkgState::failed(msg.clone(), crate::utils::now()))?;
         let _ = app.emit(
             "install-progress",
             json!({
@@ -583,7 +578,7 @@ pub async fn agent_market_install(
         "install-progress",
         json!({
             "agent": agent_type,
-            "message": format!("{} 安装完成，正在校验...", config.display_name),
+            "message": format!("{} 安装完成，正在校验...", display_name),
             "progress": 80
         }),
     );
@@ -594,7 +589,7 @@ pub async fn agent_market_install(
             .execute_command_output_async(&cmd, "", 60, "解析可执行名")
             .await
             .ok()
-            .map(|out| parse_bin_map(&spec, &out))
+            .map(|out| parse_bin_map(spec, &out))
             .unwrap_or_default(),
         None => BTreeMap::new(),
     };
@@ -613,12 +608,12 @@ pub async fn agent_market_install(
     let mut ready = PkgState::ready(crate::utils::now());
     ready.bins = bins.clone();
     ready.installed_version = installed_version.clone();
-    set_pkg_state(&state, &agent_type, ready)?;
+    set_pkg_state(state, agent_type, ready)?;
 
     // ACP：把 conn 的启动命令换成解析后的运行时（有 bin 用 bin，否则 npm exec 兜底）
     {
         let conn = state.get_conn()?;
-        let info = agents::get_agent_transport_inner(&conn, &agent_type)?;
+        let info = agents::get_agent_transport_inner(&conn, agent_type)?;
         if info.transport == "acp" {
             if let Some(rt) = spec.resolved_runtime(&bins) {
                 let conn_json = json!({
@@ -628,7 +623,7 @@ pub async fn agent_market_install(
                 });
                 agents::set_agent_transport_inner(
                     &conn,
-                    &agent_type,
+                    agent_type,
                     "acp",
                     Some(&conn_json.to_string()),
                 )?;
@@ -641,10 +636,122 @@ pub async fn agent_market_install(
         "install-progress",
         json!({
             "agent": agent_type,
-            "message": format!("{} 已就绪", config.display_name),
+            "message": format!("{} 已就绪", display_name),
             "progress": 100
         }),
     );
+
+    Ok(())
+}
+
+/// 「安装」：执行安装命令，随后解析 bin / 已安装版本并把包状态置为 `ready`。
+#[tauri::command]
+pub async fn agent_market_install(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: String,
+) -> Result<AgentConfig, AppError> {
+    let config = {
+        let conn = state.get_conn()?;
+        agents::get_agent_inner(&conn, &agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?
+    };
+    let spec = config
+        .lifecycle
+        .clone()
+        .ok_or_else(|| AppError::Config(format!("『{}』没有生命周期规格", agent_type)))?;
+    spec.supported().map_err(AppError::Config)?;
+
+    run_install(
+        &app,
+        &state,
+        &agent_mgr,
+        &agent_type,
+        &config.display_name,
+        &spec,
+    )
+    .await?;
+
+    let conn = state.get_conn()?;
+    agents::get_agent_inner(&conn, &agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))
+}
+
+/// 「更新」：用市场里的最新规格覆盖本地配置后再安装（仅 ACP 官方目录条目）。
+///
+/// 安装命令里的包名带钉死版本，所以更新必须先写回新版本规格，再走同一套安装/校验流程。
+#[tauri::command]
+pub async fn agent_market_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: String,
+) -> Result<AgentConfig, AppError> {
+    let config = {
+        let conn = state.get_conn()?;
+        agents::get_agent_inner(&conn, &agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?
+    };
+    let entries = load_entries().await?;
+    let entry = entries
+        .into_iter()
+        .find(|e| e.agent_type == agent_type)
+        .ok_or_else(|| AppError::NotFound(format!("市场中未找到 Agent「{}」", agent_type)))?;
+    if entry.registry_version.is_none() {
+        return Err(AppError::InvalidInput(
+            "该条目没有市场版本信息，无需更新".to_string(),
+        ));
+    }
+    entry.lifecycle.supported().map_err(AppError::Config)?;
+
+    let now_ts = crate::utils::now();
+    {
+        let conn = state.get_conn()?;
+        agents::update_agent_inner(
+            &conn,
+            UpdateAgentPayload {
+                agent_type: agent_type.clone(),
+                display_name: None,
+                description: None,
+                lifecycle: Some(entry.lifecycle.clone()),
+                pkg_state: Some(PkgState::pending(now_ts)),
+                dist_source: Some(DistSource {
+                    source: entry.source.clone(),
+                    registry_id: entry.registry_id.clone(),
+                    registry_version: entry.registry_version.clone(),
+                    icon_url: entry.icon_url.clone(),
+                    installed_at: now_ts,
+                }),
+                run_cmd_template: None,
+                output_parser: None,
+                output_filter_regex: None,
+                supports_session_continuity: None,
+                session_id_source: None,
+                session_id_event_type: None,
+                session_id_field: None,
+                resume_arg_template: None,
+                skills_dir: None,
+                skill_entry_file: None,
+                skill_display_mode: None,
+                color: None,
+                icon: None,
+                sort_order: None,
+                is_enabled: None,
+                version: Some(entry.version.clone()),
+            },
+        )?;
+    }
+
+    run_install(
+        &app,
+        &state,
+        &agent_mgr,
+        &agent_type,
+        &config.display_name,
+        &entry.lifecycle,
+    )
+    .await?;
 
     let conn = state.get_conn()?;
     agents::get_agent_inner(&conn, &agent_type)?
