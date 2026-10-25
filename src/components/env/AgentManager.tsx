@@ -556,8 +556,59 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           message={installMsg}
         />
       )}
-      {/* 接入方式：**添加与编辑都显示，且置于最前**——先确认方式，再填该方式需要的字段。
-          编辑态必须显示：ACP 的关键字段（command / args）只存在于本区块，
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
+        <FormField label="配置版本号（非Agent版本号）" value={form.version || ''} onChange={(v) => {
+          // 只允许数字和点
+          const cleaned = v.replace(/[^\d.]/g, '');
+          onChange({ ...form, version: cleaned });
+        }} placeholder="如 1.0（留空则默认空）" />
+      </div>
+
+      {/* 基础信息 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Info size={11} style={{ color: 'var(--accent)' }} />
+          <span>基础信息</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <FormField
+            label="Agent标识（不可重复）"
+            value={form.agentType || ''}
+            onChange={(v) => onChange({ ...form, agentType: v })}
+            placeholder="如 claude-code"
+            readOnly={mode === 'edit'}
+          />
+          <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="如 Claude Code" />
+        </div>
+        <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="如 Anthropic 官方 CLI Agent，支持多文件编辑" />
+        {/* 命令不再作为独立字段：兼容模式由「运行命令模板」决定实际执行，
+            ACP 由「接入方式」区的 command + args 决定；安装/版本规格统一由市集下发。 */}
+        {(form.transport || 'subprocess') === 'acp' && (
+          <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+            ACP 接入方式的命令请在下方「接入方式」区填写（command + args），此处无需 CLI 命令。
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
+          <div className="flex gap-2 items-end">
+            <div className="flex-1">
+              <FormField label="图标（支持 Emoji / 图片 URL / 内置图标文件）" value={form.icon || ''} onChange={(v) => onChange({ ...form, icon: v })} placeholder="留空则使用名称首字符" />
+            </div>
+            <button
+              onClick={handleUploadIcon}
+              className="px-2 py-1.5 rounded-lg text-xs outline-none shrink-0"
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              title="选择本地图片作为图标"
+            >
+              <Upload size={11} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 接入方式：置于「排序 → 基础信息」之后，与兼容模式的字段板块顺序保持一致。
+          添加与编辑都显示：ACP 的关键字段（command / args）只存在于本区块，
           若只在添加态渲染，编辑既有 ACP Agent 时这些字段就无处可看、无处可改。
           编辑态由上方 effect 经 `get_agent_transport` 预填当前值，因此打开即回显原配置。
           只留两种：兼容模式(subprocess) / ACP；http(在线API) 与 内嵌Web 各有专属入口，不列
@@ -604,57 +655,6 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           )}
         </div>
       )}
-
-      <div className="grid grid-cols-2 gap-2 mb-4">
-        <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
-        <FormField label="配置版本号（非Agent版本号）" value={form.version || ''} onChange={(v) => {
-          // 只允许数字和点
-          const cleaned = v.replace(/[^\d.]/g, '');
-          onChange({ ...form, version: cleaned });
-        }} placeholder="如 1.0（留空则默认空）" />
-      </div>
-
-      {/* 基础信息 */}
-      <div>
-        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
-          <Info size={11} style={{ color: 'var(--accent)' }} />
-          <span>基础信息</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <FormField
-            label="Agent标识（不可重复）"
-            value={form.agentType || ''}
-            onChange={(v) => onChange({ ...form, agentType: v })}
-            placeholder="如 claude-code"
-            readOnly={mode === 'edit'}
-          />
-          <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="如 Claude Code" />
-        </div>
-        <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="如 Anthropic 官方 CLI Agent，支持多文件编辑" />
-        {/* 命令不再作为独立字段：兼容模式由「运行命令模板」决定实际执行，
-            ACP 由「接入方式」区的 command + args 决定；安装/版本规格统一由市集下发。 */}
-        {(form.transport || 'subprocess') === 'acp' && (
-          <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-            ACP 接入方式的命令请在「接入方式」区填写（command + args），此处无需 CLI 命令。
-          </div>
-        )}
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
-          <div className="flex gap-2 items-end">
-            <div className="flex-1">
-              <FormField label="图标（支持 Emoji / 图片 URL / 内置图标文件）" value={form.icon || ''} onChange={(v) => onChange({ ...form, icon: v })} placeholder="留空则使用名称首字符" />
-            </div>
-            <button
-              onClick={handleUploadIcon}
-              className="px-2 py-1.5 rounded-lg text-xs outline-none shrink-0"
-              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-              title="选择本地图片作为图标"
-            >
-              <Upload size={11} />
-            </button>
-          </div>
-        </div>
-      </div>
 
       {/* ── 以下整段是**本地 CLI（兼容模式）专属**：选了 ACP 就整体隐藏 ──
           ACP 自描述（连接靠 command/args 建立），包名/输出解析/session id/技能目录都不适用。 */}
