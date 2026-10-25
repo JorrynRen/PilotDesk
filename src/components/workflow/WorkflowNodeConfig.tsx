@@ -12,6 +12,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { usePluginStore, pluginCommands, findPluginCommand, commandParamKeys, pluginSupportsWorkflow, applyCommandParamDefaults } from '../../stores/pluginStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { isWorkflowSession } from '../../utils/sessionType';
@@ -1163,10 +1164,16 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const paramsRef = useRef<Record<string, unknown>>(node.params || {});
   /** 已同步过参数的节点 id：用来跳过"首次挂载那次多余的同步"（见下面的 effect） */
   const syncedNodeIdRef = useRef<string>(node.id);
-  const { getEnabledAgentTypes, getDisplayName, loading: agentsLoading } = useAgentRegistry();
+  const { getEnabledAgentTypes, getDisplayName, getTransport, loading: agentsLoading } = useAgentRegistry();
+  const { envInfo } = useEnvInfo();
   const enabledAgentTypes = getEnabledAgentTypes();
-  /** CLI 类 Agent（除 api 以外的可用类型）：Agent 节点二级菜单的 CLI 分支 */
-  const cliAgentTypes = enabledAgentTypes.filter((t) => t !== 'api');
+  /** CLI 类 Agent（除 api 以外的可用类型）：Agent 节点二级菜单的 CLI 分支。
+   *  环境检测判定不可用的 ACP 不再提供选择（选中后运行时必然失败）；
+   *  已存该类型的旧节点仍由下拉以「当前不可用」保留原值展示。 */
+  const cliAgentTypes = enabledAgentTypes.filter((t) => {
+    if (t === 'api') return false;
+    return getTransport(t) !== 'acp' || envInfo?.agentHealth?.[t]?.available !== false;
+  });
   /** Agent 节点一级菜单的取值：agent_type 是唯一事实源，api 单独一类 */
   const agentKind: 'cli' | 'api' = params.agent_type === 'api' ? 'api' : 'cli';
   const { definitions, loadDefinitions } = useWorkflowStore();

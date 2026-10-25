@@ -16,6 +16,7 @@ import { useGroupChatStore } from '../stores/groupChatStore';
 import { confirmDialog } from '../stores/confirmStore';
 import { useApiProviderStore } from '../stores/apiProviderStore';
 import { useAgentRegistry } from '../hooks/useAgentRegistry';
+import { useEnvInfo } from '../hooks/useEnvInfo';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import { useImagePreviewStore } from '../stores/imagePreviewStore';
@@ -299,7 +300,8 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
   const loadRooms = useGroupChatStore((s) => s.loadRooms);
   const selectRoom = useGroupChatStore((s) => s.selectRoom);
   const { providers, fetchProviders } = useApiProviderStore();
-  const { agents } = useAgentRegistry();
+  const { agents, getTransport } = useAgentRegistry();
+  const { envInfo } = useEnvInfo();
 
   const [title, setTitle] = useState('');
   const [topic, setTopic] = useState('');
@@ -317,9 +319,16 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
     fetchProviders();
   }, [fetchProviders]);
 
+  // 可选 CLI Agent：除 api 外、已启用的，且环境检测未判定不可用。
+  // ACP 被判定不可用（适配器没装 / 宿主 Agent 未登录）时选进来也跑不起来，
+  // 圆桌要到运行时才报错，所以在这里先滤掉——原因可在「设置 › 环境检测」看到。
   const cliAgents = useMemo(
-    () => agents.filter((a) => a.agentType !== 'api' && a.isEnabled),
-    [agents],
+    () => agents.filter((a) => {
+      if (a.agentType === 'api' || !a.isEnabled) return false;
+      return getTransport(a.agentType) !== 'acp'
+        || envInfo?.agentHealth?.[a.agentType]?.available !== false;
+    }),
+    [agents, getTransport, envInfo],
   );
 
   const modelsOf = (providerId: string) =>
@@ -614,12 +623,12 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
             value={outputDir}
             onChange={(e) => setOutputDir(e.target.value)}
             placeholder="留空=默认 <工作目录>/outputs/<圆桌标题>/"
-            className="w-62 rounded-md px-2 py-1 text-[11px] outline-none"
+            className="w-62 rounded-md px-2 py-1.5 text-xs outline-none"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
           />
           <button
             type="button"
-            className="px-2 py-1 rounded-md text-[11px] shrink-0"
+            className="px-2 py-1.5 rounded-md text-xs shrink-0"
             style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
             onClick={async () => {
               const sel = await openDialog({ directory: true, multiple: false, title: '选择产物目录' });
@@ -629,8 +638,14 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
             选择
           </button>
           <div className="flex-1" />
-          <button className="pd-btn pd-btn-sm" onClick={onClose} style={{ color: 'var(--text-secondary)' }}>取消</button>
-          <button className="pd-btn pd-btn-sm pd-btn-primary" onClick={submit} disabled={submitting}>
+          <button className="pd-btn px-3 py-1.5 text-xs rounded" onClick={onClose} style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>取消</button>
+          <button
+            className="pd-btn pd-btn-primary px-3 py-1.5 text-xs rounded"
+            /* 主按钮补 1px 边框：否则 auto 高度下会比「取消」矮 2px */
+            style={{ border: '1px solid var(--accent)' }}
+            onClick={submit}
+            disabled={submitting}
+          >
             {submitting ? '创建中…' : '创建并进入'}
           </button>
         </div>
@@ -642,7 +657,8 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
 function AddParticipantModal({ onClose }: { onClose: () => void }) {
   const addParticipant = useGroupChatStore((s) => s.addParticipant);
   const { providers, fetchProviders } = useApiProviderStore();
-  const { agents } = useAgentRegistry();
+  const { agents, getTransport } = useAgentRegistry();
+  const { envInfo } = useEnvInfo();
 
   const [type, setType] = useState<'api' | 'cli'>('api');
   const [displayName, setDisplayName] = useState('');
@@ -657,9 +673,14 @@ function AddParticipantModal({ onClose }: { onClose: () => void }) {
     fetchProviders();
   }, [fetchProviders]);
 
+  // 与「新建圆桌」同一口径：不可用的 ACP 不给选（原因见环境检测）
   const cliAgents = useMemo(
-    () => agents.filter((a) => a.agentType !== 'api' && a.isEnabled),
-    [agents],
+    () => agents.filter((a) => {
+      if (a.agentType === 'api' || !a.isEnabled) return false;
+      return getTransport(a.agentType) !== 'acp'
+        || envInfo?.agentHealth?.[a.agentType]?.available !== false;
+    }),
+    [agents, getTransport, envInfo],
   );
   const modelsOf = (providerId: string) =>
     providers.find((p) => p.id === providerId)?.models ?? [];

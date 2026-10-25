@@ -620,7 +620,9 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
           <button
             onClick={handleConfirm}
             className="pd-btn px-4 py-1.5 text-xs rounded flex items-center gap-1.5"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+            /* 与「取消」保持同高：对方有 1px 边框，这里必须补一条同色边框，
+               否则 auto 高度下主按钮会比次按钮矮 2px */
+            style={{ backgroundColor: 'var(--accent)', color: '#fff', border: '1px solid var(--accent)' }}
           >
             {mode === 'create' ? <Plus size={14} /> : <Settings size={14} />}
             {mode === 'create' ? '创建' : '保存'}

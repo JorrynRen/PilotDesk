@@ -1113,6 +1113,8 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
           </button>
           <button
             className="pd-btn pd-btn-primary px-3 py-1.5 text-xs rounded transition-colors"
+            /* 主按钮补 1px 边框：否则 auto 高度下会比左侧「取消」矮 2px */
+            style={{ border: '1px solid var(--accent)' }}
             disabled={creating || loading || !!previewError || !plan || submitTasks.length === 0}
             onClick={handleCreate}
             title={submitTasks.length === 0 ? '至少保留一个任务' : '创建后自动进入该圆桌'}
