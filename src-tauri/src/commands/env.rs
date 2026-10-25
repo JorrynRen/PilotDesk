@@ -60,12 +60,44 @@ pub(crate) async fn probe_command_ok(
 }
 
 /// `where <cmd>` / `command -v <cmd>`：启动命令是否在 PATH 上。
+///
+/// **只适用于命令名**（`claude`、`npm`）。路径形态不能走这里：
+/// Windows 的 `where C:\path\agent.exe` 会直接报 "Invalid pattern is specified"（exit 2），
+/// 于是「已装好的二进制」会被误判成不可用。路径请用 [`probe_launch_command`]。
 pub(crate) fn resolve_command_probe(command: &str) -> String {
     if cfg!(windows) {
         format!("where {}", command)
     } else {
         format!("command -v {}", command)
     }
+}
+
+/// 启动命令是否带路径（绝对路径或含分隔符）。
+///
+/// 这类命令不查 PATH，直接判文件是否存在——下载安装的二进制（runtime 为绝对路径）
+/// 与手工指定的本地路径都属于此列。
+fn is_path_command(command: &str) -> bool {
+    let path = std::path::Path::new(command);
+    path.is_absolute() || command.contains('/') || command.contains('\\')
+}
+
+/// 探测「会话真正 spawn 的启动命令」在本机是否可用。
+///
+/// 与 [`resolve_command_probe`] 的分工：命令名查 PATH，路径形态查文件本身。
+/// 两种形态走同一入口，避免调用方各写一份判断而漂移。
+pub(crate) async fn probe_launch_command(
+    agent_mgr: &crate::agent::AgentManager,
+    command: &str,
+) -> bool {
+    // 连接参数里的命令可能带引号（路径含空格时必须加），探测前先去掉
+    let cleaned = command.trim().trim_matches('"');
+    if cleaned.is_empty() {
+        return false;
+    }
+    if is_path_command(cleaned) {
+        return std::path::Path::new(cleaned).is_file();
+    }
+    probe_command_ok(agent_mgr, &resolve_command_probe(cleaned)).await
 }
 
 /// 单个 Agent 的检测结果（版本用于列表展示，health 用于状态与门禁）。
@@ -147,7 +179,7 @@ pub(crate) async fn probe_agent(
             if via_pkg_manager && bins.is_empty() {
                 false
             } else {
-                probe_command_ok(agent_mgr, &resolve_command_probe(cmd)).await
+                probe_launch_command(agent_mgr, cmd).await
             }
         }
     };

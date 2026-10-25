@@ -1052,8 +1052,8 @@ pub async fn readiness_gate(
         ));
     }
 
-    let probe = crate::commands::env::resolve_command_probe(&cmd);
-    if crate::commands::env::probe_command_ok(agent_mgr, &probe).await {
+    // 命令名查 PATH、路径形态查文件（下载安装的 runtime 是绝对路径，`where` 探不了）
+    if crate::commands::env::probe_launch_command(agent_mgr, &cmd).await {
         None
     } else {
         Some(format!(
