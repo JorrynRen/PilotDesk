@@ -153,10 +153,13 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
    * 用「渲染期修正」而不是 effect：不可用时立刻改写状态，收敛后即不再触发，与 effect 等价。
    */
   if (showNewDialog) {
-    // ACP 自描述（命令在 conn 里），不参与"是否已安装 CLI"的检测，故不要求 installedAgents。
-    const cliTypes = getEnabledAgentTypes().filter(
-      (t) => t !== 'api' && (installedAgents.has(t) || getTransport(t) === 'acp'),
-    );
+    // ACP 自描述（命令在 conn 里），不参与"是否已安装 CLI"的检测，故不要求 installedAgents；
+    // 但环境检测已判定不可用的 ACP 不列（选中后必然失败，原因在环境检测页可见）。
+    const cliTypes = getEnabledAgentTypes().filter((t) => {
+      if (t === 'api') return false;
+      if (getTransport(t) === 'acp') return envInfo?.agentHealth?.[t]?.available !== false;
+      return installedAgents.has(t);
+    });
     const usable = newSessionType === 'api' ? apiProviders.length > 0 : cliTypes.includes(newSessionType);
     if (!usable) {
       if (apiProviders.length > 0) setNewSessionType('api');
@@ -714,10 +717,12 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             {/* 会话方式：一级「CLI Agent / API Agent」两个按钮 + 二级下拉（与 InputBar 快捷开始同构） */}
             <div className="mb-4">
               {(() => {
-                // 本地 Agent：已启用的「已安装 CLI」或 ACP（自描述、无需 CLI 检测）；API：需要有提供商
-                const cliTypes = getEnabledAgentTypes().filter(
-                  (t) => t !== 'api' && (installedAgents.has(t) || getTransport(t) === 'acp'),
-                );
+                // 本地 Agent：已启用的「已安装 CLI」或可用 ACP（自描述、无需 CLI 检测）；API：需要有提供商
+                const cliTypes = getEnabledAgentTypes().filter((t) => {
+                  if (t === 'api') return false;
+                  if (getTransport(t) === 'acp') return envInfo?.agentHealth?.[t]?.available !== false;
+                  return installedAgents.has(t);
+                });
                 const hasApi = apiProviders.length > 0;
                 if (cliTypes.length === 0 && !hasApi) {
                   return (

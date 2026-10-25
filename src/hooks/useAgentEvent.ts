@@ -4,6 +4,7 @@ import { useAgentRegistry } from './useAgentRegistry';
 import { subscribeAgentBus } from './agentEventBus';
 import type { Attachment } from '../types';
 import { errorMessage } from '../utils/errorMessage';
+import { showToast } from '../utils/toast';
 
 /**
  * useAgentEvent — 替代 useWebSocket。
@@ -123,7 +124,9 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           cwd: cwd || null,
         });
       } catch (err) {
-        console.error('[Agent] create session failed:', err);
+        // 门禁拦下的原因（未安装 / 启动命令不可用 / ACP 未登录等）必须让用户看到，
+        // 否则会话看起来"建成了"，发消息时才失败。
+        showToast(errorMessage(err), 'error');
       }
     },
     [],

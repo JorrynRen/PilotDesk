@@ -367,14 +367,16 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
 
   // ── 使用向导：Agent 集成是否已就绪（决定能否开始首次会话）──
   const providers = useApiProviderStore((s) => s.providers);
-  const { agents: registryAgents, getEnabledAgentTypes } = useAgentRegistry();
+  const { agents: registryAgents, getEnabledAgentTypes, getTransport } = useAgentRegistry();
   const { envInfo } = useEnvInfo();
   const { createAgentSession } = useAgentEvent();
   const [starting, setStarting] = useState(false);
   // API 就绪 = 有提供商已配 Key 且至少一个模型；CLI 就绪 = 有已启用且本机已安装的 CLI Agent
   const apiProvider = providers.find((p) => p.apiKeySet && p.models.length > 0);
   const cliAgentType = getEnabledAgentTypes().find(
-    (t) => (envInfo?.agentVersions?.[t] ?? null) !== null,
+    (t) => (envInfo?.agentVersions?.[t] ?? null) !== null
+      // ACP 还要求环境检测未判定不可用（未登录等握手失败时不能拿来起首次会话）
+      && (getTransport(t) !== 'acp' || envInfo?.agentHealth?.[t]?.available !== false),
   );
   const cliAgentName = registryAgents.find((a) => a.agentType === cliAgentType)?.displayName;
   const agentReady = Boolean(apiProvider) || Boolean(cliAgentType);

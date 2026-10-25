@@ -1000,19 +1000,28 @@ pub async fn readiness_gate(
 
     let cached = crate::commands::env::cached_agent_health(&config.agent_type);
     if let Some(health) = &cached {
-        if health.available {
+        // 建会话时对 ACP 现场复核一次：登录态/运行时可能刚变（也可能刚失效），
+        // 缓存只能省「发消息」的检测成本，不能当作建会话的通行证。
+        if health.available && !(deep && transport == "acp") {
             return None;
         }
-        // 消息路径直接按旧结论拦（便宜）；建会话时再重新核实一次——
-        // 用户可能刚登录/刚装好，不能拿 120s 前的结论把人挡在门外
-        if !deep {
+        // 消息路径直接按旧结论拦（便宜）
+        if !health.available && !deep {
             crate::commands::env::clear_env_cache();
             return unavailable(health.reason.clone());
         }
     }
 
-    // 需要真实判定时（建会话；ACP 或缓存已判不可用）做一次完整检测并写缓存
-    if deep && (transport == "acp" || cached.is_some()) {
+    // 需要真实判定时做一次完整检测并写缓存：
+    // - 建会话（deep）；
+    // - ACP 且还没有任何检测结论——命令在 PATH 上不等于能干活（未登录时握手才暴露），
+    //   没探测过的 ACP 一律先探再放行，不能靠轻量命令检查放过去。
+    let need_probe = if transport == "acp" {
+        deep || cached.is_none()
+    } else {
+        deep && cached.is_some()
+    };
+    if need_probe {
         let probe =
             crate::commands::env::probe_agent(agent_mgr, config, transport, conn_json).await;
         crate::commands::env::remember_agent_health(&config.agent_type, &probe.health);

@@ -726,7 +726,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
       )}
 
       {/* ── 以下整段是**本地 CLI（兼容模式）专属**：选了 ACP 就整体隐藏 ──
-          ACP 自描述（连接靠 command/args 建立），包名/输出解析/session id/技能目录都不适用。 */}
+          ACP 自描述（连接靠 command/args 建立），会话参数/输出解析/session id 都不适用；
+          技能引用配置不在本段内——ACP 也需要它（官方条目拉取时按默认值落库）。 */}
       {(form.transport || 'subprocess') === 'subprocess' && (
         <>
       {/* 包名与安装/版本命令不再手填：全部由市集下发的 lifecycle 规格决定
@@ -771,7 +772,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
         </div>
       </div>
 
-      {/* 技能引用配置 */}
+      {/* 技能引用配置：ACP 官方条目不提供这两项，拉取时按默认值落库（空目录 = ~/.{agentType}/skills/，
+          入口 = SKILL.md）；两种接入方式都允许改，方便用户指向自建的技能目录。 */}
       <div>
         <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
           <BookOpen size={11} style={{ color: 'var(--accent)' }} />

@@ -1873,7 +1873,8 @@ function resolveDeepLink(
 ): { tab: SettingsTab; sub: string | null } | null {
   if (!urlTab) return null;
   switch (urlTab) {
-    case 'environment': return { tab: 'agents', sub: 'env' };
+    // 环境检测是「运行与策略」(/settings?tab=api) 的子页签，不在「集成配置」里
+    case 'environment': return { tab: 'api', sub: 'env' };
     case 'about': return { tab: 'general', sub: 'about' };
     case 'voice': return { tab: 'api', sub: 'voice' };
     case 'mode': return { tab: 'api', sub: 'mode' };

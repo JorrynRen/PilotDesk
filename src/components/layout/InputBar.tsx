@@ -146,13 +146,16 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
   /**
    * 可用的本地 Agent 类型：已启用的「已装 CLI」或 ACP。
-   * ACP 自描述（命令在 conn 里），不参与"是否已安装 CLI"检测，否则永远选不到。
+   * ACP 自描述（命令在 conn 里），不参与"是否已安装 CLI"检测，否则永远选不到；
+   * 但环境检测已判定「不可用」的 ACP 不再列出——选中后发消息必然失败，原因在环境检测页可见。
    * 未安装的本地 CLI 仍不列，避免选中后发送即失败。
    */
   const installedClis = useMemo(
-    () => getEnabledAgentTypes().filter(
-      (t) => t !== 'api' && ((envInfo?.agentVersions?.[t] ?? null) !== null || getTransport(t) === 'acp'),
-    ),
+    () => getEnabledAgentTypes().filter((t) => {
+      if (t === 'api') return false;
+      if (getTransport(t) === 'acp') return envInfo?.agentHealth?.[t]?.available !== false;
+      return (envInfo?.agentVersions?.[t] ?? null) !== null;
+    }),
     [getEnabledAgentTypes, getTransport, envInfo],
   );
 
