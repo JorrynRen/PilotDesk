@@ -436,12 +436,10 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
-      onClick={onClose}
     >
       <div
-        className="w-[560px] max-h-[80vh] rounded-xl flex flex-col overflow-hidden"
+        className="w-[620px] max-h-[80vh] rounded-xl flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>新建圆桌</span>
@@ -623,7 +621,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
             value={outputDir}
             onChange={(e) => setOutputDir(e.target.value)}
             placeholder="留空=默认 <工作目录>/outputs/<圆桌标题>/"
-            className="w-62 rounded-md px-2 py-1.5 text-xs outline-none"
+            className="flex-1 min-w-0 rounded-md px-2 py-1.5 text-xs outline-none"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
           />
           <button
@@ -637,10 +635,13 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
           >
             选择
           </button>
-          <div className="flex-1" />
-          <button className="pd-btn px-3 py-1.5 text-xs rounded" onClick={onClose} style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>取消</button>
           <button
-            className="pd-btn pd-btn-primary px-3 py-1.5 text-xs rounded"
+            className="pd-btn px-3 py-1.5 text-xs rounded shrink-0 whitespace-nowrap"
+            onClick={onClose}
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          >取消</button>
+          <button
+            className="pd-btn pd-btn-primary px-3 py-1.5 text-xs rounded shrink-0 whitespace-nowrap"
             /* 主按钮补 1px 边框：否则 auto 高度下会比「取消」矮 2px */
             style={{ border: '1px solid var(--accent)' }}
             onClick={submit}

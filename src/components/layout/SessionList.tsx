@@ -701,12 +701,11 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
         </div>
       )}
 
-      {/* New session dialog */}
+      {/* New session dialog：遮罩不响应点击——误触外部会丢掉刚填的内容，只能走「取消 / 关闭」 */}
       {showNewDialog && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={(e) => { if (e.target === e.currentTarget) setShowNewDialog(false); }}
         >
           <div
             className="w-auto min-w-[420px] max-w-[560px] rounded-xl p-4"

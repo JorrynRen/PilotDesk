@@ -203,12 +203,10 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-      onClick={onClose}
     >
       <div
         className="w-[540px] max-h-[85vh] rounded-xl shadow-2xl flex flex-col"
         style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
