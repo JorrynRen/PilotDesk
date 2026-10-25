@@ -659,7 +659,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           </div>
         )}
         <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
+          <ColorField label="主题色" value={form.color || ''} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
           <div className="flex gap-2 items-end">
             <div className="flex-1">
               <FormField label="图标（支持 Emoji / 图片 URL / 内置图标文件）" value={form.icon || ''} onChange={(v) => onChange({ ...form, icon: v })} placeholder="留空则使用名称首字符" />
@@ -946,6 +946,46 @@ function FormField({ label, value, onChange, placeholder, readOnly }: {
     </div>
   );
 }
+/** 主题色：选色盘 + 文本，两种输入都写同一个值（支持粘贴任意 CSS 颜色） */
+function ColorField({ label, value, onChange, placeholder }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  // 原生选色器只认 #rrggbb：非该格式时用兜底色，避免选色盘显示成纯黑
+  const pickerValue = /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#6366F1';
+  return (
+    <div>
+      <label className="block text-[10px] mb-0.5" style={{ color: 'var(--text-secondary)' }}>{label}</label>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="color"
+          value={pickerValue}
+          onChange={(e) => onChange(e.target.value)}
+          className="rounded-lg cursor-pointer shrink-0"
+          style={{
+            width: 28,
+            height: 28,
+            padding: 2,
+            backgroundColor: 'var(--bg-primary)',
+            border: '1px solid var(--border)',
+          }}
+          title="选择主题色"
+        />
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+          style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function SelectField({ label, value, onChange, options }: {
   label: string;
   value: string;

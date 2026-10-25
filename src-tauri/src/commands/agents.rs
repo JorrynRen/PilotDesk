@@ -63,10 +63,31 @@ pub fn export_agents_json(
 ) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     let agents = list_agents_inner(&conn)?;
-    // 使用与 Agent 市场一致的格式：{ version: 1, agents: [...] }
+    let mut exported = Vec::with_capacity(agents.len());
+    for agent in agents {
+        let mut value = serde_json::to_value(&agent)
+            .map_err(|e| AppError::External(format!("JSON 序列化失败: {}", e)))?;
+        if let Some(obj) = value.as_object_mut() {
+            // 本机安装状态不属于配置：换台机器导入后应由环境检测重新判定，
+            // 直接搬过去会出现「显示已就绪、实际没装」。
+            obj.remove("pkgState");
+            // 接入方式与连接参数在独立列（不在 AgentConfig 里），不带上就会把
+            // ACP 配置导出成兼容模式；conn 以原始 JSON 导出，便于人工查看。
+            if let Ok(info) = get_agent_transport_inner(&conn, &agent.agent_type) {
+                obj.insert("transport".to_string(), serde_json::json!(info.transport));
+                if let Some(raw) = info.conn.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    let parsed = serde_json::from_str(raw)
+                        .unwrap_or_else(|_| serde_json::json!(raw));
+                    obj.insert("conn".to_string(), parsed);
+                }
+            }
+        }
+        exported.push(value);
+    }
+    // 与 Agent 市场一致的格式：{ version: 2, agents: [...] }（v2 起条目带 transport）
     let output = serde_json::json!({
-        "version": 1,
-        "agents": agents
+        "version": 2,
+        "agents": exported
     });
     let json = serde_json::to_string_pretty(&output)
         .map_err(|e| AppError::External(format!("JSON 序列化失败: {}", e)))?;
@@ -84,30 +105,51 @@ pub fn import_agents_json(
     let json = std::fs::read_to_string(&file_path)
         .map_err(|e| AppError::External(format!("读取文件失败: {}", e)))?;
 
-    // 兼容两种格式：{ version: 1, agents: [...] } 或 [...]（旧格式）
+    // 兼容两种格式：{ version: 2, agents: [...] } 或 [...]（旧格式）
     let mut delete_targets: Vec<String> = Vec::new();
-    let imported: Vec<AgentConfig> = {
-        // 先尝试解析为包装格式
-        if let Ok(wrapped) = serde_json::from_str::<serde_json::Value>(&json) {
-            // 提取顶层 __action 删除列表（隐藏功能：删除任意 Agent，包括内置 Agent）
-            if let Some(action_list) = wrapped.get("__action").and_then(|a| a.as_array()) {
-                for item in action_list {
-                    if let Some(s) = item.as_str() {
-                        delete_targets.push(s.to_string());
-                    }
+    // 每条保留原始 JSON：transport / conn 不在 AgentConfig 里，落库要单独取
+    let imported: Vec<(AgentConfig, Option<String>, Option<String>)> = {
+        let wrapped = serde_json::from_str::<serde_json::Value>(&json)
+            .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?;
+        // 提取顶层 __action 删除列表（隐藏功能：删除任意 Agent，包括内置 Agent）
+        if let Some(action_list) = wrapped.get("__action").and_then(|a| a.as_array()) {
+            for item in action_list {
+                if let Some(s) = item.as_str() {
+                    delete_targets.push(s.to_string());
                 }
             }
-            if let Some(agents) = wrapped.get("agents").and_then(|a| a.as_array()) {
-                serde_json::from_value(serde_json::Value::Array(agents.clone()))
-                    .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?
-            } else {
-                serde_json::from_str(&json)
-                    .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?
-            }
-        } else {
-            serde_json::from_str(&json)
-                .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?
         }
+        let items = match wrapped.get("agents").and_then(|a| a.as_array()) {
+            Some(agents) => agents.clone(),
+            None => match &wrapped {
+                serde_json::Value::Array(agents) => agents.clone(),
+                _ => {
+                    return Err(AppError::InvalidInput(
+                        "JSON 解析失败: 需要 { agents: [...] } 或数组".to_string(),
+                    ))
+                }
+            },
+        };
+        items
+            .into_iter()
+            .map(|item| {
+                let agent: AgentConfig = serde_json::from_value(item.clone())
+                    .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?;
+                let transport = item
+                    .get("transport")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                // conn 允许导出成对象或字符串两种形态
+                let conn_json = item.get("conn").and_then(|v| match v {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(s) if s.trim().is_empty() => None,
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    other => Some(other.to_string()),
+                });
+                Ok((agent, transport, conn_json))
+            })
+            .collect::<Result<Vec<_>, AppError>>()?
     };
 
     let mut success = 0u32;
@@ -130,7 +172,7 @@ pub fn import_agents_json(
         }
     }
 
-    for agent in &imported {
+    for (agent, transport, conn_json) in &imported {
         // __action 中已删除的 Agent，跳过 agents 数组中的对应条目，避免先删后加
         if delete_targets.contains(&agent.agent_type) {
             continue;
@@ -147,7 +189,8 @@ pub fn import_agents_json(
                 display_name: agent.display_name.clone(),
                 description: Some(agent.description.clone()),
                 lifecycle: agent.lifecycle.clone(),
-                pkg_state: agent.pkg_state.clone(),
+                // 本机安装状态不跨机器搬运：新行留空，由环境检测重新判定
+                pkg_state: None,
                 dist_source: agent.dist_source.clone(),
                 run_cmd_template: Some(agent.run_cmd_template.clone()),
                 output_parser: Some(agent.output_parser.clone()),
@@ -177,7 +220,8 @@ pub fn import_agents_json(
                         display_name: Some(agent.display_name.clone()),
                         description: Some(agent.description.clone()),
                         lifecycle: agent.lifecycle.clone(),
-                        pkg_state: agent.pkg_state.clone(),
+                        // None = 保留本机原有的安装状态
+                        pkg_state: None,
                         dist_source: agent.dist_source.clone(),
                         run_cmd_template: Some(agent.run_cmd_template.clone()),
                         output_parser: Some(agent.output_parser.clone()),
@@ -200,6 +244,13 @@ pub fn import_agents_json(
                     Ok(_) => success += 1,
                     Err(e) => errors.push(format!("{}: {}", agent.agent_type, e)),
                 }
+            }
+        }
+        // 接入方式与连接参数在独立列：配置本体落库后再写，失败只影响该条
+        if let Some(t) = transport {
+            if let Err(e) = set_agent_transport_inner(&conn, &agent.agent_type, t, conn_json.as_deref())
+            {
+                errors.push(format!("{}: 接入方式写入失败 - {}", agent.agent_type, e));
             }
         }
     }
