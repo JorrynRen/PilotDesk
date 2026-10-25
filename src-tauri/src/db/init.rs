@@ -12,7 +12,13 @@ use std::fs;
 ///
 /// v10：物理移除旧表 `api_providers`——其数据已并入 `agents(transport='http')` + `agent_secrets`，
 /// 终态脚本不再建该表；存量库在迁移时先一次性回填、再 `DROP`（见 `backfill_api_providers_into_agents`）。
-pub const SCHEMA_VERSION: i64 = 10;
+///
+/// v11：agents 生命周期收敛为 JSON 三列——`lifecycle_json`（安装/运行时规格）、
+/// `pkg_state_json`（本地安装状态与 bin 解析结果）、`dist_source_json`（市场来源）。
+/// 原扁平列（cli_command/npm_package/pip_package/install_cmd/uninstall_cmd/update_cmd/
+/// version_cmd/latest_version_cmd/version_pattern）自本版起不再写入；存量库保留这些列
+/// （SQLite 删列代价高且无收益），仅停止读写。
+pub const SCHEMA_VERSION: i64 = 11;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -23,19 +29,16 @@ CREATE TABLE IF NOT EXISTS agents (
             agent_type TEXT PRIMARY KEY,
             display_name TEXT NOT NULL DEFAULT '',
             description TEXT NOT NULL DEFAULT '',
-            cli_command TEXT NOT NULL DEFAULT '',
-            npm_package TEXT,
-            pip_package TEXT,
-            version_flag TEXT NOT NULL DEFAULT '--version',
-            install_cmd TEXT NOT NULL DEFAULT '',
-            uninstall_cmd TEXT NOT NULL DEFAULT '',
-            update_cmd TEXT NOT NULL DEFAULT '',
-            version_cmd TEXT NOT NULL DEFAULT '',
-            latest_version_cmd TEXT NOT NULL DEFAULT '',
+            -- v11：生命周期收敛为 JSON（见 agent/lifecycle.rs）。
+            -- lifecycle_json：安装/更新/卸载/版本探测命令的派生依据 + 运行时启动规格；
+            -- pkg_state_json：本地安装状态（pending_install/ready/failed）与 bin 解析结果；
+            -- dist_source_json：该配置从何而来（官方 ACP 目录 / 内置预置 / 手工新建）。
+            lifecycle_json TEXT,
+            pkg_state_json TEXT,
+            dist_source_json TEXT,
             run_cmd_template TEXT NOT NULL DEFAULT '',
             output_parser TEXT NOT NULL DEFAULT 'raw-text',
             output_filter_regex TEXT NOT NULL DEFAULT '',
-            version_pattern TEXT NOT NULL DEFAULT 'v?(\d+\.\d+\.\d+[\w.-]*)',
             supports_session_continuity INTEGER NOT NULL DEFAULT 0,
             session_id_source TEXT NOT NULL DEFAULT 'none',
             session_id_event_type TEXT NOT NULL DEFAULT '',
@@ -334,86 +337,10 @@ pub fn init_db() -> Result<DbPool, AppError> {
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
     let now = crate::utils::now();
 
-    // Agent 种子数据
-    let agent_seeds: Vec<(&str, &str, &str, &str, Option<&str>, Option<&str>, &str, &str, &str, &str, &str, &str, &str, &str, i64, &str, &str, &str, &str, &str, &str, &str, &str, i64)> = vec![
-        ("claude", "Claude Code", "Anthropic 官方 AI 编程助手，支持代码生成、调试、重构",
-         "claude", Some("@anthropic-ai/claude-code"), None,
-         "npm install -g @anthropic-ai/claude-code",
-         "npm uninstall -g @anthropic-ai/claude-code",
-         "claude update",
-         "claude --version",
-         "npm view @anthropic-ai/claude-code version",
-         "claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
-         "json-stream", "", 1, "stdout-json", "system", "session_id", "claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
-         "~/.claude/skills/", "collection", "#3B82F6", "file:claude_icon.ico", 2),
-        ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
-         "codex", Some("@openai/codex"), None,
-         "npm install -g @openai/codex",
-         "npm uninstall -g @openai/codex",
-         "codex update",
-         "codex --version",
-         "npm view @openai/codex version",
-         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
-         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
-         "~/.codex/skills/", "collection", "#F59E0B", "file:codex_icon.ico", 3),
-        ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
-         "hermes", None, Some("hermes-agent"),
-         "pip install hermes-agent",
-         "pip uninstall hermes-agent -y",
-         "hermes update",
-         "hermes --version",
-         "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version",
-         "hermes chat --query={message} -Q",
-         "ansi-text",
-         "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
-         "stderr-text", "", "session_id: ", "hermes --resume {session_id} chat --query={message} -Q",
-         "~/AppData/Local/hermes/skills/", "collection", "#8B5CF6", "file:hermes_icon.ico", 1),
-    ];
+    // Agent 不再硬编码预置：预置项（官方 ACP 目录缺失的条目 + CLI 条目）统一由
+    // 「资源市集 › Agent 市集」下发（server/market/agents-config.json + ACP 官方目录），
+    // 用户「获取」时才落库。这样新增/修正预置不需要发版。
 
-    for (
-        agent_type,
-        display_name,
-        description,
-        cli_command,
-        npm_package,
-        pip_package,
-        install_cmd,
-        uninstall_cmd,
-        update_cmd,
-        version_cmd,
-        latest_version_cmd,
-        run_cmd_template,
-        output_parser,
-        output_filter_regex,
-        supports_session_continuity,
-        session_id_source,
-        session_id_event_type,
-        session_id_field,
-        resume_arg_template,
-        skills_dir,
-        skill_display_mode,
-        color,
-        icon,
-        sort_order,
-    ) in agent_seeds
-    {
-        conn.execute(
-            "INSERT OR IGNORE INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
-             install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-             output_parser, output_filter_regex, version_pattern, supports_session_continuity,
-             session_id_source, session_id_event_type, session_id_field, resume_arg_template,
-             skills_dir, skill_entry_file, skill_display_mode,
-             color, icon, sort_order, is_enabled, is_builtin, version, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, 'SKILL.md', ?21, ?22, ?23, ?24, 1, 1, '1.0', ?25, ?25)",
-            rusqlite::params![agent_type, display_name, description, cli_command, npm_package, pip_package,
-                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-                output_parser, output_filter_regex, supports_session_continuity,
-                session_id_source, session_id_event_type, session_id_field, resume_arg_template,
-                skills_dir, skill_display_mode,
-                color, icon, sort_order, now],
-        )?;
-    }
 
     // App Settings 种子数据
     let workspace_default = crate::utils::paths::app_root_dir()
@@ -528,6 +455,11 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
         // 用来判断"这条是否已导入"、再导入时做覆盖更新。用户自己新建的灵感为 NULL。
         // 没有它就只能靠标题比对，改个标题就认不出来，会反复导进重复条目。
         ensure_column(conn, "inspirations", "market_id", "TEXT")?;
+        // v10 → v11：Agent 生命周期 JSON 三列。存量库保留旧扁平列（只停读写），
+        // 这里只补新列；历史行三列均为 NULL，由前端按「未就绪」提示重新从市集获取。
+        ensure_column(conn, "agents", "lifecycle_json", "TEXT")?;
+        ensure_column(conn, "agents", "pkg_state_json", "TEXT")?;
+        ensure_column(conn, "agents", "dist_source_json", "TEXT")?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     Ok(())
@@ -638,9 +570,9 @@ pub fn backfill_api_providers_into_agents(conn: &Connection) -> Result<(), AppEr
 
         conn.execute(
             "INSERT OR IGNORE INTO agents
-                (agent_type, display_name, description, cli_command, transport, conn, secret_ref,
+                (agent_type, display_name, description, transport, conn, secret_ref,
                  sort_order, created_at, updated_at)
-             VALUES (?1, ?2, '', '', 'http', ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, '', 'http', ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 format!("api:{}", id),
                 name,

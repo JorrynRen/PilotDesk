@@ -356,9 +356,9 @@ pub fn upsert_api_provider(
 
     conn.execute(
         "INSERT INTO agents
-            (agent_type, display_name, description, cli_command,
+            (agent_type, display_name, description,
              transport, conn, secret_ref, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, '', '', 'http', ?3, ?4, ?5, ?6, ?6)
+         VALUES (?1, ?2, '', 'http', ?3, ?4, ?5, ?6, ?6)
          ON CONFLICT(agent_type) DO UPDATE SET
             display_name = ?2, conn = ?3, secret_ref = ?4, sort_order = ?5, updated_at = ?6",
         params![agent_type, data.name, conn_json, secret_id, sort_order, now],

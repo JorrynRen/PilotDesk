@@ -501,6 +501,16 @@ impl AgentSession for AcpSession {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // 适配器要求的环境变量（官方目录 npx 条目可能带，如禁用自更新）：
+        // 在 conn 里以 `env` 对象保存，启动时注入。
+        if let Some(env) = conn.conn["env"].as_object() {
+            for (k, v) in env {
+                if let Some(s) = v.as_str() {
+                    cmd.env(k, s);
+                }
+            }
+        }
         let mut child = cmd
             .spawn()
             .map_err(|e| AgentError::Connect(format!("启动 ACP 进程失败: {}", e)))?;

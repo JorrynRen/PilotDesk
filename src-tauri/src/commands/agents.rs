@@ -135,10 +135,7 @@ pub fn import_agents_json(
         if delete_targets.contains(&agent.agent_type) {
             continue;
         }
-        if agent.agent_type.is_empty()
-            || agent.display_name.is_empty()
-            || agent.cli_command.is_empty()
-        {
+        if agent.agent_type.is_empty() || agent.display_name.is_empty() {
             errors.push(format!("跳过无效配置: {}", agent.display_name));
             continue;
         }
@@ -149,18 +146,12 @@ pub fn import_agents_json(
                 agent_type: agent.agent_type.clone(),
                 display_name: agent.display_name.clone(),
                 description: Some(agent.description.clone()),
-                cli_command: Some(agent.cli_command.clone()),
-                npm_package: agent.npm_package.clone(),
-                pip_package: agent.pip_package.clone(),
-                install_cmd: Some(agent.install_cmd.clone()),
-                uninstall_cmd: Some(agent.uninstall_cmd.clone()),
-                update_cmd: Some(agent.update_cmd.clone()),
-                version_cmd: Some(agent.version_cmd.clone()),
-                latest_version_cmd: Some(agent.latest_version_cmd.clone()),
+                lifecycle: agent.lifecycle.clone(),
+                pkg_state: agent.pkg_state.clone(),
+                dist_source: agent.dist_source.clone(),
                 run_cmd_template: Some(agent.run_cmd_template.clone()),
                 output_parser: Some(agent.output_parser.clone()),
                 output_filter_regex: Some(agent.output_filter_regex.clone()),
-                version_pattern: Some(agent.version_pattern.clone()),
                 supports_session_continuity: Some(agent.supports_session_continuity),
                 session_id_source: Some(agent.session_id_source.clone()),
                 session_id_event_type: Some(agent.session_id_event_type.clone()),
@@ -185,18 +176,12 @@ pub fn import_agents_json(
                         agent_type: agent.agent_type.clone(),
                         display_name: Some(agent.display_name.clone()),
                         description: Some(agent.description.clone()),
-                        cli_command: Some(agent.cli_command.clone()),
-                        npm_package: agent.npm_package.clone(),
-                        pip_package: agent.pip_package.clone(),
-                        install_cmd: Some(agent.install_cmd.clone()),
-                        uninstall_cmd: Some(agent.uninstall_cmd.clone()),
-                        update_cmd: Some(agent.update_cmd.clone()),
-                        version_cmd: Some(agent.version_cmd.clone()),
-                        latest_version_cmd: Some(agent.latest_version_cmd.clone()),
+                        lifecycle: agent.lifecycle.clone(),
+                        pkg_state: agent.pkg_state.clone(),
+                        dist_source: agent.dist_source.clone(),
                         run_cmd_template: Some(agent.run_cmd_template.clone()),
                         output_parser: Some(agent.output_parser.clone()),
                         output_filter_regex: Some(agent.output_filter_regex.clone()),
-                        version_pattern: Some(agent.version_pattern.clone()),
                         supports_session_continuity: Some(agent.supports_session_continuity),
                         session_id_source: Some(agent.session_id_source.clone()),
                         session_id_event_type: Some(agent.session_id_event_type.clone()),
@@ -342,46 +327,55 @@ pub fn read_agent_icon(
 // ──────────────────────────────────────────────
 
 const SELECT_COLS: &str =
-    "agent_type, display_name, description, cli_command, npm_package, pip_package,
-    install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-    output_parser, output_filter_regex, version_pattern, supports_session_continuity,
+    "agent_type, display_name, description, lifecycle_json, pkg_state_json, dist_source_json,
+    run_cmd_template, output_parser, output_filter_regex, supports_session_continuity,
     session_id_source, session_id_event_type, session_id_field, resume_arg_template,
     skills_dir, skill_entry_file, skill_display_mode,
     color, icon, sort_order, is_enabled, is_builtin, version, created_at, updated_at";
+
+/// JSON 列的宽松解析：内容损坏时按缺失处理（不能因为一行脏数据让整个列表读不出来）。
+fn parse_json_column<T: serde::de::DeserializeOwned>(raw: Option<String>) -> Option<T> {
+    raw.and_then(|s| {
+        if s.trim().is_empty() {
+            None
+        } else {
+            serde_json::from_str::<T>(&s).ok()
+        }
+    })
+}
+
+/// 可空 JSON 列序列化：`None` 落 NULL（不写 "null" 字符串）。
+fn to_json_column<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
+    v.as_ref().and_then(|x| serde_json::to_string(x).ok())
+}
 
 fn row_to_agent(row: &rusqlite::Row) -> rusqlite::Result<AgentConfig> {
     Ok(AgentConfig {
         agent_type: row.get(0)?,
         display_name: row.get(1)?,
         description: row.get(2)?,
-        cli_command: row.get(3)?,
-        npm_package: row.get(4)?,
-        pip_package: row.get(5)?,
-        install_cmd: row.get(6)?,
-        uninstall_cmd: row.get(7)?,
-        update_cmd: row.get(8)?,
-        version_cmd: row.get(9)?,
-        latest_version_cmd: row.get(10)?,
-        run_cmd_template: row.get(11)?,
-        output_parser: row.get(12)?,
-        output_filter_regex: row.get(13)?,
-        version_pattern: row.get(14)?,
-        supports_session_continuity: row.get::<_, i64>(15)? != 0,
-        session_id_source: row.get(16)?,
-        session_id_event_type: row.get(17)?,
-        session_id_field: row.get(18)?,
-        resume_arg_template: row.get(19)?,
-        skills_dir: row.get(20)?,
-        skill_entry_file: row.get(21)?,
-        skill_display_mode: row.get(22)?,
-        color: row.get(23)?,
-        icon: row.get(24)?,
-        sort_order: row.get(25)?,
-        is_enabled: row.get::<_, i64>(26)? != 0,
-        is_builtin: row.get::<_, i64>(27)? != 0,
-        version: row.get(28)?,
-        created_at: row.get(29)?,
-        updated_at: row.get(30)?,
+        lifecycle: parse_json_column(row.get(3)?),
+        pkg_state: parse_json_column(row.get(4)?),
+        dist_source: parse_json_column(row.get(5)?),
+        run_cmd_template: row.get(6)?,
+        output_parser: row.get(7)?,
+        output_filter_regex: row.get(8)?,
+        supports_session_continuity: row.get::<_, i64>(9)? != 0,
+        session_id_source: row.get(10)?,
+        session_id_event_type: row.get(11)?,
+        session_id_field: row.get(12)?,
+        resume_arg_template: row.get(13)?,
+        skills_dir: row.get(14)?,
+        skill_entry_file: row.get(15)?,
+        skill_display_mode: row.get(16)?,
+        color: row.get(17)?,
+        icon: row.get(18)?,
+        sort_order: row.get(19)?,
+        is_enabled: row.get::<_, i64>(20)? != 0,
+        is_builtin: row.get::<_, i64>(21)? != 0,
+        version: row.get(22)?,
+        created_at: row.get(23)?,
+        updated_at: row.get(24)?,
     })
 }
 
@@ -404,24 +398,20 @@ pub fn list_agents_inner(conn: &Connection) -> Result<Vec<AgentConfig>, AppError
 }
 
 /// 公开的 Agent 配置查询函数（供其他模块使用）
+///
+/// 只给「没有 DB 上下文」的调用方一个可用的兜底对象：无生命周期规格、无包状态，
+/// 即按手工配置处理（视为就绪）。需要严格判定的调用方应改用 DB 查询。
 pub fn get_agent_config_by_type(agent_type: &str) -> Option<AgentConfig> {
-    // 返回默认配置，避免依赖数据库连接
     Some(AgentConfig {
         agent_type: agent_type.to_string(),
         display_name: agent_type.to_string(),
         description: String::new(),
-        cli_command: agent_type.to_string(),
-        npm_package: None,
-        pip_package: None,
-        install_cmd: String::new(),
-        uninstall_cmd: String::new(),
-        update_cmd: String::new(),
-        version_cmd: format!("{} --version", agent_type),
-        latest_version_cmd: String::new(),
+        lifecycle: None,
+        pkg_state: None,
+        dist_source: None,
         run_cmd_template: String::new(),
         output_parser: "raw-text".to_string(),
         output_filter_regex: String::new(),
-        version_pattern: String::new(),
         supports_session_continuity: false,
         session_id_source: String::new(),
         session_id_event_type: String::new(),
@@ -464,25 +454,21 @@ pub fn add_agent_inner(
 ) -> Result<AgentConfig, AppError> {
     let now_ts = now();
     let description = payload.description.unwrap_or_default();
-    // CLI 命令可选：ACP 等不需要 CLI 的接入方式会缺省该字段，缺省按空串落库。
-    let cli_command = payload.cli_command.clone().unwrap_or_default();
-    let install_cmd = payload.install_cmd.unwrap_or_default();
-    let uninstall_cmd = payload.uninstall_cmd.unwrap_or_default();
-    let update_cmd = payload.update_cmd.unwrap_or_default();
-    let version_cmd = payload
-        .version_cmd
-        .unwrap_or_else(|| format!("{} --version", cli_command));
-    let latest_version_cmd = payload.latest_version_cmd.unwrap_or_default();
-    let run_cmd_template = payload
-        .run_cmd_template
-        .unwrap_or_else(|| format!("{} {{message}}", cli_command));
+    let lifecycle = payload.lifecycle;
+    let pkg_state = payload.pkg_state;
+    let dist_source = payload.dist_source;
+    // 兼容模式默认命令模板：取运行时 command + {message}
+    let run_cmd_template = payload.run_cmd_template.unwrap_or_else(|| {
+        lifecycle
+            .as_ref()
+            .and_then(|l| l.resolved_runtime(&Default::default()))
+            .map(|rt| format!("{} {{message}}", rt.command))
+            .unwrap_or_else(|| "{message}".to_string())
+    });
     let output_parser = payload
         .output_parser
         .unwrap_or_else(|| "raw-text".to_string());
     let output_filter_regex = payload.output_filter_regex.unwrap_or_default();
-    let version_pattern = payload
-        .version_pattern
-        .unwrap_or_else(|| r"v?(\d+\.\d+\.\d+[\w.-]*)".to_string());
     let supports_session_continuity = if payload.supports_session_continuity.unwrap_or(false) {
         1
     } else {
@@ -512,21 +498,36 @@ pub fn add_agent_inner(
     };
 
     conn.execute(
-        "INSERT INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
-         install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-         output_parser, output_filter_regex, version_pattern, supports_session_continuity,
+        "INSERT INTO agents (agent_type, display_name, description, lifecycle_json, pkg_state_json, dist_source_json,
+         run_cmd_template, output_parser, output_filter_regex, supports_session_continuity,
          session_id_source, session_id_event_type, session_id_field, resume_arg_template,
          skills_dir, skill_entry_file, skill_display_mode,
          color, icon, sort_order, is_enabled, is_builtin, version, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, 0, ?28, ?29, ?29)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, 0, ?22, ?23, ?23)",
         params![
-            payload.agent_type, payload.display_name, description, cli_command,
-            payload.npm_package, payload.pip_package,
-            install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-            output_parser, output_filter_regex, version_pattern, supports_session_continuity,
-            session_id_source, session_id_event_type, session_id_field, resume_arg_template,
-            skills_dir, skill_entry_file, skill_display_mode,
-            color, icon, sort_order, is_enabled, version, now_ts
+            payload.agent_type,
+            payload.display_name,
+            description,
+            to_json_column(&lifecycle),
+            to_json_column(&pkg_state),
+            to_json_column(&dist_source),
+            run_cmd_template,
+            output_parser,
+            output_filter_regex,
+            supports_session_continuity,
+            session_id_source,
+            session_id_event_type,
+            session_id_field,
+            resume_arg_template,
+            skills_dir,
+            skill_entry_file,
+            skill_display_mode,
+            color,
+            icon,
+            sort_order,
+            is_enabled,
+            version,
+            now_ts
         ],
     )?;
 
@@ -534,18 +535,12 @@ pub fn add_agent_inner(
         agent_type: payload.agent_type,
         display_name: payload.display_name,
         description,
-        cli_command,
-        npm_package: payload.npm_package,
-        pip_package: payload.pip_package,
-        install_cmd,
-        uninstall_cmd,
-        update_cmd,
-        version_cmd,
-        latest_version_cmd,
+        lifecycle,
+        pkg_state,
+        dist_source,
         run_cmd_template,
         output_parser,
         output_filter_regex,
-        version_pattern,
         supports_session_continuity: supports_session_continuity != 0,
         session_id_source,
         session_id_event_type,
@@ -791,16 +786,10 @@ pub fn update_agent_inner(
     let now_ts = now();
     let display_name = payload.display_name.unwrap_or(existing.display_name);
     let description = payload.description.unwrap_or(existing.description);
-    let cli_command = payload.cli_command.unwrap_or(existing.cli_command);
-    let npm_package = payload.npm_package.or(existing.npm_package);
-    let pip_package = payload.pip_package.or(existing.pip_package);
-    let install_cmd = payload.install_cmd.unwrap_or(existing.install_cmd);
-    let uninstall_cmd = payload.uninstall_cmd.unwrap_or(existing.uninstall_cmd);
-    let update_cmd = payload.update_cmd.unwrap_or(existing.update_cmd);
-    let version_cmd = payload.version_cmd.unwrap_or(existing.version_cmd);
-    let latest_version_cmd = payload
-        .latest_version_cmd
-        .unwrap_or(existing.latest_version_cmd);
+    // 三个 JSON 列整体替换语义：`None` 保留原值（前端不传即不动）。
+    let lifecycle = payload.lifecycle.or(existing.lifecycle);
+    let pkg_state = payload.pkg_state.or(existing.pkg_state);
+    let dist_source = payload.dist_source.or(existing.dist_source);
     let run_cmd_template = payload
         .run_cmd_template
         .unwrap_or(existing.run_cmd_template);
@@ -808,7 +797,6 @@ pub fn update_agent_inner(
     let output_filter_regex = payload
         .output_filter_regex
         .unwrap_or(existing.output_filter_regex);
-    let version_pattern = payload.version_pattern.unwrap_or(existing.version_pattern);
     let supports_session_continuity = if let Some(v) = payload.supports_session_continuity {
         if v {
             1
@@ -860,29 +848,22 @@ pub fn update_agent_inner(
     };
 
     conn.execute(
-        "UPDATE agents SET display_name=?1, description=?2, cli_command=?3, npm_package=?4,
-         pip_package=?5, install_cmd=?6, uninstall_cmd=?7, update_cmd=?8,
-         version_cmd=?9, latest_version_cmd=?10, run_cmd_template=?11, output_parser=?12,
-         output_filter_regex=?13, version_pattern=?14, supports_session_continuity=?15,
-         session_id_source=?16, session_id_event_type=?17, session_id_field=?18,
-         resume_arg_template=?19, skills_dir=?20, skill_entry_file=?21, skill_display_mode=?22,
-         color=?23, icon=?24, sort_order=?25, is_enabled=?26, version=?27,
-         updated_at=?28 WHERE agent_type=?29",
+        "UPDATE agents SET display_name=?1, description=?2, lifecycle_json=?3, pkg_state_json=?4,
+         dist_source_json=?5, run_cmd_template=?6, output_parser=?7,
+         output_filter_regex=?8, supports_session_continuity=?9,
+         session_id_source=?10, session_id_event_type=?11, session_id_field=?12,
+         resume_arg_template=?13, skills_dir=?14, skill_entry_file=?15, skill_display_mode=?16,
+         color=?17, icon=?18, sort_order=?19, is_enabled=?20, version=?21,
+         updated_at=?22 WHERE agent_type=?23",
         params![
             display_name,
             description,
-            cli_command,
-            npm_package,
-            pip_package,
-            install_cmd,
-            uninstall_cmd,
-            update_cmd,
-            version_cmd,
-            latest_version_cmd,
+            to_json_column(&lifecycle),
+            to_json_column(&pkg_state),
+            to_json_column(&dist_source),
             run_cmd_template,
             output_parser,
             output_filter_regex,
-            version_pattern,
             supports_session_continuity,
             session_id_source,
             session_id_event_type,
@@ -905,18 +886,12 @@ pub fn update_agent_inner(
         agent_type: payload.agent_type,
         display_name,
         description,
-        cli_command,
-        npm_package,
-        pip_package,
-        install_cmd,
-        uninstall_cmd,
-        update_cmd,
-        version_cmd,
-        latest_version_cmd,
+        lifecycle,
+        pkg_state,
+        dist_source,
         run_cmd_template,
         output_parser,
         output_filter_regex,
-        version_pattern,
         supports_session_continuity: supports_session_continuity != 0,
         session_id_source,
         session_id_event_type,

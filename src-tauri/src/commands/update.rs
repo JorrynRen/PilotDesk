@@ -102,7 +102,7 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
     })
 }
 
-/// Generic agent update check: reads latest_version_cmd from agents table and executes it.
+/// Generic agent update check: 由生命周期规格派生最新版本查询命令并执行。
 /// 通过 AgentManager 统一虚拟控制台执行，确保所有命令经由 bridge 跟踪。
 #[tauri::command]
 pub async fn check_agent_update(
@@ -114,13 +114,14 @@ pub async fn check_agent_update(
     let config = crate::commands::agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
 
-    let cmd = config.latest_version_cmd;
-    if cmd.is_empty() {
-        return Err(AppError::Config(format!(
-            "{} 未配置版本查询命令",
-            agent_type
-        )));
-    }
+    let cmd = config
+        .lifecycle
+        .as_ref()
+        .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
+        .commands()
+        .map_err(AppError::Config)?
+        .latest_version
+        .ok_or_else(|| AppError::Config(format!("{} 未配置版本查询命令", agent_type)))?;
 
     let mgr = agent_mgr.lock().await;
     let output = mgr

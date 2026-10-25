@@ -432,7 +432,6 @@ mod factory_tests {
         assert!(build_session(TransportKind::Subprocess, None).is_none());
         let cfg = AgentConfig {
             agent_type: "claude".into(),
-            cli_command: "claude".into(),
             ..Default::default()
         };
         let s = build_session(TransportKind::Subprocess, Some(cfg)).expect("有 config 应可构造");

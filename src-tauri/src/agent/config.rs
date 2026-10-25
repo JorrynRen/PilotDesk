@@ -2,7 +2,13 @@
 //!
 //! 从 commands/agents.rs 下沉的 Agent 配置相关数据结构定义。
 //! 数据查询与操作仍保留在 commands/agents.rs 中。
+//!
+//! v11 起生命周期/安装状态/来源从扁平列收敛为 JSON（见 `agent::lifecycle`）：
+//! - `lifecycle`：装什么、怎么跑；
+//! - `pkg_state`：本机安装到哪一步（pending_install / ready / failed）；
+//! - `dist_source`：配置从哪来（官方 ACP 目录 / 内置预置 / 手工新建）。
 
+use crate::agent::lifecycle::{DistSource, LifecycleSpec, PkgState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -14,30 +20,18 @@ pub struct AgentConfig {
     pub display_name: String,
     /// 描述
     pub description: String,
-    /// CLI 命令名
-    pub cli_command: String,
-    /// npm 包名（None 表示非 npm 安装）
-    pub npm_package: Option<String>,
-    /// pip 包名（None 表示非 pip 安装）
-    pub pip_package: Option<String>,
-    /// 安装命令
-    pub install_cmd: String,
-    /// 卸载命令
-    pub uninstall_cmd: String,
-    /// 更新命令
-    pub update_cmd: String,
-    /// 版本检测命令
-    pub version_cmd: String,
-    /// 最新版本查询命令
-    pub latest_version_cmd: String,
-    /// 启动命令模板，{message} 占位符替换
+    /// 生命周期规格（安装/更新/卸载/版本探测 + 运行时启动）
+    pub lifecycle: Option<LifecycleSpec>,
+    /// 本地包管理状态
+    pub pkg_state: Option<PkgState>,
+    /// 配置来源
+    pub dist_source: Option<DistSource>,
+    /// 启动命令模板，{message} 占位符替换（CLI 兼容模式）
     pub run_cmd_template: String,
     /// 输出解析器类型
     pub output_parser: String,
     /// 噪声行过滤正则
     pub output_filter_regex: String,
-    /// 版本号提取正则
-    pub version_pattern: String,
     /// 是否支持会话延续
     pub supports_session_continuity: bool,
     /// session_id 来源
@@ -64,10 +58,62 @@ pub struct AgentConfig {
     pub is_enabled: bool,
     /// 是否为预置 Agent
     pub is_builtin: bool,
-    /// 版本号（用于 Agent 市场更新检测）
+    /// 配置版本号（用于 Agent 市场更新检测）
     pub version: String,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+impl AgentConfig {
+    /// CLI 可执行命令：优先取运行时规格里的 command，缺失时退回 agent_type。
+    ///
+    /// 取代旧的 `agents.cli_command` 列——同一份信息只在 `lifecycle` 一处维护。
+    pub fn cli_command(&self) -> String {
+        if let Some(spec) = &self.lifecycle {
+            let bins = self
+                .pkg_state
+                .as_ref()
+                .map(|s| s.bins.clone())
+                .unwrap_or_default();
+            if let Some(rt) = spec.resolved_runtime(&bins) {
+                return rt.command;
+            }
+        }
+        self.agent_type.clone()
+    }
+
+    /// 是否可以承载会话：API 行（transport='http'）恒可用；其余看包状态。
+    ///
+    /// 判定**只认 `pkg_state`**，不看 `lifecycle` 是否存在：
+    /// - 手工在集成配置页填写的 Agent（生命周期为空、包状态为空）视为就绪——
+    ///   命令写在 `run_cmd_template` / `conn` 里，由用户自行保证可用；
+    /// - 市场「获取」创建的草稿一定带 `pending_install`，安装完成前拦下会话；
+    /// - 安装失败带 `failed` + 错误原因。
+    pub fn readiness(&self) -> Readiness {
+        match &self.pkg_state {
+            None => Readiness::Ready,
+            Some(s) if s.is_ready() => Readiness::Ready,
+            Some(s) if s.status == crate::agent::lifecycle::STATUS_PENDING_INSTALL => {
+                Readiness::NotReady {
+                    status: s.status.clone(),
+                    message: "该 Agent 尚未完成安装".to_string(),
+                }
+            }
+            Some(s) => Readiness::NotReady {
+                status: s.status.clone(),
+                message: s
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "该 Agent 安装状态异常".to_string()),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Readiness {
+    Ready,
+    NotReady { status: String, message: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -76,20 +122,15 @@ pub struct CreateAgentPayload {
     pub agent_type: String,
     pub display_name: String,
     pub description: Option<String>,
-    /// CLI 命令名。**可选**：ACP 接入方式不需要 CLI 命令（命令在 `conn.command` 里），
-    /// 前端该字段会缺省；缺省即视为空串（列本身 NOT NULL DEFAULT ''）。
-    pub cli_command: Option<String>,
-    pub npm_package: Option<String>,
-    pub pip_package: Option<String>,
-    pub install_cmd: Option<String>,
-    pub uninstall_cmd: Option<String>,
-    pub update_cmd: Option<String>,
-    pub version_cmd: Option<String>,
-    pub latest_version_cmd: Option<String>,
+    /// 生命周期规格（市场获取/手工新建都会带；后端据此派生安装与运行命令）
+    pub lifecycle: Option<LifecycleSpec>,
+    /// 本地包管理状态（市场「获取」创建草稿时为 pending_install）
+    pub pkg_state: Option<PkgState>,
+    /// 配置来源
+    pub dist_source: Option<DistSource>,
     pub run_cmd_template: Option<String>,
     pub output_parser: Option<String>,
     pub output_filter_regex: Option<String>,
-    pub version_pattern: Option<String>,
     pub supports_session_continuity: Option<bool>,
     pub session_id_source: Option<String>,
     pub session_id_event_type: Option<String>,
@@ -112,18 +153,15 @@ pub struct UpdateAgentPayload {
     pub agent_type: String,
     pub display_name: Option<String>,
     pub description: Option<String>,
-    pub cli_command: Option<String>,
-    pub npm_package: Option<String>,
-    pub pip_package: Option<String>,
-    pub install_cmd: Option<String>,
-    pub uninstall_cmd: Option<String>,
-    pub update_cmd: Option<String>,
-    pub version_cmd: Option<String>,
-    pub latest_version_cmd: Option<String>,
+    /// `None` = 保留原值；`Some` = 整体替换
+    pub lifecycle: Option<LifecycleSpec>,
+    /// `None` = 保留原值；`Some` = 整体替换
+    pub pkg_state: Option<PkgState>,
+    /// `None` = 保留原值；`Some` = 整体替换
+    pub dist_source: Option<DistSource>,
     pub run_cmd_template: Option<String>,
     pub output_parser: Option<String>,
     pub output_filter_regex: Option<String>,
-    pub version_pattern: Option<String>,
     pub supports_session_continuity: Option<bool>,
     pub session_id_source: Option<String>,
     pub session_id_event_type: Option<String>,
@@ -139,7 +177,3 @@ pub struct UpdateAgentPayload {
     /// 版本号
     pub version: Option<String>,
 }
-
-// ──────────────────────────────────────────────
-//  CRUD 命令
-// ──────────────────────────────────────────────

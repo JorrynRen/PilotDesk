@@ -107,7 +107,7 @@ impl ProcessHandler for StdioHandler {
         };
 
         if template_str.is_empty() {
-            return (self.config.cli_command.clone(), vec![message.to_string()]);
+            return (self.config.cli_command(), vec![message.to_string()]);
         }
 
         // ── 解析 {message} 占位符 ──
@@ -118,7 +118,7 @@ impl ProcessHandler for StdioHandler {
         // 解析前缀为固定参数（命令 + CLI 标志）
         let prefix_parts = simple_split(prefix_str);
         if prefix_parts.is_empty() {
-            return (self.config.cli_command.clone(), vec![message.to_string()]);
+            return (self.config.cli_command(), vec![message.to_string()]);
         }
 
         let cmd = prefix_parts[0].clone();
