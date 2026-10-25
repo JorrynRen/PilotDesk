@@ -20,6 +20,8 @@ interface DependencyStatus {
   healthReason?: string | null;
   /** 是否有可执行的安装规格（市场下发的 lifecycle）；手工配置的 Agent 为 false */
   installable?: boolean;
+  /** 卸载对象文案：ACP 是「卸载适配器」，本地 CLI 是「卸载 CLI 包」 */
+  uninstallLabel?: string;
   action?: string;
   installing?: boolean;
   /** Update check state */
@@ -91,6 +93,25 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
   // Latest version detection is now handled in Phase 2 of detect_env
   // (auto-detected via envInfo.agentLatestVersions)
+
+  // 接入方式速查（agentType → transport）：卸载的对象要按接入方式说清楚，
+  // ACP 卸的是适配器、本地 CLI 卸的是它自己那个包。AgentConfig 不承载这一列，单独取。
+  const [transportMap, setTransportMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    invoke<Array<{ agentType: string; transport: string }>>('list_agent_transports')
+      .then((rows) => {
+        if (!alive) return;
+        const m: Record<string, string> = {};
+        rows.forEach((r) => { m[r.agentType] = r.transport; });
+        setTransportMap(m);
+      })
+      .catch(() => {
+        // 读不到就按本地 CLI 处理，不影响检测
+      });
+    return () => { alive = false; };
+  }, []);
+  const isAcpAgent = (agentType: string) => transportMap[agentType] === 'acp';
 
   const fetchEnvWithLog = useCallback(async () => {
     // Force fresh detection by clearing cache
@@ -200,6 +221,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         healthReason: health?.reason ?? null,
         // 安装/卸载命令已从「用户手填」改为「市集下发」，没有 lifecycle 的手工 Agent 无法在此安装
         installable: !!agent.lifecycle,
+        uninstallLabel: isAcpAgent(agent.agentType) ? '卸载适配器' : '卸载 CLI 包',
         action: installed ? 'update' as const : 'install' as const,
         installing: installing === agent.agentType,
         latestVersion: latestVer,
@@ -263,13 +285,20 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     action: 'install' | 'update' | 'uninstall' | 'reinstall',
   ) => {
     const name = getAgentName(key);
+    // 卸载对象按接入方式说清楚：ACP 卸的是适配器，本地 CLI 卸的是包
+    const uninstallTarget = agents.some((a) => a.agentType === key)
+      ? isAcpAgent(key) ? 'ACP 适配器' : '本地 CLI 包'
+      : null;
     const title =
       action === 'uninstall' ? '确认卸载'
       : action === 'update' ? '确认更新'
       : action === 'reinstall' ? '确认重装'
       : '确认安装';
     const message =
-      action === 'uninstall' ? `确定要卸载 ${name} 吗？此操作将从系统中移除该工具。`
+      action === 'uninstall'
+        ? uninstallTarget
+          ? `确定要卸载 ${name} 的${uninstallTarget}吗？Agent 配置会保留，卸载后需重新安装才能用于会话。`
+          : `确定要卸载 ${name} 吗？此操作将从系统中移除该工具。`
       : action === 'update' ? `确定要更新 ${name} 到最新版本吗？`
       : action === 'reinstall' ? `确定要重新安装 ${name} 吗？`
       : `确定要安装 ${name} 吗？`;
@@ -396,8 +425,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       disabled={!!dep.installing}
                       variant="danger"
                       icon={<Trash2 size={11} />}
+                      title={`${dep.uninstallLabel ?? '卸载'}（保留 Agent 配置，卸载后需重新安装才能用于会话）`}
                     >
-                      卸载
+                      {dep.uninstallLabel ?? '卸载'}
                     </SettingsButton>
                   </>
                 )}
@@ -416,8 +446,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       disabled={!!dep.installing}
                       variant="danger"
                       icon={<Trash2 size={11} />}
+                      title={`${dep.uninstallLabel ?? '卸载'}（保留 Agent 配置，卸载后需重新安装才能用于会话）`}
                     >
-                      卸载
+                      {dep.uninstallLabel ?? '卸载'}
                     </SettingsButton>
                   </>
                 )}
@@ -436,8 +467,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       disabled={!!dep.installing}
                       variant="danger"
                       icon={<Trash2 size={11} />}
+                      title={`${dep.uninstallLabel ?? '卸载'}（保留 Agent 配置，卸载后需重新安装才能用于会话）`}
                     >
-                      卸载
+                      {dep.uninstallLabel ?? '卸载'}
                     </SettingsButton>
                   </>
                 )}

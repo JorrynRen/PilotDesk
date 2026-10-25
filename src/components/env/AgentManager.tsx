@@ -80,9 +80,10 @@ export function AgentManager() {
   /** 卸载本机依赖（适配器 / CLI 包）：保留 Agent 配置，只把包状态退回「待安装」。 */
   const handleUninstall = async (agentType: string) => {
     const name = agents.find((a) => a.agentType === agentType)?.displayName || agentType;
+    const target = transportMap[agentType] === 'acp' ? 'ACP 适配器' : '本地 CLI 包';
     const ok = await confirmDialog({
       title: '确认卸载',
-      message: `将从本机卸载 ${name} 对应的适配器 / CLI 包。Agent 配置会保留，卸载后需重新安装才能用于会话。`,
+      message: `将从本机卸载 ${name} 的${target}。Agent 配置会保留，卸载后需重新安装才能用于会话。`,
       confirmText: '卸载',
       danger: true,
     });
@@ -883,6 +884,11 @@ function InstallStatusSection({ agentType, transport, pkgState, lifecycle, canUp
           </SettingsButton>
         )}
       </div>
+      {(ready || failed) && (
+        <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
+          卸载只移除本机{isAcp ? '适配器' : 'CLI 包'}，Agent 配置与接入方式保留。
+        </div>
+      )}
       {!supported && (
         <div className="text-[10px] mt-1" style={{ color: 'var(--warning, #d97706)' }}>
           该条目为 {lifecycle.kind} 安装方式，当前版本暂不支持，后续版本提供。
