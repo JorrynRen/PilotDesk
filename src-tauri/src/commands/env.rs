@@ -1,4 +1,4 @@
-use crate::agent::lifecycle::LifecycleKind;
+use crate::agent::lifecycle::{LifecycleKind, LifecycleSpec};
 use crate::commands::agents;
 use crate::db::models::{AgentHealth, EnvInfo};
 use crate::utils::errors::AppError;
@@ -69,6 +69,35 @@ async fn command_resolvable(agent_mgr: &crate::agent::AgentManager, command: &st
         .execute_command_output_async(&probe, "", 10, "启动命令探测")
         .await
         .is_ok()
+}
+
+/// 历史/手工本地 CLI 没有生命周期规格时，按**同名预置**补最新版本查询命令。
+///
+/// 只读市场清单、不写本地配置：预置里 claude / codex / hermes 都带版本来源，
+/// 早于市场机制创建的 Agent 因此也能查到最新版本。清单不可用就放弃，不影响检测本身。
+async fn preset_latest_commands() -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(json) = crate::utils::market::fetch_agents_config().await else {
+        return out;
+    };
+    let Some(list) = json.get("agents").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for a in list {
+        let (Some(agent_type), Some(spec_json)) = (
+            a.get("agentType").and_then(|v| v.as_str()),
+            a.get("lifecycle"),
+        ) else {
+            continue;
+        };
+        let Ok(spec) = serde_json::from_value::<LifecycleSpec>(spec_json.clone()) else {
+            continue;
+        };
+        if let Some(cmd) = spec.commands().ok().and_then(|c| c.latest_version) {
+            out.insert(agent_type.to_string(), cmd);
+        }
+    }
+    out
 }
 
 /// 简单缓存：仅用于避免高频重复检测
@@ -290,25 +319,52 @@ async fn detect_env_with_console(
             }
         };
         let db_agents = agents::list_agents_inner(&conn).unwrap_or_default();
+        let transport_map: std::collections::HashMap<String, String> =
+            agents::list_agent_transports_inner(&conn)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| (r.agent_type, r.transport))
+                .collect();
 
-        // Phase 2 并行查询所有 Agent 最新版本
-        // 构建 async future 列表（避免 map 闭包 move mgr）
-        let mut latest_futures = Vec::new();
+        // 先归集「查什么命令」：有生命周期规格的直接派生；
+        // 没有规格的历史本地 CLI 记下来，稍后按同名预置补齐（否则这类 Agent 永远查不到最新版本）。
+        let mut jobs: Vec<(String, String)> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
         for agent in &db_agents {
             if !agent.is_enabled {
                 continue;
             }
-            // 最新版本命令由生命周期规格派生（shell 用显式命令，npm 走 npm view）
-            let Some(cmd) = agent
+            match agent
                 .lifecycle
                 .as_ref()
                 .and_then(|spec| spec.commands().ok())
                 .and_then(|cmds| cmds.latest_version)
-            else {
-                continue;
-            };
-            let label = format!("{} 最新版本查询", agent.agent_type);
-            let agent_type = agent.agent_type.clone();
+            {
+                Some(cmd) => jobs.push((agent.agent_type.clone(), cmd)),
+                None => missing.push(agent.agent_type.clone()),
+            }
+        }
+        if !missing.is_empty() {
+            let presets = preset_latest_commands().await;
+            for agent_type in missing {
+                // 只对本地 CLI 回退；ACP 没有规格说明是自定义连接，不该猜版本来源
+                let is_cli = transport_map
+                    .get(&agent_type)
+                    .map(|t| t == "subprocess")
+                    .unwrap_or(true);
+                if !is_cli {
+                    continue;
+                }
+                if let Some(cmd) = presets.get(&agent_type) {
+                    jobs.push((agent_type, cmd.clone()));
+                }
+            }
+        }
+
+        // Phase 2 并行查询所有 Agent 最新版本
+        let mut latest_futures = Vec::new();
+        for (agent_type, cmd) in jobs {
+            let label = format!("{} 最新版本查询", agent_type);
             let mgr_clone = mgr.clone();
             latest_futures.push(async move {
                 let version = mgr_clone

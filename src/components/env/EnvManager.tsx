@@ -378,7 +378,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     手工配置
                   </span>
                 )}
-                {dep.hasUpdate && dep.installed && (
+                {dep.hasUpdate && dep.installed && dep.installable !== false && (
                   <>
                     <SettingsButton
                       onClick={() => requestEnvAction(dep.key, 'update')}
@@ -400,6 +400,11 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       卸载
                     </SettingsButton>
                   </>
+                )}
+                {dep.hasUpdate && dep.installed && dep.installable === false && (
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }} title="手工配置的 Agent 没有安装规格，请在系统内自行升级">
+                    手工配置
+                  </span>
                 )}
                 {dep.installed && !dep.hasUpdate && dep.latestVersion && (
                   <>
