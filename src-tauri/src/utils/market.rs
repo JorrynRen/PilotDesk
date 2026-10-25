@@ -187,12 +187,38 @@ async fn fetch_market_text(path: &str) -> Result<String, String> {
     Err(format!("所有服务器源均不可用: {}", last_err))
 }
 
+/// 预置清单最低可用版本：v2 起才带 `lifecycle`（自动安装、版本检测都依赖它）。
+const AGENTS_CONFIG_MIN_VERSION: u64 = 2;
+
 /// [Tauri Command] 获取 Agent 市场配置
 ///
 /// 返回 agents-config.json 的 JSON 内容，前端直接使用。
+///
+/// **按源校验版本**：CDN 边缘缓存可能仍停留着 v1 清单（条目没有 `lifecycle`），
+/// 直接拿去解析会报 `missing field lifecycle` 把整个市集打挂；遇到过期源就换下一个。
 #[tauri::command]
 pub async fn fetch_agents_config() -> Result<Value, String> {
-    fetch_market_json(AGENTS_CONFIG_PATH).await
+    let mut last_err = String::new();
+    for url in build_urls(AGENTS_CONFIG_PATH) {
+        match fetch_url(&url).await {
+            Ok(body) => match serde_json::from_str::<Value>(&body) {
+                Ok(json) => {
+                    let version = json.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if version >= AGENTS_CONFIG_MIN_VERSION {
+                        return Ok(json);
+                    }
+                    last_err = format!(
+                        "{} 内容过期（version={}，需要 >= {}）",
+                        url, version, AGENTS_CONFIG_MIN_VERSION
+                    );
+                    log::warn!("[Market] {}", last_err);
+                }
+                Err(e) => last_err = format!("解析 JSON 失败 ({}): {}", url, e),
+            },
+            Err(e) => last_err = e,
+        }
+    }
+    Err(format!("所有服务器源均不可用: {}", last_err))
 }
 
 /// [Tauri Command] 获取灵感市场索引

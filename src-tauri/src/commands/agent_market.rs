@@ -106,7 +106,9 @@ struct PresetAgent {
     category: String,
     #[serde(default)]
     transport: String,
-    lifecycle: LifecycleSpec,
+    /// 老版预置（v1）没有生命周期规格：缺字段不能让整份清单解析失败
+    #[serde(default)]
+    lifecycle: Option<LifecycleSpec>,
     #[serde(default)]
     icon: String,
     #[serde(default)]
@@ -241,7 +243,11 @@ impl MarketEntry {
             description: p.description.clone(),
             category,
             transport,
-            lifecycle: p.lifecycle.clone(),
+            // 老版预置没有生命周期规格：合成空 shell 规格，市集按「暂不支持自动安装」展示
+            lifecycle: p.lifecycle.clone().unwrap_or(LifecycleSpec {
+                kind: LifecycleKind::Shell,
+                ..Default::default()
+            }),
             version: p.version.clone(),
             icon: Some(p.icon.clone()).filter(|s| !s.trim().is_empty()),
             icon_url: p.icon_url.clone(),
@@ -257,7 +263,14 @@ impl MarketEntry {
     }
 
     fn to_market_agent(&self, installed: &InstalledInfo) -> MarketAgent {
-        let support = self.lifecycle.supported();
+        // 没有包名也没有安装命令 = 老版预置/只能手工配置，不能给「获取」入口
+        let has_install_spec =
+            !self.lifecycle.packages.is_empty() || self.lifecycle.install_cmd.is_some();
+        let support = if has_install_spec {
+            self.lifecycle.supported()
+        } else {
+            Err("该预置未提供安装规格，请手工配置".to_string())
+        };
         let packages = self
             .lifecycle
             .packages
