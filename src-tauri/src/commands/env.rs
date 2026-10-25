@@ -104,18 +104,33 @@ async fn detect_env_with_console(
 
     let mut agent_futures = Vec::new();
     for agent in &db_agents {
-        if !agent.is_enabled || agent.version_cmd.is_empty() {
+        if !agent.is_enabled {
             continue;
         }
-        let cmd = agent.version_cmd.clone();
+        // 版本探测命令由生命周期派生：npm 走 `npm ls -g --json`（**不执行 `<bin> --version`**，
+        // 部分适配器会进 serving 状态卡住）；shell 类走规格里的显式命令。
+        let Some(probe) = agent
+            .lifecycle
+            .as_ref()
+            .and_then(|l| l.commands().ok())
+            .and_then(|c| c.version_probe)
+        else {
+            continue;
+        };
+        let lifecycle = agent.lifecycle.clone();
         let label = format!("{} 版本查询", agent.agent_type);
         let agent_type = agent.agent_type.clone();
         agent_futures.push(async move {
             let version = agent_mgr
-                .execute_command_output_async(&cmd, "", 15, &label)
+                .execute_command_output_async(&probe, "", 15, &label)
                 .await
                 .ok()
-                .map(|v| clean_version_string(&v));
+                .map(|v| {
+                    lifecycle
+                        .as_ref()
+                        .and_then(|l| l.parse_installed_version(&v))
+                        .unwrap_or_else(|| clean_version_string(&v))
+                });
             (agent_type, version)
         });
     }
@@ -171,10 +186,18 @@ async fn detect_env_with_console(
         // 构建 async future 列表（避免 map 闭包 move mgr）
         let mut latest_futures = Vec::new();
         for agent in &db_agents {
-            if !agent.is_enabled || agent.latest_version_cmd.is_empty() {
+            if !agent.is_enabled {
                 continue;
             }
-            let cmd = agent.latest_version_cmd.clone();
+            // 最新版本命令由生命周期规格派生（shell 用显式命令，npm 走 npm view）
+            let Some(cmd) = agent
+                .lifecycle
+                .as_ref()
+                .and_then(|spec| spec.commands().ok())
+                .and_then(|cmds| cmds.latest_version)
+            else {
+                continue;
+            };
             let label = format!("{} 最新版本查询", agent.agent_type);
             let agent_type = agent.agent_type.clone();
             let mgr_clone = mgr.clone();
@@ -296,10 +319,14 @@ pub async fn install_agent(
     let config = agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
 
-    let cmd = config.install_cmd;
-    if cmd.is_empty() {
-        return Err(AppError::Config(format!("{} 未配置安装命令", agent_type)));
-    }
+    let cmd = config
+        .lifecycle
+        .as_ref()
+        .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
+        .commands()
+        .map_err(AppError::Config)?
+        .install
+        .ok_or_else(|| AppError::Config(format!("{} 未配置安装命令", agent_type)))?;
 
     let _ = app.emit(
         "install-progress",
@@ -340,10 +367,14 @@ pub async fn uninstall_agent(
     let config = agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
 
-    let cmd = config.uninstall_cmd;
-    if cmd.is_empty() {
-        return Err(AppError::Config(format!("{} 未配置卸载命令", agent_type)));
-    }
+    let cmd = config
+        .lifecycle
+        .as_ref()
+        .ok_or_else(|| AppError::Config(format!("{} 未配置生命周期规格", agent_type)))?
+        .commands()
+        .map_err(AppError::Config)?
+        .uninstall
+        .ok_or_else(|| AppError::Config(format!("{} 未配置卸载命令", agent_type)))?;
 
     let _ = app.emit(
         "install-progress",
@@ -367,6 +398,12 @@ pub async fn uninstall_agent(
             "progress": 100
         }),
     );
+
+    // 卸载后把包状态退回「待安装」：否则就绪门禁仍放行，会话会因运行时缺失而失败。
+    if config.lifecycle.is_some() {
+        let pending = crate::agent::lifecycle::PkgState::pending(crate::utils::now());
+        crate::commands::agent_market::set_pkg_state_inner(&conn, &agent_type, &pending)?;
+    }
 
     clear_env_cache();
     Ok(())

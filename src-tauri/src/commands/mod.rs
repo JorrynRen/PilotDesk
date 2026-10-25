@@ -1,4 +1,5 @@
 pub mod account;
+pub mod agent_market;
 pub mod agents;
 pub mod api_provider;
 pub mod app_settings;

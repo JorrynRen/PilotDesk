@@ -465,6 +465,10 @@ async fn agent_send_message_with_config(
     let config = commands::agents::get_agent_inner(&conn, &agent_type)
         .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
         .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
+    // 就绪门禁：市场草稿未安装完成时直接拦下，返回结构化错误供前端引导去安装
+    if let Some(err) = commands::agent_market::readiness_gate(&config) {
+        return Err(err);
+    }
     // cwd 为空时统一使用全局工作区路径
     let resolved_cwd = if cwd.as_deref().map_or(true, |s| s.is_empty()) {
         Some(
@@ -740,10 +744,19 @@ impl PendingApprovals {
 #[tauri::command]
 async fn agent_create_session(
     agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
+    state: tauri::State<'_, DbState>,
     session_id: String,
     agent_type: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
+    // 就绪门禁：市场获取但未完成安装的草稿不允许建会话（结构化错误交给前端引导安装）
+    if let Ok(conn) = state.get_conn() {
+        if let Ok(Some(cfg)) = commands::agents::get_agent_inner(&conn, &agent_type) {
+            if let Some(err) = commands::agent_market::readiness_gate(&cfg) {
+                return Err(err);
+            }
+        }
+    }
     let mut mgr = agent_mgr.lock().await;
     mgr.create_session(&session_id, &agent_type, cwd.as_deref());
     Ok(())
@@ -2684,6 +2697,10 @@ pub fn run() {
             commands::agents::export_agents_json,
             commands::agents::import_agents_json,
             commands::agents::reorder_agents,
+            commands::agent_market::agent_market_list,
+            commands::agent_market::agent_market_acquire,
+            commands::agent_market::agent_market_install,
+            commands::agent_market::agent_market_remove,
             plugin::agent::plugin_agent_create_session,
             plugin::agent::plugin_agent_send_message,
             plugin::agent::plugin_agent_get_history,
@@ -3001,6 +3018,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 commands::knowledge::run_ingest_queue_loop(DbState { pool: kbq_pool }).await;
             });
+
+            // ACP 官方目录后台刷新（24h TTL：缓存新鲜则直接返回，过期才打远端）
+            agent::registry::spawn_background_refresh();
 
             // 启动云同步后台任务（每 10 分钟一次；仅「开关开启 + 已登录 + 有能力」时真正执行，
             // 其余静默跳过，失败只记日志——不影响离线可用）
