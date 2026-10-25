@@ -879,7 +879,7 @@ async fn download_icon(agent_type: &str, url: &str) -> Option<String> {
 pub fn readiness_gate(config: &AgentConfig) -> Option<String> {
     match config.readiness() {
         Readiness::Ready => None,
-        Readiness::NotReady { message, .. } => Some(format!(
+        Readiness::NotReady { message } => Some(format!(
             "{}（Agent：{}）。请到「设置 › Agent」完成安装后再开始会话。",
             message, config.agent_type
         )),

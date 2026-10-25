@@ -95,12 +95,10 @@ impl AgentConfig {
             Some(s) if s.is_ready() => Readiness::Ready,
             Some(s) if s.status == crate::agent::lifecycle::STATUS_PENDING_INSTALL => {
                 Readiness::NotReady {
-                    status: s.status.clone(),
                     message: "该 Agent 尚未完成安装".to_string(),
                 }
             }
             Some(s) => Readiness::NotReady {
-                status: s.status.clone(),
                 message: s
                     .last_error
                     .clone()
@@ -113,7 +111,7 @@ impl AgentConfig {
 #[derive(Debug, Clone)]
 pub enum Readiness {
     Ready,
-    NotReady { status: String, message: String },
+    NotReady { message: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
