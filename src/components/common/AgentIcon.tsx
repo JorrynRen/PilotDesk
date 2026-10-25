@@ -72,8 +72,9 @@ export function AgentIcon({ icon, size = 14, className = '', fallback }: AgentIc
     return <>{fallback}</>;
   }
 
-  // 网络图片
+  // 网络图片：加载失败退回 fallback（否则会留下一个空白占位）
   if (icon && (icon.startsWith('http://') || icon.startsWith('https://'))) {
+    if (failed) return <>{fallback}</>;
     return (
       <img
         src={icon}
@@ -82,7 +83,7 @@ export function AgentIcon({ icon, size = 14, className = '', fallback }: AgentIc
         height={size}
         className={className}
         style={{ objectFit: 'contain', verticalAlign: 'middle' }}
-        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        onError={() => setFailed(true)}
       />
     );
   }

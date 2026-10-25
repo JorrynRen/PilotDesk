@@ -11,7 +11,8 @@ import { AgentIcon } from '../common/AgentIcon';
 /**
  * AgentConfigMarket — Agent 市集。
  *
- * 两类配置同架陈列：`ACP`（官方目录 + 官方缺失的预置）与 `CLI`（兼容模式预置）。
+ * 两类接入方式同架陈列：`ACP 协议接入`（官方目录 + 官方缺失的预置）与
+ * `本地 CLI 接入`（兼容模式预置）。
  * 「获取」只落草稿（后端记 pending_install 并下载图标），随即跳转到
  * 「设置 › 集成配置」的该 Agent 上继续完成安装 —— 安装本身是本地动作，不在这里静默做。
  */
@@ -48,8 +49,8 @@ interface MarketAgent {
 }
 
 const CATEGORY_TABS: { key: MarketCategory; label: string; hint: string }[] = [
-  { key: 'acp', label: 'ACP 配置', hint: 'Agent Client Protocol 适配器与适配入口' },
-  { key: 'cli', label: 'CLI 配置', hint: '兼容模式（子进程命令行）配置' },
+  { key: 'acp', label: 'ACP 协议接入', hint: '通过 Agent Client Protocol 适配器接入' },
+  { key: 'cli', label: '本地 CLI 接入', hint: '以本地命令行子进程方式接入（兼容模式）' },
 ];
 
 /** 包状态文案：市场草稿的安装进度对用户可见。 */
@@ -190,14 +191,21 @@ export function AgentConfigMarket() {
               </button>
             ))}
           </div>
-          <div className="relative flex-1 min-w-[160px]">
+          <div className="relative flex-1 min-w-[160px] max-w-md">
             <Search
-              size={11}
-              className="absolute left-2 top-1/2 -translate-y-1/2"
+              size={13}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
               style={{ color: 'var(--text-tertiary)' }}
             />
             <input
-              className="pd-input w-full pl-6"
+              type="text"
+              className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
+              style={{
+                height: 28, /* 对齐同行 Tab 组高度 */
+                backgroundColor: 'var(--bg-field)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border)',
+              }}
               placeholder="搜索名称 / 标识 / 包名"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
@@ -219,12 +227,18 @@ export function AgentConfigMarket() {
           ) : (
             visible.map((agent) => {
               const status = statusLabel(agent);
+              // ACP 官方目录的图标均为透明底黑色图形：固定放在浅色底板上，
+              // 否则深色主题下几乎不可见、浅色主题下也会与卡片底色混在一起。
+              const isRemoteIcon = !!agent.icon && /^https?:/i.test(agent.icon);
               return (
                 <SettingsCard key={`market-${agent.agentType}`}>
                   <div className="flex items-start gap-3 w-full">
                     <div
                       className="w-7 h-7 rounded-md shrink-0 flex items-center justify-center overflow-hidden"
-                      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                      style={{
+                        backgroundColor: isRemoteIcon ? '#F6F6F8' : 'var(--bg-secondary)',
+                        border: '1px solid var(--border)',
+                      }}
                     >
                       {/* 图标三种形态（远程 URL / 本地 file: / 文本）统一由 AgentIcon 处理 */}
                       <AgentIcon
@@ -245,9 +259,14 @@ export function AgentConfigMarket() {
                         <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                           v{agent.version || '—'}
                         </span>
+                        {/* 来源徽标：ACP 官方用强调色，预置用中性色，避免与状态标记混在一起 */}
                         <span
-                          className="text-[10px] px-1 rounded"
-                          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-tertiary)' }}
+                          className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+                          style={
+                            agent.source === 'acp-registry'
+                              ? { backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }
+                              : { backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }
+                          }
                           title={agent.source === 'acp-registry' ? '来自 ACP 官方目录' : 'PilotDesk 内置预置'}
                         >
                           {agent.source === 'acp-registry' ? 'ACP 官方' : '预置'}
