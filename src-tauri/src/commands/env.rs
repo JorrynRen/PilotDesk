@@ -753,6 +753,7 @@ pub async fn install_agent(
     state: tauri::State<'_, crate::DbState>,
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
+    allow_unverified: Option<bool>,
 ) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     let config = agents::get_agent_inner(&conn, &agent_type)?
@@ -777,6 +778,7 @@ pub async fn install_agent(
             &config.display_name,
             &lifecycle,
             Some(config.version.as_str()).filter(|v| !v.trim().is_empty()),
+            allow_unverified.unwrap_or(false),
         )
         .await;
     }

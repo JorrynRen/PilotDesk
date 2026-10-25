@@ -618,8 +618,11 @@ pub(crate) async fn install_binary(
     display_name: &str,
     spec: &LifecycleSpec,
     version: Option<&str>,
+    allow_unverified: bool,
 ) -> Result<(), AppError> {
-    let result = install_binary_inner(app, state, agent_type, display_name, spec, version).await;
+    let result =
+        install_binary_inner(app, state, agent_type, display_name, spec, version, allow_unverified)
+            .await;
     if let Err(err) = &result {
         let msg = format!("安装失败: {}", err);
         let _ = set_pkg_state(state, agent_type, PkgState::failed(msg.clone(), crate::utils::now()));
@@ -643,6 +646,7 @@ async fn install_binary_inner(
     display_name: &str,
     spec: &LifecycleSpec,
     version: Option<&str>,
+    allow_unverified: bool,
 ) -> Result<(), AppError> {
     let artifact = spec
         .current_artifact()
@@ -666,7 +670,30 @@ async fn install_binary_inner(
         "install-progress",
         json!({ "agent": agent_type, "message": "正在校验安装包...", "progress": 55 }),
     );
-    verify_sha256(&bytes, artifact.sha256.as_deref().unwrap_or_default())?;
+    // 完整性来源优先级：registry 的 sha256 → 厂商随包发布的 .sha256 / checksums.txt → 用户显式确认后不校验
+    let published = artifact.sha256.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let (expected, integrity) = match published {
+        Some(sha) => (Some(sha.to_string()), "sha256"),
+        None => match fetch_published_checksum(&artifact.archive).await {
+            Some((sha, source)) => (Some(sha), source),
+            None => (None, "none"),
+        },
+    };
+    match expected.as_deref() {
+        Some(sha) => verify_sha256(&bytes, sha)?,
+        None if allow_unverified => {
+            log::warn!(
+                "[AgentMarket] 未校验安装包完整性（用户已显式确认）: {}",
+                artifact.archive
+            );
+        }
+        None => {
+            return Err(AppError::Config(format!(
+                "『{}』的安装包没有校验值，也没找到厂商校验文件。确认要安装，请在确认弹窗中选择「仍然安装」。",
+                display_name
+            )))
+        }
+    }
 
     let _ = app.emit(
         "install-progress",
@@ -690,6 +717,7 @@ async fn install_binary_inner(
 
     let mut ready = PkgState::ready(crate::utils::now());
     ready.install_dir = Some(target.to_string_lossy().to_string());
+    ready.integrity = Some(integrity.to_string());
     ready.installed_version = version
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
@@ -752,6 +780,88 @@ pub(crate) fn uninstall_binary(
     set_pkg_state_inner(&conn, agent_type, &PkgState::pending(crate::utils::now()))?;
     crate::commands::env::clear_env_cache();
     Ok(())
+}
+
+/// 从发布源补校验值：先试同名 `<archive>.sha256`，再试同目录 `checksums.txt`。
+///
+/// 官方目录偶有漏录 sha256（如 VTCode 的 release 里其实带了 `.sha256`），
+/// 这一步只是把厂商已经提供的信息取回来，不降低门槛。
+/// 返回 (sha256, 来源标记)，来源会记进 `pkgState.integrity` 供排查。
+async fn fetch_published_checksum(archive_url: &str) -> Option<(String, &'static str)> {
+    let file_name = archive_url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())?
+        .to_string();
+
+    // ① 同名 .sha256（内容可能是裸哈希，也可能是 `hash  filename`）
+    if let Some(text) = fetch_small_text(&format!("{}.sha256", archive_url)).await {
+        if let Some(sha) = extract_sha256(&text) {
+            return Some((sha, "sha256-file"));
+        }
+    }
+
+    // ② 同目录 checksums.txt（按文件名匹配行）
+    let dir = archive_url
+        .rsplit_once('/')
+        .map(|(d, _)| d)
+        .unwrap_or_default();
+    for candidate in ["checksums.txt", "CHECKSUMS.txt", "sha256sums.txt"] {
+        if let Some(text) = fetch_small_text(&format!("{}/{}", dir, candidate)).await {
+            if let Some(sha) = find_sha_for_file(&text, &file_name) {
+                return Some((sha, "checksums-txt"));
+            }
+        }
+    }
+    None
+}
+
+/// 拉一个小文本文件（校验文件通常 <1KB）；失败或过大一律返回 None，不影响安装主流程。
+async fn fetch_small_text(url: &str) -> Option<String> {
+    const MAX_CHARS: usize = 64 * 1024;
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("PilotDesk-AgentMarket/1.0")
+        .build()
+        .ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    if resp.content_length().unwrap_or(0) > MAX_CHARS as u64 {
+        return None;
+    }
+    let text = resp.text().await.ok()?;
+    if text.len() > MAX_CHARS {
+        return None;
+    }
+    Some(text)
+}
+
+/// 取文本里第一段 64 位十六进制（兼容裸哈希与 `sha256sum` 输出）。
+fn extract_sha256(text: &str) -> Option<String> {
+    text.split(|c: char| !c.is_ascii_hexdigit())
+        .find(|token| token.len() == 64)
+        .map(|s| s.to_ascii_lowercase())
+}
+
+/// 在 `checksums.txt` 里按文件名找对应行的哈希。
+fn find_sha_for_file(text: &str, file_name: &str) -> Option<String> {
+    let needle = file_name.to_ascii_lowercase();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if !trimmed.to_ascii_lowercase().contains(&needle) {
+            continue;
+        }
+        if let Some(sha) = extract_sha256(trimmed) {
+            return Some(sha);
+        }
+    }
+    None
 }
 
 /// 流式下载并有体积上限：不要先 `bytes()` 再判大小（恶意超大会先撑爆内存）。
@@ -936,10 +1046,20 @@ async fn run_install(
     display_name: &str,
     spec: &LifecycleSpec,
     version: Option<&str>,
+    allow_unverified: bool,
 ) -> Result<(), AppError> {
     // 二进制没有包管理器可代劳：下载/校验/解压由应用自己做，不走 shell
     if spec.kind == LifecycleKind::Binary {
-        return install_binary(app, state, agent_type, display_name, spec, version).await;
+        return install_binary(
+            app,
+            state,
+            agent_type,
+            display_name,
+            spec,
+            version,
+            allow_unverified,
+        )
+        .await;
     }
 
     let install_cmd = spec
@@ -1098,12 +1218,16 @@ pub(crate) async fn adopt_preset_spec(
 }
 
 /// 「安装」：执行安装命令，随后解析 bin / 已安装版本并把包状态置为 `ready`。
+///
+/// `allow_unverified`：安装包既无 registry 校验值、又无厂商校验文件时，
+/// 用户是否已显式确认「仍然安装」（不校验完整性）。
 #[tauri::command]
 pub async fn agent_market_install(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::DbState>,
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
+    allow_unverified: Option<bool>,
 ) -> Result<AgentConfig, AppError> {
     let (config, transport) = {
         let conn = state.get_conn()?;
@@ -1133,6 +1257,7 @@ pub async fn agent_market_install(
         &config.display_name,
         &spec,
         Some(config.version.as_str()).filter(|v| !v.trim().is_empty()),
+        allow_unverified.unwrap_or(false),
     )
     .await?;
 
@@ -1150,6 +1275,7 @@ pub async fn agent_market_update(
     state: tauri::State<'_, crate::DbState>,
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
+    allow_unverified: Option<bool>,
 ) -> Result<AgentConfig, AppError> {
     let (config, transport) = {
         let conn = state.get_conn()?;
@@ -1230,6 +1356,7 @@ pub async fn agent_market_update(
         &config.display_name,
         &entry.lifecycle,
         Some(entry.version.as_str()).filter(|v| !v.trim().is_empty()),
+        allow_unverified.unwrap_or(false),
     )
     .await?;
 

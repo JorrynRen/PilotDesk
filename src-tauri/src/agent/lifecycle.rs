@@ -188,6 +188,9 @@ pub struct PkgState {
     /// 二进制安装目录（仅 `binary`：卸载时直接删这棵目录）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install_dir: Option<String>,
+    /// 完整性来源：`sha256`（registry）/ `sha256-file` / `checksums-txt` / `none`（用户确认后不校验）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,6 +209,7 @@ impl PkgState {
             status: STATUS_PENDING_INSTALL.to_string(),
             bins: BTreeMap::new(),
             install_dir: None,
+            integrity: None,
             installed_version: None,
             last_error: None,
             updated_at: now_ts,
@@ -282,6 +286,9 @@ impl LifecycleSpec {
     }
 
     /// 当前系统可直接安装的制品（P3 受限子集的判定入口）。
+    ///
+    /// 只判「平台 + 归档形态 + 启动器形态」；**完整性不属于这里**——
+    /// registry 没写 sha256 时还可以从厂商校验文件补，补不到则由用户显式确认后安装。
     pub fn current_artifact(&self) -> Option<&Artifact> {
         if self.kind != LifecycleKind::Binary {
             return None;
@@ -289,9 +296,6 @@ impl LifecycleSpec {
         let key = current_platform_key();
         let artifact = self.artifacts.iter().find(|a| a.platform == key)?;
         if !artifact.archive.to_lowercase().ends_with(".zip") {
-            return None;
-        }
-        if artifact.sha256.as_deref().unwrap_or("").trim().is_empty() {
             return None;
         }
         if artifact.cmd.to_lowercase().ends_with(".cmd") {
@@ -308,9 +312,6 @@ impl LifecycleSpec {
         };
         if !artifact.archive.to_lowercase().ends_with(".zip") {
             return "当前仅支持 .zip 安装包，请按官方文档手工安装".to_string();
-        }
-        if artifact.sha256.as_deref().unwrap_or("").trim().is_empty() {
-            return "该安装包未提供校验值（sha256），无法校验完整性，请按官方文档手工安装".to_string();
         }
         if artifact.cmd.to_lowercase().ends_with(".cmd") {
             return "该安装包的启动器是 .cmd 脚本，当前不支持自动安装，请按官方文档手工安装".to_string();

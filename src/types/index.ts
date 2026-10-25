@@ -443,6 +443,8 @@ export interface PkgState {
   bins?: Record<string, string>;
   /** 二进制安装目录（仅 binary） */
   installDir?: string;
+  /** 完整性来源：sha256 / sha256-file / checksums-txt / none（用户确认后不校验） */
+  integrity?: string;
   installedVersion?: string;
   lastError?: string;
   updatedAt: number;

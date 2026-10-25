@@ -8,6 +8,7 @@ import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { SettingsSection, SettingsCard, SettingsButton, SettingsStatusIcon } from '../settings';
 import { errorMessage } from '../../utils/errorMessage';
+import { needsUnverifiedConsent } from '../../utils/agentIntegrity';
 
 interface DependencyStatus {
   name: string;
@@ -251,7 +252,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     }),
   ];
 
-  const handleInstall = async (key: string, mode: 'install' | 'update' = 'install') => {
+  const handleInstall = async (key: string, mode: 'install' | 'update' = 'install', allowUnverified = false) => {
     const agent = agents.find(a => a.agentType === key);
     const name = agent?.displayName || key;
     setInstalling(key);
@@ -261,9 +262,12 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       // 历史手工 Agent 若市集有同名预置也走它（后端先接管预置规格再安装）；
       // 其余（如 Git / Python 等非 Agent 工具）仍走通用的 install_agent。
       if (agent?.pkgState || presetInstallable[key]) {
-        await invoke(mode === 'update' ? 'agent_market_update' : 'agent_market_install', { agentType: key });
+        await invoke(mode === 'update' ? 'agent_market_update' : 'agent_market_install', {
+          agentType: key,
+          allowUnverified,
+        });
       } else {
-        await invoke('install_agent', { agentType: key });
+        await invoke('install_agent', { agentType: key, allowUnverified });
       }
       addLog(`${name} ${mode === 'update' ? '更新' : '安装'}成功`, 'success');
       await fetchEnv();
@@ -327,17 +331,25 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       action !== 'uninstall' && isAcpAgent(key)
         ? '\n\n注意：这里只安装 ACP 适配器，不包含该 Agent 本体。若它需要单独的命令行工具或账号，请自行安装并在终端完成登录，否则建立会话会在握手阶段失败。'
         : '';
+    // 二进制安装包没有 registry 校验值：后端会先找厂商校验文件，取不到就不校验。
+    const unverified = needsUnverifiedConsent(
+      agents.find((a) => a.agentType === key)?.lifecycle
+    );
+    const integrityCaution =
+      action !== 'uninstall' && unverified
+        ? '\n\n注意：该安装包未提供校验值，安装时会先尝试厂商发布的校验文件；若仍取不到，将不校验完整性直接安装。仅在你信任该来源时继续。'
+        : '';
     const confirmText =
       action === 'uninstall' ? '卸载' : action === 'update' ? '更新' : action === 'reinstall' ? '重装' : '安装';
     const ok = await confirmDialog({
       title,
-      message: `${message}${acpCaution}`,
-      confirmText,
+      message: `${message}${acpCaution}${integrityCaution}`,
+      confirmText: unverified ? '仍然安装' : confirmText,
       danger: action === 'uninstall',
     });
     if (!ok) return;
     if (action === 'uninstall') await handleUninstall(key);
-    else await handleInstall(key, action === 'update' ? 'update' : 'install');
+    else await handleInstall(key, action === 'update' ? 'update' : 'install', unverified);
   };
 
   return (

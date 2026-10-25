@@ -8,6 +8,7 @@ import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { errorMessage } from '../../utils/errorMessage';
+import { needsUnverifiedConsent } from '../../utils/agentIntegrity';
 
 import type { AgentConfig, LifecycleSpec, PkgState } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
@@ -58,11 +59,31 @@ export function AgentManager() {
     };
   }, []);
 
-  /** 执行本机安装（npm/shell），完成后刷新状态；失败原因由后端落到 pkgState.lastError。 */
+  /**
+   * 二进制安装包没有 registry 校验值时，先让用户显式确认。
+   * 后端仍会尝试厂商校验文件（.sha256 / checksums.txt），有就照常校验。
+   */
+  const confirmUnverified = async (agentType: string): Promise<boolean> => {
+    const agent = agents.find((a) => a.agentType === agentType);
+    if (!needsUnverifiedConsent(agent?.lifecycle)) return false;
+    const ok = await confirmDialog({
+      title: '确认安装（未提供校验值）',
+      message: `『${agent?.displayName || agentType}』的安装包没有提供校验值。安装时会先尝试厂商发布的校验文件；若仍取不到，将不校验完整性直接解压安装。\n\n仅在你信任该来源时继续。`,
+      confirmText: '仍然安装',
+      danger: true,
+    });
+    return ok;
+  };
+
+  /** 执行本机安装（npm/shell/binary），完成后刷新状态；失败原因由后端落到 pkgState.lastError。 */
   const handleInstall = async (agentType: string) => {
+    const needsConsent = needsUnverifiedConsent(
+      agents.find((a) => a.agentType === agentType)?.lifecycle
+    );
+    if (needsConsent && !(await confirmUnverified(agentType))) return;
     setInstalling(agentType);
     try {
-      await invoke('agent_market_install', { agentType });
+      await invoke('agent_market_install', { agentType, allowUnverified: needsConsent });
       showToast('安装完成，Agent 已就绪', 'success');
     } catch (err) {
       showToast(`安装失败: ${errorMessage(err)}`, 'error');
@@ -107,9 +128,13 @@ export function AgentManager() {
 
   /** 更新：按市场最新规格覆盖本地配置后重装（仅市场提供版本信息的条目）。 */
   const handleUpdate = async (agentType: string) => {
+    const needsConsent = needsUnverifiedConsent(
+      agents.find((a) => a.agentType === agentType)?.lifecycle
+    );
+    if (needsConsent && !(await confirmUnverified(agentType))) return;
     setUpdating(agentType);
     try {
-      await invoke('agent_market_update', { agentType });
+      await invoke('agent_market_update', { agentType, allowUnverified: needsConsent });
       showToast('已更新到市场最新版本', 'success');
     } catch (err) {
       showToast(`更新失败: ${errorMessage(err)}`, 'error');
@@ -924,6 +949,11 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
       {!packages && lifecycle.kind === 'binary' && (lifecycle.artifacts?.length ?? 0) > 0 && (
         <div className="text-[10px] mt-1 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
           binary · {lifecycle.artifacts!.length} 个平台制品（按本机平台自动选取）
+        </div>
+      )}
+      {pkgState?.integrity === 'none' && (
+        <div className="text-[10px] mt-1" style={{ color: 'var(--warning, #d97706)' }}>
+          本次安装未校验完整性（安装包无校验值，已由你确认）。
         </div>
       )}
       {runtime && (
