@@ -4,7 +4,8 @@
  * 背景：应用里有 600+ 处 `title`，原生提示由 OS 绘制 —— 样式丑、不换行、不设最大宽度，
  * 还能画到窗口客户区之外。这里用**事件委托**统一接管，业务组件一行都不用改：
  * - hover / focus 命中 `[title]`：把文本搬到 `data-pd-title` 并摘掉 `title`（压掉原生提示）；
- * - 用一个挂到 body 的 portal 浮层渲染：最多 360px、自动换行、超出视口时翻转/夹取；
+ * - 用一个挂到 body 的 portal 浮层渲染（气泡 + 指向锚点的小箭头）：最多 360px、自动换行、
+ *   超出视口时翻转/夹取；气泡被夹取时箭头仍指向锚点中心；
  * - 离开、点击、滚动、缩放、失焦、Esc 都收起，并把 `title` 原样还原（不影响读屏）。
  *
  * 豁免：`iframe`、`<svg>` 内部（它们的 title 是图形/文档名称），以及给元素或祖先加
@@ -16,12 +17,14 @@ import { createPortal } from 'react-dom';
 
 /** 悬浮多久后出现（原生约 1s，这里更快但仍能避免扫过即闪） */
 const SHOW_DELAY_MS = 300;
-/** 浮层与锚点的间距 */
-const GAP = 6;
+/** 浮层与锚点的间距（留出箭头尖端的余量） */
+const GAP = 8;
 /** 与视口边缘的最小留白（也是「不溢出窗口」的保证） */
 const EDGE = 8;
 /** 单行/多行的最大宽度 */
 const MAX_WIDTH = 360;
+/** 指向锚点的小箭头边长（正方形旋转 45°，露在气泡外半个） */
+const ARROW_SIZE = 8;
 
 interface TipState {
   text: string;
@@ -31,6 +34,7 @@ interface TipState {
 export function TooltipLayer() {
   const [tip, setTip] = useState<TipState | null>(null);
   const layerRef = useRef<HTMLDivElement | null>(null);
+  const arrowRef = useRef<HTMLSpanElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 已摘掉 title、等待延迟结束的元素 */
   const pendingElRef = useRef<HTMLElement | null>(null);
@@ -183,6 +187,33 @@ export function TooltipLayer() {
     layer.style.left = `${Math.round(left)}px`;
     layer.style.top = `${Math.round(top)}px`;
     layer.style.visibility = 'visible';
+
+    // 气泡被夹取后，箭头仍对准锚点中心（限制在气泡内部，避免戳出圆角）
+    const arrow = arrowRef.current;
+    if (arrow) {
+      const anchorCenterX = rect.left + rect.width / 2;
+      const arrowX = Math.max(12, Math.min(anchorCenterX - left, w - 12));
+      arrow.style.left = `${Math.round(arrowX - ARROW_SIZE / 2)}px`;
+      if (placeAbove) {
+        // 气泡在锚点上方：箭头挂在气泡底边、朝下（可见边为右下两条）
+        arrow.style.top = '100%';
+        arrow.style.bottom = '';
+        arrow.style.marginTop = `${-ARROW_SIZE / 2}px`;
+        arrow.style.borderRight = '1px solid var(--border)';
+        arrow.style.borderBottom = '1px solid var(--border)';
+        arrow.style.borderTop = '0';
+        arrow.style.borderLeft = '0';
+      } else {
+        // 气泡在锚点下方：箭头挂在气泡顶边、朝上（可见边为左上两条）
+        arrow.style.top = '';
+        arrow.style.bottom = '100%';
+        arrow.style.marginBottom = `${-ARROW_SIZE / 2}px`;
+        arrow.style.borderTop = '1px solid var(--border)';
+        arrow.style.borderLeft = '1px solid var(--border)';
+        arrow.style.borderRight = '0';
+        arrow.style.borderBottom = '0';
+      }
+    }
   }, [tip]);
 
   if (!tip) return null;
@@ -198,8 +229,8 @@ export function TooltipLayer() {
         top: 0,
         visibility: 'hidden',
         maxWidth: `min(${MAX_WIDTH}px, calc(100vw - ${EDGE * 2}px))`,
-        padding: '6px 8px',
-        borderRadius: 6,
+        padding: '6px 9px',
+        borderRadius: 8,
         fontSize: 11,
         lineHeight: 1.5,
         // 换行与长串（路径 / 命令）折行都在这里解决
@@ -214,6 +245,19 @@ export function TooltipLayer() {
       }}
     >
       {tip.text}
+      {/* 气泡箭头：正方形旋转 45°，只露半个在气泡外；边和位置在 layout effect 里按翻转方向设置 */}
+      <span
+        ref={arrowRef}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          width: ARROW_SIZE,
+          height: ARROW_SIZE,
+          backgroundColor: 'var(--bg-primary)',
+          transform: 'rotate(45deg)',
+          pointerEvents: 'none',
+        }}
+      />
     </div>,
     document.body,
   );
