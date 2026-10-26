@@ -963,16 +963,8 @@ pub fn update_agent_inner(
 }
 
 pub fn delete_agent_inner(conn: &Connection, agent_type: &str) -> Result<(), AppError> {
-    // Prevent deletion of builtin agents
-    let existing = get_agent_inner(conn, agent_type)?;
-    if let Some(agent) = &existing {
-        if agent.is_builtin {
-            return Err(AppError::InvalidInput(format!(
-                "预置 Agent '{}' 不可删除",
-                agent_type
-            )));
-        }
-    }
+    // 不再按 is_builtin 拦截删除：历史内置标记已由迁移清零，且新库不再种任何预置；
+    // 预置条目随时可从「资源市集 › Agent 配置」重新获取。历史会话保留（agent_type 只是文本引用）。
     let affected = conn.execute(
         "DELETE FROM agents WHERE agent_type = ?1",
         params![agent_type],

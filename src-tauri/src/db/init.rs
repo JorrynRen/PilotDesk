@@ -338,9 +338,31 @@ pub fn init_db() -> Result<DbPool, AppError> {
     let now = crate::utils::now();
 
     // Agent 不再硬编码预置：预置项（官方 ACP 目录缺失的条目 + CLI 条目）统一由
-    // 「资源市集 › Agent 市集」下发（server/market/agents-config.json + ACP 官方目录），
+    // 「资源市集 › Agent 配置」下发（server/market/agents-config.json + ACP 官方目录），
     // 用户「获取」时才落库。这样新增/修正预置不需要发版。
-
+    //
+    // 存量转正（一次性、幂等）：早期版本（v73 种子）在库里写过 claude / codex / hermes 三条
+    // `is_builtin = 1` 的配置，它们既没有市集来源、又因「预置不可删」卡住用户，还让
+    // 「本机安装」区误显示未安装。现在统一按普通配置对待：
+    //   1) 已有安装规格的补一个 preset 来源（「更新」按市场规格重装可用）；
+    //   2) `is_builtin` 清零——新库不会再产生该标记，删除入口也不再被它拦住。
+    // 只填空值，不覆盖用户已经改过的 dist_source。
+    {
+        let preset_source = serde_json::json!({
+            "source": crate::agent::lifecycle::SOURCE_PRESET,
+            "installedAt": now,
+        })
+        .to_string();
+        conn.execute(
+            "UPDATE agents
+                SET dist_source_json = ?1
+              WHERE is_builtin = 1
+                AND lifecycle_json IS NOT NULL
+                AND (dist_source_json IS NULL OR dist_source_json = '')",
+            rusqlite::params![preset_source],
+        )?;
+        conn.execute("UPDATE agents SET is_builtin = 0 WHERE is_builtin = 1", [])?;
+    }
 
     // App Settings 种子数据
     let workspace_default = crate::utils::paths::app_root_dir()
