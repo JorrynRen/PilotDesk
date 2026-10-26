@@ -163,9 +163,10 @@ export function TaskWorkspace() {
   const [rootOpen, setRootOpen] = useState(false);
 
   // 登录账号变化 → 先校验新身份，再拉组织（会自动选中并加载成员）
+  const accountLoaded = useAccountStore((s) => s.loaded);
   const accountKey = useAccountStore((s) => s.account?.email ?? '');
   /** 登录检查已完成但没有账号：此时任务列表为空是「没登录」，不是「没任务」 */
-  const notLoggedIn = useAccountStore((s) => s.loaded) && !useAccountStore((s) => s.account);
+  const notLoggedIn = accountLoaded && !accountKey;
   useEffect(() => {
     let cancelled = false;
     void (async () => {
