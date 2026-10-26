@@ -13,6 +13,7 @@ import { pluginRegistry } from './plugin/PluginRegistry';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar, NotificationCenter, CommandCenter } from './components/layout';
 import { TerminalPanel } from './components/TerminalPanel';
 import { CustomTabHost } from './components/custom/CustomTabHost';
+import { TooltipLayer } from './components/common/TooltipLayer';
 import { useCustomTabsStore } from './stores/customTabsStore';
 import { InspirationLibraryPage } from './components/inspiration/InspirationLibraryPage';
 import { ResourceMarketPage } from './components/market/ResourceMarketPage';
@@ -297,6 +298,8 @@ function App() {
       <NotificationCenter />
       {/* 全局指挥中心模态（工作流页「待处理」触发；会话默认页另有一份内嵌内容） */}
       <CommandCenter />
+      {/* 全局接管原生 title：统一延迟/换行/最大宽度，并保证不溢出窗口 */}
+      <TooltipLayer />
       <Routes>
         <Route path="/" element={<MainLayout />} />
         {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
