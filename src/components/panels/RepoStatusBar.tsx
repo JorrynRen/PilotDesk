@@ -5,11 +5,12 @@
  * - 列表：本会话 / 本房间 Agent 通过 write_file、edit_file 写过什么，可逐条撤销；
  * - 这里：该目录在 Git 下的真实状态（含用户手改、未跟踪文件），不提供任何写操作。
  *
- * 目录不是 Git 仓库、或本机没有 Git 时整条隐藏（Git 属推荐依赖，缺失不影响其它功能）。
+ * 目录不是 Git 仓库时只显示一行弱化说明（`⌥ 未纳入 Git`），避免用户误以为功能没生效；
+ * 后端命令不可用时整条隐藏（Git 属推荐依赖，缺失不影响其它功能）。
  */
 
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, GitBranch, Loader2, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface GitStatusEntry {
@@ -111,7 +112,13 @@ export function RepoStatusBar({ cwd, refreshToken = 0, snapshotCount = 0 }: Repo
         style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
         title="当前工作目录不在 Git 仓库内（或本机未安装 Git）。在目录里执行 git init 后，这里会显示分支、最新提交与未提交改动"
       >
-        <GitBranch size={10} className="shrink-0" />
+        <span
+          className="text-[10px] shrink-0 leading-none font-mono"
+          style={{ color: 'var(--text-tertiary)' }}
+          aria-hidden="true"
+        >
+          ⌥
+        </span>
         <span className="text-[9px] truncate">
           未纳入 Git{dirLabel ? ` · ${dirLabel}` : ''}
         </span>
@@ -142,7 +149,13 @@ export function RepoStatusBar({ cwd, refreshToken = 0, snapshotCount = 0 }: Repo
           ) : (
             <ChevronRight size={10} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
           )}
-          <GitBranch size={10} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
+          <span
+            className="text-[10px] shrink-0 leading-none font-mono"
+            style={{ color: 'var(--text-tertiary)' }}
+            aria-hidden="true"
+          >
+            ⌥
+          </span>
           <span
             className="text-[10px] truncate font-mono"
             style={{ color: 'var(--text-secondary)' }}
