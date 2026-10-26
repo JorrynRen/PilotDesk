@@ -8,6 +8,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
 import { AgentIcon } from '../common/AgentIcon';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import type { LifecycleSpec } from '../../types';
 
 /**
  * AgentConfigMarket — Agent 市集。
@@ -41,6 +42,8 @@ interface MarketAgent {
   license?: string | null;
   authors: string[];
   packages: MarketPackageView[];
+  /** 完整安装规格：集成配置表单按同名条目预填用 */
+  lifecycle?: LifecycleSpec;
   supported: boolean;
   unsupportedReason?: string | null;
   installed: boolean;

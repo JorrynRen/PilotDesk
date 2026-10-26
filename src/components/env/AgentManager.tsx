@@ -632,6 +632,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
   // ── 安装与版本规格（生命周期，本地 CLI 专属）──
   // 与其它字段一视同仁：市集 / 预置下发的规格同样可以覆盖（覆盖是用户主动行为，
   // 下次从市集「更新」会按市场最新规格重写）。binary / uvx 的制品与校验值不在表单内编辑。
+  /** 规格是从市集同名条目预填来的（库里原本没有规格，保存后才落库） */
+  const [prefilledFromMarket, setPrefilledFromMarket] = useState(false);
   const lcKind = form.lifecycle?.kind ?? 'shell';
   const lcEditableKind = lcKind === 'npm' || lcKind === 'shell';
   /** 只写非空值：空字符串视为「未配置」，避免把空命令写进规格 */
@@ -650,6 +652,36 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
   const lcHostPackage =
     (form.lifecycle?.packages ?? []).find((p) => p.role === 'host') ??
     form.lifecycle?.packages?.[0];
+  /**
+   * 历史配置（v11 之前创建的内置 Agent）库里没有生命周期规格：编辑时按市集同名条目预填。
+   * 只补到内存，保存才落库 —— 避免用户看到一片空字段以为功能坏了。
+   */
+  useEffect(() => {
+    if (mode !== 'edit' || !form.agentType || form.lifecycle || !form.transport) return;
+    const transport = form.transport;
+    let alive = true;
+    invoke<Array<{ agentType: string; transport: string; lifecycle?: LifecycleSpec }>>(
+      'agent_market_list',
+      { category: transport === 'acp' ? 'acp' : 'cli' },
+    )
+      .then((list) => {
+        if (!alive) return;
+        const hit = (list ?? []).find(
+          (e) => e.agentType === form.agentType && e.transport === transport,
+        );
+        if (!hit?.lifecycle) return;
+        setPrefilledFromMarket(true);
+        onChange({ ...form, lifecycle: hit.lifecycle });
+      })
+      .catch(() => {
+        // 市集不可用就保持空表单，允许手工填写
+      });
+    return () => {
+      alive = false;
+    };
+    // 只在切换 Agent / 接入方式时重跑（form 不进依赖：回填后不应再次触发）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, form.agentType, form.transport]);
   const lcSetPackage = (v: string) => {
     const base: LifecycleSpec = form.lifecycle ?? { kind: 'npm' };
     const others = (base.packages ?? []).filter((p) => p !== lcHostPackage);
@@ -658,6 +690,12 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
       : others;
     onChange({ ...form, lifecycle: { ...base, packages } });
   };
+  /** 包名去掉版本后缀（npm 派生命令用；保留 scope 的 `@`） */
+  const npmPkgName = (() => {
+    const raw = lcHostPackage?.package ?? '';
+    const at = raw.lastIndexOf('@');
+    return at > 0 ? raw.slice(0, at) : raw;
+  })();
 
   // ACP 的命令/参数由市场下发（官方目录条目安装后会自动填入解析结果），
   // 集成配置页只保留「自定义填写」入口——预置不再硬编码在前端。
@@ -673,7 +711,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           transport={form.transport ?? 'subprocess'}
           pkgState={form.pkgState}
           lifecycle={form.lifecycle}
-          canUpdate={!!form.distSource?.registryVersion}
+          canUpdate={!!form.distSource && form.distSource.source !== 'manual'}
           onInstall={onInstall}
           onUninstall={onUninstall}
           onUpdate={onUpdate}
@@ -869,13 +907,21 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
             label="安装命令"
             value={form.lifecycle?.installCmd ?? ''}
             onChange={(v) => lcPatch({ installCmd: v })}
-            placeholder={lcKind === 'npm' ? '留空则按包名自动派生' : '如 pip install hermes-agent'}
+            placeholder={
+              lcKind === 'npm' && npmPkgName
+                ? `留空自动派生：npm install -g ${npmPkgName}`
+                : '如 pip install hermes-agent'
+            }
           />
           <FormField
             label="卸载命令"
             value={form.lifecycle?.uninstallCmd ?? ''}
             onChange={(v) => lcPatch({ uninstallCmd: v })}
-            placeholder="留空则不提供卸载"
+            placeholder={
+              lcKind === 'npm' && npmPkgName
+                ? `留空自动派生：npm uninstall -g ${npmPkgName}`
+                : '留空则不提供卸载'
+            }
           />
         </div>
         <div className="grid grid-cols-2 gap-2 mt-2">
@@ -883,13 +929,21 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
             label="更新命令"
             value={form.lifecycle?.updateCmd ?? ''}
             onChange={(v) => lcPatch({ updateCmd: v })}
-            placeholder="如 hermes update"
+            placeholder={
+              lcKind === 'npm'
+                ? 'npm 无独立更新命令：更新即按新版本重装'
+                : '如 hermes update'
+            }
           />
           <FormField
             label="版本查询命令"
             value={form.lifecycle?.versionCmd ?? ''}
             onChange={(v) => lcPatch({ versionCmd: v })}
-            placeholder="如 codex --version"
+            placeholder={
+              lcKind === 'npm' && npmPkgName
+                ? `留空自动派生：npm ls -g ${npmPkgName} --json`
+                : '如 codex --version'
+            }
           />
         </div>
         <div className="mt-2">
@@ -897,12 +951,18 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
             label="最新版本查询命令"
             value={form.lifecycle?.latestVersionCmd ?? ''}
             onChange={(v) => lcPatch({ latestVersionCmd: v })}
-            placeholder="如 npm view @openai/codex version"
+            placeholder={
+              lcKind === 'npm' && npmPkgName
+                ? `留空自动派生：npm view ${npmPkgName} version`
+                : '如 npm view @openai/codex version'
+            }
           />
         </div>
         <div className="text-[10px] mt-1 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
           {form.lifecycle
-            ? '环境检测页的安装 / 更新 / 卸载按这里的命令执行；下次从市集「更新」会按市场最新规格重写这些字段。'
+            ? prefilledFromMarket
+              ? '以上规格按市集同名条目预填（尚未保存，保存后生效）；下次从市集「更新」会按市场最新规格重写这些字段。'
+              : '环境检测页的安装 / 更新 / 卸载按这里的命令执行；下次从市集「更新」会按市场最新规格重写这些字段。'
             : '未配置安装规格：环境检测页对该 Agent 只显示「手工配置」；填写任一命令后即按这里的规格管理。'}
         </div>
       </div>

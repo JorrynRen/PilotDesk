@@ -60,6 +60,9 @@ pub struct MarketAgent {
     pub license: Option<String>,
     pub authors: Vec<String>,
     pub packages: Vec<MarketPackage>,
+    /// 完整生命周期规格：供集成配置表单在编辑历史配置（库里没有规格）时按同名条目预填，
+    /// 与「本机安装」动作使用同一份数据，避免前端另造一套派生命令。
+    pub lifecycle: LifecycleSpec,
     /// 当前版本是否支持直接获取（P1 只支持 npm/shell）
     pub supported: bool,
     pub unsupported_reason: Option<String>,
@@ -355,6 +358,7 @@ impl MarketEntry {
             license: self.license.clone(),
             authors: self.authors.clone(),
             packages,
+            lifecycle: self.lifecycle.clone(),
             supported: support.is_ok(),
             unsupported_reason: support.err(),
             installed: installed.exists,
