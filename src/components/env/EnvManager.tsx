@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Download, RefreshCw, Loader2, ArrowUpCircle, Trash2 } from 'lucide-react';
+import { useState, useEffect, useCallback, type CSSProperties } from 'react';
+import { Download, RefreshCw, Loader2, ArrowUpCircle, Trash2, Copy, Check } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { InstallLog } from './InstallLog';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { confirmDialog } from '../../stores/confirmStore';
@@ -37,6 +38,56 @@ interface EnvManagerProps {
   onComplete?: () => void;
 }
 
+/** 前置依赖的等级：必需缺失会阻断 Agent 能力，推荐缺失只影响对应功能，但两者都给出安装引导。 */
+type PrereqTier = '必需' | '推荐';
+
+interface PrerequisiteMeta {
+  key: 'node' | 'python' | 'git';
+  name: string;
+  tier: PrereqTier;
+  /** 用途说明（已安装时也展示，让用户知道为什么需要它） */
+  note: string;
+  url: string;
+  downloadLabel: string;
+  /** Windows 可复制的安装命令（其他平台只给官方下载页） */
+  command: string;
+}
+
+const PREREQUISITES: PrerequisiteMeta[] = [
+  {
+    key: 'node',
+    name: 'Node.js',
+    tier: '必需',
+    note: '内置预置（claude / codex）与 ACP 市场多数条目通过 npm / npx 安装和运行，缺失时这些 Agent 既装不上也起不来。',
+    url: 'https://nodejs.org/zh-cn/download',
+    downloadLabel: '下载 Node.js（LTS）',
+    command: 'winget install OpenJS.NodeJS.LTS',
+  },
+  {
+    key: 'python',
+    name: 'Python',
+    tier: '推荐',
+    note: '内置文档技能（Word / Excel / PPT / PDF）与 execute_python 工具依赖它；缺失时这些能力不可用，其余功能不受影响。安装时请勾选 Add python.exe to PATH。',
+    url: 'https://www.python.org/downloads/',
+    downloadLabel: '下载 Python 3',
+    command: 'winget install Python.Python.3.12',
+  },
+  {
+    key: 'git',
+    name: 'Git',
+    tier: '推荐',
+    note: '用于把当前仓库的分支、最新提交与未提交改动作为上下文提供给 AI；缺失时自动降级，不影响启动、建会话与对话。',
+    url: 'https://git-scm.com/download/win',
+    downloadLabel: '下载 Git',
+    command: 'winget install Git.Git',
+  },
+];
+
+const TIER_STYLE: Record<PrereqTier, CSSProperties> = {
+  必需: { color: '#EF4444', backgroundColor: 'rgba(239, 68, 68, 0.10)' },
+  推荐: { color: '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.10)' },
+};
+
 export type { EnvManagerProps };
 
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
@@ -47,6 +98,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   /** Latest versions from remote registries */
   const [latestVersions, setLatestVersions] = useState<Record<string, { version: string; releaseTime: string | null } | null>>({});
   const [updateChecking, setUpdateChecking] = useState<Record<string, boolean>>({});
+  /** 刚复制过安装命令的前置依赖（用于按钮短暂变成「已复制」） */
+  const [copiedPrereq, setCopiedPrereq] = useState<string | null>(null);
+  const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
   // Load historical logs from database on mount
   useEffect(() => {
@@ -68,6 +122,13 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     const entry = { timestamp: Date.now(), message, level };
     setLogs((prev) => [...prev, entry]);
     invoke('insert_log', { message, level }).catch(() => {});
+  }, []);
+
+  const copyPrereqCommand = useCallback((key: string, command: string) => {
+    navigator.clipboard.writeText(command).then(() => {
+      setCopiedPrereq(key);
+      setTimeout(() => setCopiedPrereq((prev) => (prev === key ? null : prev)), 1500);
+    }).catch(() => {});
   }, []);
 
   const checkAgentUpdate = useCallback(async (key: string) => {
@@ -185,43 +246,11 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     return false;
   };
 
-  // Build dependencies: prerequisites + dynamic agents
-  const dependencies: DependencyStatus[] = [
-    {
-      name: 'Node.js',
-      key: 'node',
-      version: envInfo?.nodeVersion ?? null,
-      installed: !!envInfo?.nodeVersion,
-      latestVersion: null,
-      latestReleaseTime: null,
-      hasUpdate: false,
-      updateChecking: false,
-      detecting: envLoading && !envInfo?.nodeVersion,
-    },
-    {
-      name: 'Git',
-      key: 'git',
-      version: envInfo?.gitVersion ?? null,
-      installed: !!envInfo?.gitVersion,
-      latestVersion: null,
-      latestReleaseTime: null,
-      hasUpdate: false,
-      updateChecking: false,
-      detecting: envLoading && !envInfo?.gitVersion,
-    },
-    {
-      name: 'Python',
-      key: 'python',
-      version: envInfo?.pythonVersion ?? null,
-      installed: !!envInfo?.pythonVersion,
-      latestVersion: null,
-      latestReleaseTime: null,
-      hasUpdate: false,
-      updateChecking: false,
-      detecting: envLoading && !envInfo?.pythonVersion,
-    },
-    // Dynamic agents from DB
-    ...agents.filter(a => a.isEnabled).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map((agent) => {
+  // 前置依赖（Node / Python / Git）在「前置依赖」区块单独渲染，这里只构造 Agent 行
+  const agentDependencies: DependencyStatus[] = agents
+    .filter(a => a.isEnabled)
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    .map((agent) => {
       const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
       // 安装（包/适配器）与可用（启动命令）分开：ACP 装好适配器但运行时缺失时显示「不可用」
       const health = envInfo?.agentHealth?.[agent.agentType];
@@ -249,8 +278,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         updateChecking: updateCheck,
         detecting: envLoading && agentStatus[agent.agentType] === undefined,
       };
-    }),
-  ];
+    });
 
   const handleInstall = async (key: string, mode: 'install' | 'update' = 'install', allowUnverified = false) => {
     const agent = agents.find(a => a.agentType === key);
@@ -354,30 +382,87 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
   return (
     <div className="space-y-6">
-      {/* Prerequisites */}
+      {/* Prerequisites：必需项缺失会阻断 Agent 能力，推荐项缺失只影响对应功能，两者都给安装引导 */}
       <SettingsSection title="前置依赖">
         <div className="space-y-2">
-          {dependencies.slice(0, 3).map((dep) => (
-            <SettingsCard key={dep.name}>
-              <div className="flex items-center gap-2">
-                <SettingsStatusIcon installed={dep.installed} />
-                <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
-                  {dep.name}
-                </span>
-                {dep.detecting && <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
-              </div>
-              <span className="text-[10px]" style={{ color: dep.installed ? 'var(--text-secondary)' : '#EF4444' }}>
-                {dep.detecting ? '检查中' : (dep.version ?? '未安装')}
-              </span>
-            </SettingsCard>
-          ))}
+          {PREREQUISITES.map((meta) => {
+            const version =
+              meta.key === 'node'
+                ? envInfo?.nodeVersion
+                : meta.key === 'python'
+                  ? envInfo?.pythonVersion
+                  : envInfo?.gitVersion;
+            const installed = !!version;
+            const detecting = envLoading && !installed;
+            return (
+              <SettingsCard key={meta.key} className="items-start">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <SettingsStatusIcon installed={installed} />
+                    <span className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                      {meta.name}
+                    </span>
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded"
+                      style={TIER_STYLE[meta.tier]}
+                    >
+                      {meta.tier}
+                    </span>
+                    {detecting && <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
+                    <span className="text-[10px]" style={{ color: installed ? 'var(--text-secondary)' : '#EF4444' }}>
+                      {detecting ? '检查中' : (version ?? '未安装')}
+                    </span>
+                  </div>
+                  <div className="text-[10px] mt-1 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                    {meta.note}
+                  </div>
+                  {!installed && !detecting && (
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      <SettingsButton
+                        variant="secondary"
+                        onClick={() => { openUrl(meta.url).catch(() => {}); }}
+                        icon={<Download size={11} />}
+                      >
+                        {meta.downloadLabel}
+                      </SettingsButton>
+                      {isWindows && (
+                        <>
+                          <SettingsButton
+                            variant="ghost"
+                            onClick={() => copyPrereqCommand(meta.key, meta.command)}
+                            icon={copiedPrereq === meta.key ? <Check size={11} /> : <Copy size={11} />}
+                          >
+                            {copiedPrereq === meta.key ? '已复制' : '复制命令'}
+                          </SettingsButton>
+                          <code
+                            className="text-[10px] px-1.5 py-0.5 rounded"
+                            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+                          >
+                            {meta.command}
+                          </code>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </SettingsCard>
+            );
+          })}
+          {!envLoading && !envInfo?.nodeVersion && (
+            <div
+              className="text-[10px] leading-relaxed px-3 py-2 rounded-lg"
+              style={{ backgroundColor: 'rgba(239, 68, 68, 0.08)', color: '#EF4444' }}
+            >
+              Node.js 是唯一必需的前置依赖：装上后请重启应用（让新的 PATH 生效），否则依赖 npm / npx 的 Agent 既无法安装也无法建立会话。
+            </div>
+          )}
         </div>
       </SettingsSection>
 
       {/* Agent Detection with Update Check */}
       <SettingsSection title="Agent 检测">
         <div className="space-y-2">
-          {dependencies.slice(3).map((dep) => (
+          {agentDependencies.map((dep) => (
             <SettingsCard key={dep.name} highlight={dep.hasUpdate}>
               <div className="flex items-center gap-2 min-w-0">
                 <SettingsStatusIcon installed={dep.installed} />
