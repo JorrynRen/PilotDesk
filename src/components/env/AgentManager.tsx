@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Terminal, Repeat, BookOpen, Store as StoreIcon, Play } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Terminal, Repeat, BookOpen, Store as StoreIcon, Play, Package } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -236,6 +236,8 @@ export function AgentManager() {
           skillEntryFile: editForm.skillEntryFile,
           skillDisplayMode: editForm.skillDisplayMode,
           version: editForm.version,
+          // 生命周期规格：与其它字段一视同仁（undefined 时后端保留原值）
+          lifecycle: editForm.lifecycle,
         },
       });
       // 接入方式独立落库（`update_agent` 不写这两列）。
@@ -627,6 +629,36 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
     onChange({ ...form, conn: JSON.stringify(o) });
   };
 
+  // ── 安装与版本规格（生命周期，本地 CLI 专属）──
+  // 与其它字段一视同仁：市集 / 预置下发的规格同样可以覆盖（覆盖是用户主动行为，
+  // 下次从市集「更新」会按市场最新规格重写）。binary / uvx 的制品与校验值不在表单内编辑。
+  const lcKind = form.lifecycle?.kind ?? 'shell';
+  const lcEditableKind = lcKind === 'npm' || lcKind === 'shell';
+  /** 只写非空值：空字符串视为「未配置」，避免把空命令写进规格 */
+  const lcPatch = (patch: Partial<LifecycleSpec>) => {
+    const base: LifecycleSpec = form.lifecycle ?? { kind: 'shell' };
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) {
+      if (typeof v === 'string') {
+        if (v.trim()) cleaned[k] = v;
+      } else if (v !== undefined) {
+        cleaned[k] = v;
+      }
+    }
+    onChange({ ...form, lifecycle: { ...base, ...cleaned } as LifecycleSpec });
+  };
+  const lcHostPackage =
+    (form.lifecycle?.packages ?? []).find((p) => p.role === 'host') ??
+    form.lifecycle?.packages?.[0];
+  const lcSetPackage = (v: string) => {
+    const base: LifecycleSpec = form.lifecycle ?? { kind: 'npm' };
+    const others = (base.packages ?? []).filter((p) => p !== lcHostPackage);
+    const packages = v.trim()
+      ? [...others, { ...(lcHostPackage ?? { role: 'host' as const }), package: v.trim() }]
+      : others;
+    onChange({ ...form, lifecycle: { ...base, packages } });
+  };
+
   // ACP 的命令/参数由市场下发（官方目录条目安装后会自动填入解析结果），
   // 集成配置页只保留「自定义填写」入口——预置不再硬编码在前端。
 
@@ -795,6 +827,83 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
         <div className="grid grid-cols-2 gap-2 mt-2">
           <FormField label="Session ID 字段名" value={form.sessionIdField || ''} onChange={(v) => onChange({ ...form, sessionIdField: v })} placeholder="如 session_id" />
           <FormField label="恢复参数模板" value={form.resumeArgTemplate || ''} onChange={(v) => onChange({ ...form, resumeArgTemplate: v })} placeholder="如 --resume {session_id}" />
+        </div>
+      </div>
+
+      {/* 安装与版本规格：市集 / 预置下发的规格同样可改，与其它字段一致 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Package size={11} style={{ color: 'var(--accent)' }} />
+          <span>安装与版本规格</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {lcEditableKind ? (
+            <SelectField
+              label="安装方式"
+              value={lcKind}
+              onChange={(v) => lcPatch({ kind: v as LifecycleSpec['kind'] })}
+              options={[
+                { value: 'npm', label: 'npm（全局包）' },
+                { value: 'shell', label: 'shell（自定义命令）' },
+              ]}
+            />
+          ) : (
+            <FormField
+              label="安装方式"
+              value={`${lcKind}（由市集下发，制品与校验值不在表单内编辑）`}
+              onChange={() => {}}
+              readOnly
+            />
+          )}
+          {lcKind === 'npm' && (
+            <FormField
+              label="包名（npm）"
+              value={lcHostPackage?.package ?? ''}
+              onChange={lcSetPackage}
+              placeholder="如 @openai/codex"
+            />
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <FormField
+            label="安装命令"
+            value={form.lifecycle?.installCmd ?? ''}
+            onChange={(v) => lcPatch({ installCmd: v })}
+            placeholder={lcKind === 'npm' ? '留空则按包名自动派生' : '如 pip install hermes-agent'}
+          />
+          <FormField
+            label="卸载命令"
+            value={form.lifecycle?.uninstallCmd ?? ''}
+            onChange={(v) => lcPatch({ uninstallCmd: v })}
+            placeholder="留空则不提供卸载"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <FormField
+            label="更新命令"
+            value={form.lifecycle?.updateCmd ?? ''}
+            onChange={(v) => lcPatch({ updateCmd: v })}
+            placeholder="如 hermes update"
+          />
+          <FormField
+            label="版本查询命令"
+            value={form.lifecycle?.versionCmd ?? ''}
+            onChange={(v) => lcPatch({ versionCmd: v })}
+            placeholder="如 codex --version"
+          />
+        </div>
+        <div className="mt-2">
+          <FormField
+            label="最新版本查询命令"
+            value={form.lifecycle?.latestVersionCmd ?? ''}
+            onChange={(v) => lcPatch({ latestVersionCmd: v })}
+            placeholder="如 npm view @openai/codex version"
+          />
+        </div>
+        <div className="text-[10px] mt-1 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+          {form.lifecycle
+            ? '环境检测页的安装 / 更新 / 卸载按这里的命令执行；下次从市集「更新」会按市场最新规格重写这些字段。'
+            : '未配置安装规格：环境检测页对该 Agent 只显示「手工配置」；填写任一命令后即按这里的规格管理。'}
         </div>
       </div>
         </>
