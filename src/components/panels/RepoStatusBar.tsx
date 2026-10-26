@@ -68,6 +68,8 @@ export function RepoStatusBar({ cwd, refreshToken = 0, snapshotCount = 0 }: Repo
   const [expanded, setExpanded] = useState(false);
   /** 手动刷新计数（与 cwd / refreshToken 一起作为拉取依赖） */
   const [manualTick, setManualTick] = useState(0);
+  /** 是否已完成一次成功查询；false（命令不可用 / 目录不可读）时整条隐藏 */
+  const [checked, setChecked] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -76,10 +78,16 @@ export function RepoStatusBar({ cwd, refreshToken = 0, snapshotCount = 0 }: Repo
       setLoading(true);
       try {
         const res = await invoke<RepoStatus>('git_repo_status', { cwd: cwd ?? null });
-        if (alive) setStatus(res?.isRepo ? res : null);
+        if (alive) {
+          setStatus(res?.isRepo ? res : null);
+          setChecked(true);
+        }
       } catch {
-        // 未装 Git / 目录不可读等：整条隐藏，不打扰用户
-        if (alive) setStatus(null);
+        // 后端命令不可用 / 目录不可读：整条隐藏，不打扰用户
+        if (alive) {
+          setStatus(null);
+          setChecked(false);
+        }
       } finally {
         if (alive) setLoading(false);
       }
@@ -90,7 +98,33 @@ export function RepoStatusBar({ cwd, refreshToken = 0, snapshotCount = 0 }: Repo
     };
   }, [cwd, refreshToken, manualTick]);
 
-  if (!status) return null;
+  if (!checked) return null;
+
+  // 目录不在任何 Git 仓库内：给一条弱化说明，避免用户以为功能没生效
+  if (!status) {
+    const dirLabel = cwd
+      ? cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd
+      : null;
+    return (
+      <div
+        className="px-3 py-1.5 shrink-0 flex items-center gap-1.5"
+        style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
+        title="当前工作目录不在 Git 仓库内（或本机未安装 Git）。在目录里执行 git init 后，这里会显示分支、最新提交与未提交改动"
+      >
+        <GitBranch size={10} className="shrink-0" />
+        <span className="text-[9px] truncate">
+          未纳入 Git{dirLabel ? ` · ${dirLabel}` : ''}
+        </span>
+        <button
+          onClick={() => setManualTick((t) => t + 1)}
+          className="p-0.5 rounded shrink-0 transition-colors hover:opacity-80 ml-auto"
+          title="重新检查"
+        >
+          <RefreshCw size={10} />
+        </button>
+      </div>
+    );
+  }
 
   const dirty = status.changedCount + status.untrackedCount;
   const branchText = status.branch ?? (status.head ? `HEAD ${status.head}` : '尚无提交');
