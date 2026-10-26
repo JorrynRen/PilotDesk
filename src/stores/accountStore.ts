@@ -125,8 +125,16 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
       // 账号在别处切换（浏览器登录 / 退出）后，必须按新身份重建飞地缓存：
       // 否则任务列表、组织详情与权限会继续沿用上一个账号的本机快照。
       if (prevEmail !== nextEmail) {
-        resetEnclaveCaches();
-        if (account) void reloadEnclaveForAccount();
+        if (account) {
+          resetEnclaveCaches();
+          void reloadEnclaveForAccount();
+        } else {
+          // 账号由「有」变「无」有两种来源：平台侧吊销（真退出）与断网超过离线宽限期
+          // （`account_status` 取不到权益缓存而回落空）。后者本机身份仍然有效，
+          // 若一刀切清缓存，断网时会把本机团队数据整块清空。
+          const stillValid = await useEnclaveOrgStore.getState().ensureIdentity();
+          if (!stillValid) resetEnclaveCaches();
+        }
         return;
       }
       // 启动时把飞地本机身份对齐到当前账号（账号在别处切换过也不会沿用旧身份）
