@@ -64,12 +64,19 @@ interface EnclaveOrgState {
   error: string | null;
   /** 本轮是否已用当前账号刷新过本机身份（false 时不渲染本地团队数据） */
   identityVerified: boolean;
+  /**
+   * 平台不可达、已按本机身份离线继续。
+   *
+   * 离线**不等于**未登录：本机团队数据仍可读写，主机对外服务也不受影响，
+   * 只是组织 / 成员 / 角色快照停在最后一次同步的状态（治理类操作应提示可能过期）。
+   */
+  identityOffline: boolean;
   /** 最近一次治理快照成功同步时间（unix 秒，0 = 从未同步） */
   lastSnapshotAt: number;
   /** 最近一次刷新的结果（含成员列表拉取失败原因，供页面提示） */
   lastRefresh: SnapshotOutcome | null;
   loadOrgs: () => Promise<void>;
-  /** 用当前登录账号刷新本机身份；失败返回 false（默认拒绝） */
+  /** 用当前登录身份刷新本机身份；平台不可达时按已有身份离线继续（返回 true） */
   ensureIdentity: () => Promise<boolean>;
   /** 账号切换 / 退出：清空全部本地团队缓存 */
   reset: () => void;
@@ -154,17 +161,23 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   loading: false,
   error: null,
   identityVerified: false,
+  identityOffline: false,
   lastSnapshotAt: 0,
   lastRefresh: null,
 
-  /** 用当前账号刷新本机登录身份（`/api/v1/me`）。失败视为未校验，隐藏一切本地团队数据。 */
+  /**
+   * 用当前登录身份刷新本机身份。
+   *
+   * 平台不可达时后端会沿用本机已有身份返回 `online: false`：仍然算「已校验」，
+   * 只是标记为离线（治理快照可能过期）。只有未登录 / 登录失效才返回 false。
+   */
   ensureIdentity: async () => {
     try {
-      await invoke('enclave_identity_refresh');
-      set({ identityVerified: true });
+      const r = await invoke<{ online: boolean; userId: string }>('enclave_identity_refresh');
+      set({ identityVerified: true, identityOffline: !r.online });
       return true;
     } catch (e) {
-      set({ identityVerified: false, error: errorMessage(e) });
+      set({ identityVerified: false, identityOffline: false, error: errorMessage(e) });
       return false;
     }
   },
@@ -191,6 +204,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       loading: false,
       error: null,
       identityVerified: false,
+      identityOffline: false,
       lastSnapshotAt: 0,
       lastRefresh: null,
     });

@@ -164,6 +164,8 @@ export function TaskWorkspace() {
 
   // 登录账号变化 → 先校验新身份，再拉组织（会自动选中并加载成员）
   const accountKey = useAccountStore((s) => s.account?.email ?? '');
+  /** 登录检查已完成但没有账号：此时任务列表为空是「没登录」，不是「没任务」 */
+  const notLoggedIn = useAccountStore((s) => s.loaded) && !useAccountStore((s) => s.account);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -755,7 +757,11 @@ export function TaskWorkspace() {
           <div className="flex-1 overflow-auto py-1">
             {roots.length === 0 && (
               <div className="px-3 py-6 text-xs text-center" style={{ color: 'var(--text-tertiary)' }}>
-                {tasks.length === 0 ? '还没有任务，点右上角「新建任务」' : '没有符合筛选条件的任务'}
+                {notLoggedIn
+                  ? '未登录：登录平台账号后才会加载团队任务'
+                  : tasks.length === 0
+                    ? '还没有任务，点右上角「新建任务」'
+                    : '没有符合筛选条件的任务'}
               </div>
             )}
             {roots.map((root) => (

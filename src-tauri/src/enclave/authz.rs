@@ -182,6 +182,19 @@ pub fn current_actor_id(conn: &Connection) -> Result<String, String> {
     .ok_or_else(|| "请先登录平台账号".to_string())
 }
 
+/// 本机是否有登录身份（不区分快照绑定）。
+///
+/// 用来把「没登录」和「登录了但组织快照没同步」区分成两条不同的提示：
+/// 前者让用户去登录，后者才让他去刷新治理快照。
+pub fn has_identity(conn: &Connection) -> Result<bool, String> {
+    conn.query_row("SELECT user_id FROM local_identity LIMIT 1", [], |r| {
+        r.get::<_, String>(0)
+    })
+    .optional()
+    .map_err(|e| format!("读取本机登录身份失败：{}", e))
+    .map(|row| row.is_some_and(|s| !s.trim().is_empty()))
+}
+
 /// 当前用户在指定组织中的角色（来自平台快照）；组织不存在 / 角色无法识别返回 `None`。
 ///
 /// **身份绑定校验**：快照行必须由当前登录身份同步而来（`viewer_id = local_identity.user_id`）。

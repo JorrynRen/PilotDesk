@@ -16,6 +16,16 @@ use crate::enclave::reports::{self, FeedbackView, ReportView};
 use crate::enclave::tasks::{self, CreateTaskInput, DepsPreview, TaskView, UpdateTaskInput};
 use crate::enclave::EnclaveState;
 
+/// 角色缺失时的提示：区分「没登录」与「登录了但快照没同步」。
+///
+/// 两者此前共用「请刷新治理快照」，未登录用户照着点刷新只会再失败一次。
+fn role_missing(state: &EnclaveState) -> String {
+    match state.store.with_conn(|c| authz::has_identity(c)) {
+        Ok(false) => "请先登录平台账号后使用团队功能".to_string(),
+        _ => "尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string(),
+    }
+}
+
 /// 成员端命令转发：owner 走本地库，成员经主机 WS 执行同一套领域逻辑。
 ///
 /// `local` 闭包必须使用传入的 `actor`（成员 user id），不要自己读 `local_identity`。
@@ -51,7 +61,7 @@ where
                 crate::enclave::host::call_host(state, db, org_id, command, payload).await?;
             serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state)),
     }
 }
 
@@ -298,7 +308,7 @@ pub async fn enclave_task_progress_add(
             .await?;
             serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 
@@ -620,7 +630,11 @@ pub async fn enclave_report_feedback_list(
 /// 组织成员才可读组织知识库（默认拒绝：无快照 → 拒绝）。
 fn ensure_kb_view(conn: &rusqlite::Connection, org_id: &str) -> Result<(), String> {
     authz::role_for_org(conn, org_id)?.map(|_| ()).ok_or_else(|| {
-        "尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()
+        if authz::has_identity(conn).unwrap_or(true) {
+            "尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()
+        } else {
+            "请先登录平台账号后使用团队功能".to_string()
+        }
     })
 }
 
@@ -1172,7 +1186,7 @@ pub async fn enclave_file_upload(
             .await?;
             serde_json::from_value(data).map_err(|e| format!("解析上传结果失败：{}", e))
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 
@@ -1256,7 +1270,7 @@ pub async fn enclave_file_abs_path(
             )
             .await
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 
@@ -1492,7 +1506,7 @@ pub async fn enclave_kb_ingest_capability(
             cap.pending = pending;
             Ok(cap)
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 
@@ -1587,7 +1601,7 @@ pub async fn enclave_kb_queue_run(
                 remaining,
             })
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 
@@ -1748,7 +1762,7 @@ pub async fn enclave_kb_ingest_file(
             .await?;
             serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 
@@ -1987,7 +2001,7 @@ pub async fn enclave_kb_ingest_snippet(
             .await?;
             serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 
@@ -2046,7 +2060,7 @@ pub async fn enclave_kb_ingest_url(
             .await?;
             serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
         }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+        None => Err(role_missing(state.inner())),
     }
 }
 

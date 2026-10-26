@@ -315,7 +315,7 @@ async fn ensure_access(
         return Ok(tokens.access_token.clone());
     }
 
-    let resp: TokenResp = match platform::post_json(
+    let resp: TokenResp = match platform::post_json_with_status(
         "/api/v1/oauth/refresh",
         &RefreshReq {
             grant_type: "refresh_token",
@@ -328,11 +328,17 @@ async fn ensure_access(
     {
         Ok(v) => v,
         Err(e) => {
-            // refresh 也失效（被吊销 / 过期）→ 清掉本地令牌，回到未登录
+            // `status == 0` = 网络层失败 / 响应解析失败：**不能清令牌**。
+            // 否则断网超过 access 有效期后，一次刷新失败就把用户变成「未登录」，
+            // 连带 7 天离线宽限失效（下一次 account_status 读不到令牌会直接返回 None）。
+            if e.status == 0 {
+                return Err(AppError::Network(e.message));
+            }
+            // 真正的鉴权失败（refresh 被吊销 / 过期 / 客户端被拒）→ 清掉本地令牌，回到未登录
             if let Ok(conn) = state.get_conn() {
                 let _ = clear_tokens(&conn);
             }
-            return Err(e);
+            return Err(AppError::External(e.message));
         }
     };
 

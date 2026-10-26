@@ -8,10 +8,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
-import { ListTree, Building2, Library, BarChart3, RefreshCw, Loader2, WifiOff } from 'lucide-react';
+import { ListTree, Building2, Library, BarChart3, RefreshCw, Loader2, WifiOff, CloudOff, LogIn } from 'lucide-react';
 import { Select } from '../common/Select';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
+import { useAccountStore } from '../../stores/accountStore';
 import { ALL_KB_ID, useEnclaveKbStore } from '../../stores/enclaveKbStore';
 import { NotificationBell } from './NotificationBell';
 
@@ -39,6 +40,12 @@ export function EnclaveNavBar({
   const navigate = useNavigate();
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
+  /** 平台不可达、按本机身份离线继续（不是未登录） */
+  const identityOffline = useEnclaveOrgStore((s) => s.identityOffline);
+  const account = useAccountStore((s) => s.account);
+  const accountLoaded = useAccountStore((s) => s.loaded);
+  /** 登录检查已完成但没有账号：飞地依赖平台身份，此时各页只会是空数据 */
+  const notLoggedIn = accountLoaded && !account;
   /** 成员端与主机的实时通道是否断开（owner 不走常驻通道，永远是 false） */
   const [realtimeDown, setRealtimeDown] = useState(false);
 
@@ -149,6 +156,29 @@ export function EnclaveNavBar({
             title="切换组织"
           />
         </>
+      )}
+
+      {identityOffline && (
+        <span
+          className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]"
+          style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
+          title="平台不可达：本机团队数据仍可读写，主机对外服务不受影响；组织 / 成员 / 角色快照停在最后一次同步，治理类操作可能已过期"
+        >
+          <CloudOff size={10} />
+          离线（快照可能过期）
+        </span>
+      )}
+
+      {notLoggedIn && (
+        <button
+          onClick={() => navigate('/settings?tab=account')}
+          className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]"
+          style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+          title="飞地依赖平台账号身份；未登录时无法读取组织、任务与知识库。点击去登录"
+        >
+          <LogIn size={10} />
+          未登录 · 去登录
+        </button>
       )}
 
       {realtimeDown && (

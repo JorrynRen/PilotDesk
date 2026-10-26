@@ -797,7 +797,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
             <div className="mt-2 space-y-2">
               {/* 工作目录不在此配置：运行时 cwd 取「会话/项目工作目录」（为空回退全局工作区），
                   见 lib.rs resolved_cwd。此处若再放一个 cwd 字段是无消费方的死配置。 */}
-              {/* 预置与官方目录条目统一由「资源市集 › CLI Agent 配置」下发，本页只保留自定义填写。 */}
+              {/* 预置与官方目录条目统一由「资源市集 › Agent 配置」下发，本页只保留自定义填写。 */}
               <FormField
                 label="命令（command，可直接修改）"
                 value={connGet('command')}

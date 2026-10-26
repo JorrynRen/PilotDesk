@@ -14,6 +14,8 @@ import { useCloudSyncStore } from '../../stores/cloudSyncStore';
 import { expiryText } from '../../utils/planText';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { confirmDialog } from '../../stores/confirmStore';
+import type { HostStatusView } from '../../types/enclave';
 import { SettingsButton, SettingsCard, SettingsSection } from './index';
 
 /** 「向组织上报用量」开关设置键（与后端 `commands/usage.rs::USAGE_REPORT_ENABLED_KEY` 一致） */
@@ -210,6 +212,33 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
     }
   };
 
+  /**
+   * 退出登录。
+   *
+   * 本机若是某个组织的主机，退出会清掉 `local_identity`，主机服务随后自动停机
+   * （团队成员将连不上），所以先给出明确后果再执行。状态读取失败时不阻断退出。
+   */
+  const handleLogout = async () => {
+    let host: HostStatusView | null = null;
+    try {
+      host = await invoke<HostStatusView>('enclave_host_status', {});
+    } catch {
+      /* 读不到主机状态不影响退出流程 */
+    }
+    const served = host?.servedOrgIds?.length ?? 0;
+    if (host?.role === 'host' && served > 0) {
+      const ok = await confirmDialog({
+        title: '退出登录会停止团队服务',
+        message: `本机正在为 ${served} 个组织提供飞地服务。退出登录会清除本机登录身份，主机服务将在 30 秒内停止，团队成员将无法访问任务与知识库（数据不会丢失，重新登录同一账号后自动恢复）。`,
+        confirmText: '仍然退出',
+        cancelText: '取消',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    await logout();
+  };
+
   // 云同步能力门控：仅专业版/团队版可用（账号 tab 只读此判据做入口文案，不请求状态）
   const canCloudSync = hasCapability(account, CAP_CLOUD_SYNC);
   // 「云同步」入口文案：仅用能力（account）与缓存状态（cloudStatus），不发起任何请求
@@ -243,7 +272,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                 {account.email}
               </div>
             </div>
-            <SettingsButton variant="secondary" icon={<LogOut size={13} />} onClick={() => void logout()}>
+            <SettingsButton variant="secondary" icon={<LogOut size={13} />} onClick={() => void handleLogout()}>
               退出登录
             </SettingsButton>
           </SettingsCard>

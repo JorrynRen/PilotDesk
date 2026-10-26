@@ -121,36 +121,79 @@ struct MeUser {
 
 // ── 一轮同步 ────────────────────────────────────────────────────
 
+/// 身份刷新结果。
+///
+/// `online = false`：平台不可达，但本机已有身份 → 按离线继续（本机团队数据可读写，
+/// 治理快照保持最后一次同步的值）。只有**主动退出**（身份已被删除）才会返回错误。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityRefresh {
+    pub online: bool,
+    pub user_id: String,
+}
+
+/// 离线时沿用本机已有身份；没有身份（真的退出过 / 从未登录）才要求登录。
+fn offline_identity(state: &EnclaveState) -> Result<IdentityRefresh, String> {
+    match state.store.with_conn(org::local_identity)? {
+        Some(i) => Ok(IdentityRefresh {
+            online: false,
+            user_id: i.user_id,
+        }),
+        None => Err("请先登录平台账号".to_string()),
+    }
+}
+
 /// 只刷新「本机登录身份」（`/api/v1/me`），不拉组织与成员。
 ///
 /// 账号切换后，快照轮询可能还没跑（默认 30 分钟一轮），若继续用旧身份判定 actor，
 /// 会让新账号继承上一个账号的任务权限。进入飞地时先调它，保证授权判定用的是当前账号。
+///
+/// **离线不等于退出**：平台不可达时沿用本机身份并返回 `online = false`，
+/// 不阻断进入飞地（否则断网后本机团队数据也进不去）。令牌缺失 / 鉴权失败才要求重新登录。
 pub async fn refresh_local_identity(
     db: &crate::DbState,
     state: &EnclaveState,
-) -> Result<(), String> {
-    let token = require_token(db).await?;
-    let me: MeResp = platform::get_json_with_status("/api/v1/me", Some(&token))
-        .await
-        .map_err(|e| e.message)?;
-    state.store.with_conn(|c| {
-        org::upsert_local_identity(
-            c,
-            &org::LocalIdentityRow {
-                user_id: me.user.id.to_string(),
-                email: me.user.email.clone(),
-                nickname: me.user.nickname.clone(),
-            },
-        )?;
-        // 成员名单可能因角色拿不到，但自己的资料始终可更新
-        org::refresh_own_member_profile(
-            c,
-            &me.user.id.to_string(),
-            &me.user.nickname,
-            &me.user.email,
-        )
-    })?;
-    Ok(())
+) -> Result<IdentityRefresh, String> {
+    let token = match crate::commands::account::current_access_token(db).await {
+        Ok(Some(t)) => t,
+        // 没有令牌 = 主动退出（退出会同时删本机身份）
+        Ok(None) => return Err("请先登录平台账号".to_string()),
+        // 网络层失败（含 refresh 因断网失败）：按离线继续
+        Err(crate::utils::errors::AppError::Network(_)) => return offline_identity(state),
+        Err(e) => return Err(e.message().to_string()),
+    };
+    match platform::get_json_with_status::<MeResp>("/api/v1/me", Some(&token)).await {
+        Ok(me) => {
+            let user_id = me.user.id.to_string();
+            state.store.with_conn(|c| {
+                org::upsert_local_identity(
+                    c,
+                    &org::LocalIdentityRow {
+                        user_id: user_id.clone(),
+                        email: me.user.email.clone(),
+                        nickname: me.user.nickname.clone(),
+                    },
+                )?;
+                // 成员名单可能因角色拿不到，但自己的资料始终可更新
+                org::refresh_own_member_profile(
+                    c,
+                    &user_id,
+                    &me.user.nickname,
+                    &me.user.email,
+                )
+            })?;
+            Ok(IdentityRefresh {
+                online: true,
+                user_id,
+            })
+        }
+        // `status == 0` = 网络层失败：离线可用，沿用本机身份
+        Err(e) if e.status == 0 => offline_identity(state),
+        Err(e) if e.status == 401 || e.status == 403 => {
+            Err("登录已失效，请重新登录平台账号".to_string())
+        }
+        Err(e) => Err(e.message),
+    }
 }
 
 /// 平台联调自检结果（每项一条；单项失败不中断后续检查）。

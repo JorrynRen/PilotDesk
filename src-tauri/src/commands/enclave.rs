@@ -70,11 +70,13 @@ pub async fn enclave_snapshot_refresh(
 ///
 /// 账号切换后快照轮询可能尚未执行，若沿用旧身份会让新账号继承上一账号的任务权限；
 /// 前端进入飞地时先调此命令，再拉任务 / 能力。
+///
+/// 返回值里的 `online=false` 表示平台不可达、已按本机身份离线继续（不是失败）。
 #[tauri::command]
 pub async fn enclave_identity_refresh(
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
-) -> Result<(), String> {
+) -> Result<crate::enclave::snapshot::IdentityRefresh, String> {
     crate::enclave::snapshot::refresh_local_identity(db.inner(), state.inner()).await
 }
 
