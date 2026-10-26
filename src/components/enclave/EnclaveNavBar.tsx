@@ -44,8 +44,15 @@ export function EnclaveNavBar({
   const identityOffline = useEnclaveOrgStore((s) => s.identityOffline);
   const account = useAccountStore((s) => s.account);
   const accountLoaded = useAccountStore((s) => s.loaded);
-  /** 登录检查已完成但没有账号：飞地依赖平台身份，此时各页只会是空数据 */
-  const notLoggedIn = accountLoaded && !account;
+  /** 本机是否已确认平台身份（`local_identity` 存在且当前账号有效） */
+  const identityVerified = useEnclaveOrgStore((s) => s.identityVerified);
+  /**
+   * 未登录 = 登录检查已完成、平台账号信息为空，**且本机也没有有效身份**。
+   *
+   * 只看 `!account` 会误报：断网超过 7 天离线宽限后 `account_status` 取不到权益缓存而回落空，
+   * 但本机身份快照仍有效、团队空间照常可用，此时该显示「离线」而不是「未登录」。
+   */
+  const notLoggedIn = accountLoaded && !account && !identityVerified;
   /** 成员端与主机的实时通道是否断开（owner 不走常驻通道，永远是 false） */
   const [realtimeDown, setRealtimeDown] = useState(false);
 
@@ -174,7 +181,10 @@ export function EnclaveNavBar({
           onClick={() => navigate('/settings?tab=account')}
           className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]"
           style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
-          title="飞地依赖平台账号身份；未登录时无法读取组织、任务与知识库。点击去登录"
+          title={
+            '团队数据在本机不上云，数据在局域网内传输不经过外网。\n' +
+            '但当前无登录身份，暂时打不开团队空间，需你登录确认组织与角色。'
+          }
         >
           <LogIn size={10} />
           未登录 · 去登录
