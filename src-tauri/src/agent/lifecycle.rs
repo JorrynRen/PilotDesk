@@ -343,7 +343,9 @@ impl LifecycleSpec {
                     uninstall: Some(
                         pkgs.iter()
                             .rev()
-                            .map(|p| format!("npm uninstall -g {}", p))
+                            // npm 的卸载不接受带版本号的 spec：`npm uninstall -g pkg@1.2.3`
+                            // 会被当成 no-op（退出码仍为 0），包实际不会被移除。
+                            .map(|p| format!("npm uninstall -g {}", package_without_version(p)))
                             .collect::<Vec<_>>()
                             .join(" && "),
                     ),
@@ -493,6 +495,24 @@ mod tests {
         assert_eq!(
             cmds.version_probe.as_deref(),
             Some("npm ls -g @agentclientprotocol/codex-acp --json")
+        );
+    }
+
+    #[test]
+    fn npm_uninstall_strips_pinned_version() {
+        // 回归：`npm uninstall -g pkg@1.2.3` 是 no-op（退出码 0），必须去掉版本号
+        let spec = LifecycleSpec {
+            kind: LifecycleKind::Npm,
+            packages: vec![npm_spec(
+                PackageRole::Adapter,
+                "@agentclientprotocol/codex-acp@2.2.2",
+                &[],
+            )],
+            ..Default::default()
+        };
+        assert_eq!(
+            spec.commands().unwrap().uninstall.as_deref(),
+            Some("npm uninstall -g @agentclientprotocol/codex-acp")
         );
     }
 

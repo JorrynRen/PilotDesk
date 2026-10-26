@@ -880,6 +880,22 @@ pub async fn uninstall_agent(
         .await
         .map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 
+    // 卸载后复核：部分包管理器会把卸载当成 no-op（典型：带版本号的 npm spec）
+    // 并以 0 退出。不复核就会「提示卸载成功、包其实还在」，环境检测继续显示已安装可用。
+    if let Some(probe) = lifecycle.commands().ok().and_then(|c| c.version_probe) {
+        if let Ok(out) = mgr
+            .execute_command_output_async(&probe, "", 120, &format!("复核 {} 卸载结果", agent_type))
+            .await
+        {
+            if lifecycle.parse_installed_version(&out).is_some() {
+                return Err(AppError::External(format!(
+                    "{} 卸载未生效：本机仍能检测到该包。请检查包管理器权限，或在终端手动执行卸载命令",
+                    config.display_name
+                )));
+            }
+        }
+    }
+
     let _ = app.emit(
         "install-progress",
         serde_json::json!({
