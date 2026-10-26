@@ -221,7 +221,8 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
   const handleLogout = async () => {
     let host: HostStatusView | null = null;
     try {
-      host = await invoke<HostStatusView>('enclave_host_status', {});
+      // 不传 orgId：判断本机是否为**任一**组织的主机
+      host = await invoke<HostStatusView>('enclave_host_status', { orgId: null });
     } catch {
       /* 读不到主机状态不影响退出流程 */
     }
