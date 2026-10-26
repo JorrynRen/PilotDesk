@@ -86,6 +86,15 @@ interface NotificationState {
   push: (input: PushNotificationInput) => void;
   /** 消解未决项（收到 *-resolved / 执行结束时调用） */
   resolve: (pendingKey: string) => void;
+  /** 移除单条通知（含未决项）：仅丢弃这条提醒，不改变工作流本身的状态 */
+  dismiss: (id: string) => void;
+  /**
+   * 按后端真实待办校准未决项：`validKeys` 里没有的工作流类未决项直接移除。
+   *
+   * 存在的理由：未决项只靠 `*-resolved` 事件消解，一旦等待者随进程消失（重启、执行被清掉、
+   * 审批超时后无人广播），通知就成了既不能处理也不能删除的死条。
+   */
+  prunePending: (validKeys: Set<string>) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
   clearAll: () => void;
@@ -129,6 +138,28 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   resolve: (pendingKey) =>
     set((state) => {
       const items = state.items.map((i) => (i.pending && i.pendingKey === pendingKey ? { ...i, pending: false, read: true } : i));
+      saveItems(items);
+      return { items };
+    }),
+
+  dismiss: (id) =>
+    set((state) => {
+      const items = state.items.filter((i) => i.id !== id);
+      if (items.length === state.items.length) return state;
+      saveItems(items);
+      return { items };
+    }),
+
+  prunePending: (validKeys) =>
+    set((state) => {
+      const items = state.items.filter((i) => {
+        // 非未决项、以及会话类未决项（只存在于运行时内存，不在此校准）
+        if (!i.pending || !i.pendingKey) return true;
+        const k = i.pendingKey;
+        if (!k.startsWith('awaiting:') && !k.startsWith('wf-approval:')) return true;
+        return validKeys.has(k);
+      });
+      if (items.length === state.items.length) return state;
       saveItems(items);
       return { items };
     }),

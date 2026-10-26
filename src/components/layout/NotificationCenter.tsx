@@ -5,10 +5,11 @@
  * 未决项（工具审批、工作流待输入）置顶并可直接跳去处理。
  * 弹层挂载在 App 级，因此会话/群聊/工作流/终端/设置页都能打开。
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Bell, X, CheckCheck, Trash2, AlertCircle, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 import { useTerminal } from '../../TerminalManager';
 import { useSessionStore } from '../../stores/sessionStore';
+import { reconcileWorkflowPending } from '../../stores/notificationEvents';
 import {
   useNotificationStore,
   countUnread,
@@ -45,6 +46,7 @@ export function NotificationCenter() {
   const markRead = useNotificationStore((s) => s.markRead);
   const markAllRead = useNotificationStore((s) => s.markAllRead);
   const clearAll = useNotificationStore((s) => s.clearAll);
+  const dismiss = useNotificationStore((s) => s.dismiss);
   const { setMode } = useTerminal();
   const [filter, setFilter] = useState<FilterKey>('all');
 
@@ -54,6 +56,11 @@ export function NotificationCenter() {
     if (filter === 'pending') return list.filter((i) => i.pending);
     return list;
   }, [items, filter]);
+
+  // 打开抽屉时按后端真实待办校准一次：清掉等待者已消失的「待处理」死条
+  useEffect(() => {
+    if (open) void reconcileWorkflowPending();
+  }, [open]);
 
   if (!open) return null;
 
@@ -225,6 +232,16 @@ export function NotificationCenter() {
                         )}
                       </div>
                     </div>
+                    {/* 单条移除：未决项也能删，否则等待者消失后（重启/超时无人广播）会变成
+                        既不能处理也不能删除的死条。删的只是提醒，工作流本身不受影响。 */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); dismiss(item.id); }}
+                      className="shrink-0 p-0.5 rounded transition-colors hover:opacity-80"
+                      style={{ color: 'var(--text-tertiary)', lineHeight: 0, marginTop: 2 }}
+                      title={item.pending ? '忽略这条提醒（不影响工作流本身，仍可在工作流页处理）' : '移除这条通知'}
+                    >
+                      <X size={10} />
+                    </button>
                   </div>
                 </div>
               );

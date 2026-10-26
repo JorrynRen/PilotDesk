@@ -8,8 +8,13 @@
  * 全局单例：App 生命周期内注册一次，不随页面卸载（与 `subscribeGroupChat` 同一范式）。
  */
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { useNotificationStore } from './notificationStore';
-import type { ExecutionProgressPayload } from '../types/workflow';
+import type {
+  ExecutionProgressPayload,
+  PendingHumanInput,
+  PendingToolApproval,
+} from '../types/workflow';
 
 /** 工作流节点等待人工输入（interact_executor 发出，节点会一直等，默认 30 分钟） */
 interface AwaitingInputPayload {
@@ -84,6 +89,33 @@ export const awaitingPendingKey = (executionId: string, nodeId: string) =>
  * 通知中心的消解会互相串（一边点了另一边也变已处理）。
  */
 export const approvalPendingKey = (callId: string) => `wf-approval:${callId}`;
+
+/**
+ * 用后端「此刻真在等」的待办校准通知中心的未决项。
+ *
+ * 未决项原本只靠 `*-resolved` 事件消解；等待者一旦随进程消失（应用重启、执行被删除、
+ * 审批超时后无人广播），提醒就会永久停在「待处理」，既不能处理也不能删除。
+ *
+ * 只校准**工作流类**（`awaiting:` / `wf-approval:`），依据后端两份权威列表：
+ * - `get_pending_human_inputs`：仍在等待答复的节点；
+ * - `get_pending_tool_approvals`：仍在等待裁决的工具调用（`stale` = 进程重启残留，视为无效）。
+ *
+ * 任一侧读取失败就整体放弃：宁可不清理，也不误删真实待办。
+ */
+export async function reconcileWorkflowPending(): Promise<void> {
+  try {
+    const [inputs, approvals] = await Promise.all([
+      invoke<PendingHumanInput[]>('get_pending_human_inputs'),
+      invoke<PendingToolApproval[]>('get_pending_tool_approvals'),
+    ]);
+    const valid = new Set<string>();
+    inputs.forEach((i) => valid.add(awaitingPendingKey(i.executionId, i.nodeId)));
+    approvals.filter((a) => !a.stale).forEach((a) => valid.add(approvalPendingKey(a.callId)));
+    useNotificationStore.getState().prunePending(valid);
+  } catch {
+    /* 后端不可用 / 命令未注册：保留全部未决项，等下次打开通知中心再校准 */
+  }
+}
 
 export function subscribeNotifications(): void {
   if (started) return;
