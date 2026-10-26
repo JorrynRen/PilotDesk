@@ -183,7 +183,7 @@ export function EnclaveNavBar({
           style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
           title={
             '团队数据在本机不上云，数据在局域网内传输不经过外网。\n' +
-            '但当前无登录身份，暂时打不开团队空间，需你登录确认组织与角色。'
+            '但当前无登录身份，暂时打不开团队空间，需登录确认组织与角色。'
           }
         >
           <LogIn size={10} />
