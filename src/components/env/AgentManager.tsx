@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event';
 import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { errorMessage } from '../../utils/errorMessage';
 import { needsUnverifiedConsent } from '../../utils/agentIntegrity';
 
@@ -652,6 +653,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
   const lcHostPackage =
     (form.lifecycle?.packages ?? []).find((p) => p.role === 'host') ??
     form.lifecycle?.packages?.[0];
+  // 环境检测结果：用于「本机安装」区纠正「有规格但没通过市集装过」被显示成未安装的问题
+  const { envInfo } = useEnvInfo();
+  const detectedHealth = form.agentType ? envInfo?.agentHealth?.[form.agentType] : undefined;
   /**
    * 历史配置（v11 之前创建的内置 Agent）库里没有生命周期规格：编辑时按市集同名条目预填。
    * 只补到内存，保存才落库 —— 避免用户看到一片空字段以为功能坏了。
@@ -711,6 +715,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           transport={form.transport ?? 'subprocess'}
           pkgState={form.pkgState}
           lifecycle={form.lifecycle}
+          detectedInstalled={detectedHealth?.installed}
+          detectedAvailable={detectedHealth?.available}
+          detectedVersion={form.agentType ? envInfo?.agentVersions?.[form.agentType] ?? null : null}
           canUpdate={!!form.distSource && form.distSource.source !== 'manual'}
           onInstall={onInstall}
           onUninstall={onUninstall}
@@ -790,7 +797,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
             onChange={(v) => onChange({ ...form, transport: v })}
             options={[
               { value: 'subprocess', label: '兼容模式（本地 CLI，默认）' },
-              { value: 'acp', label: 'ACP（Agent Client Protocol）' },
+              { value: 'acp', label: 'ACP（Agent Client Protocol，推荐）' },
             ]}
           />
           {(form.transport || 'subprocess') === 'acp' && (
@@ -998,13 +1005,17 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
 
 /** 「本机安装」区：呈现包安装状态并提供安装/重试动作。
  *  安装规格（包名、安装/版本命令、运行参数）由市集下发，这里只呈现结果、不提供编辑。 */
-function InstallStatusSection({ agentType, displayName, transport, pkgState, lifecycle, canUpdate, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
+function InstallStatusSection({ agentType, displayName, transport, pkgState, lifecycle, detectedInstalled, detectedAvailable, detectedVersion, canUpdate, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
   agentType: string;
   /** 用于提示「装的是适配器，不是这个 Agent 本身」 */
   displayName?: string;
   transport: string;
   pkgState?: PkgState | null;
   lifecycle: LifecycleSpec;
+  /** 环境检测的安装 / 可用状态：纠正「有规格但没通过市集装过」被显示成未安装 */
+  detectedInstalled?: boolean;
+  detectedAvailable?: boolean;
+  detectedVersion?: string | null;
   /** 市场是否提供可更新的版本信息（预置/手工配置没有，就不给「更新」按钮） */
   canUpdate?: boolean;
   onInstall?: (agentType: string) => void;
@@ -1031,9 +1042,11 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
   const runtime = lifecycle.runtime
     ? [lifecycle.runtime.command, ...(lifecycle.runtime.args ?? [])].join(' ')
     : '';
-  const tone = ready
+  // 没有市集安装记录（pkgState 为空）但环境检测已装好：本机直接可用，不能显示「未安装」
+  const detectedReady = !ready && !failed && !status && !!detectedInstalled;
+  const tone = ready || detectedReady
     ? 'var(--success, #16a34a)'
-    : failed
+    : failed || detectedAvailable === false
       ? 'var(--danger, #dc2626)'
       : 'var(--warning, #d97706)';
   const statusText = ready
@@ -1042,7 +1055,9 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
       ? '安装失败'
       : status === 'pending_install'
         ? '待安装'
-        : '未安装';
+        : detectedReady
+          ? `本机已安装${detectedVersion ? ` v${detectedVersion}` : ''}`
+          : '未安装';
 
   return (
     <div
@@ -1103,6 +1118,12 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
       {(ready || failed) && (
         <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
           卸载只移除本机{isAcp ? '适配器' : 'CLI 包'}，Agent 配置与接入方式保留。
+        </div>
+      )}
+      {detectedReady && (
+        <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
+          本机已检测到该 Agent 可用，只是还没通过市集安装过；点「安装」会按上面的规格写入安装记录，
+          之后可统一升级 / 卸载。
         </div>
       )}
       {!supported && (
