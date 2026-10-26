@@ -2585,6 +2585,8 @@ pub fn run() {
             commands::session::save_message,
             commands::session::update_message,
             commands::session::update_session_agent_id,
+            commands::host_sessions::acp_list_sessions,
+            commands::host_sessions::acp_import_host_session,
             commands::session::search_sessions,
             commands::session::search_messages,
             commands::attachment::save_attachments,

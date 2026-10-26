@@ -9,7 +9,7 @@ import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { useEnvInfo, isAgentInstalled } from '../../hooks/useEnvInfo';
+import { useEnvInfo, isAgentInstalled, isAgentAvailable } from '../../hooks/useEnvInfo';
 import { isWorkflowSession } from '../../utils/sessionType';
 import { errorMessage } from '../../utils/errorMessage';
 import { useI18n } from '../../hooks/useI18n';
@@ -17,6 +17,25 @@ import { SessionListItem } from './SessionListItem';
 import { Select } from '../common/Select';
 
 type NewSessionType = string;
+
+/** ACP `session/list` 返回的宿主会话（字段与后端 `HostSession` 对齐） */
+interface HostSessionRow {
+  sessionId: string;
+  cwd?: string | null;
+  title?: string | null;
+  updatedAt?: string | null;
+}
+
+type HostSessionListOutcome =
+  | { status: 'ok'; sessions: HostSessionRow[]; nextCursor?: string | null }
+  | { status: 'unsupported'; capability: string; hint: string };
+
+/** 宿主会话 `updatedAt` 的本地化展示：缺失给「-」，无法解析时原样展示 */
+function formatHostUpdatedAt(value?: string | null): string {
+  if (!value) return '-';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
+}
 
 /** 「工作流会话」折叠分组的展开状态（纯 UI 状态，存 localStorage 即可，不入库）。 */
 const WORKFLOW_GROUP_STORAGE_KEY = 'pilotdesk.session-list.workflow-expanded';
@@ -67,6 +86,16 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const [sessionTemperature, setSessionTemperature] = useState(0.7);
   const [sessionMaxTokens, setSessionMaxTokens] = useState<number | undefined>(undefined);
   const [creating, setCreating] = useState(false);
+  // 「从宿主导入会话」二级视图：状态只在本次弹窗生命周期内有效（关闭即清空）
+  const [hostImportOpen, setHostImportOpen] = useState(false);
+  const [hostSessions, setHostSessions] = useState<HostSessionRow[]>([]);
+  const [hostNextCursor, setHostNextCursor] = useState<string | null>(null);
+  const [hostListLoading, setHostListLoading] = useState(false);
+  const [hostLoadingMore, setHostLoadingMore] = useState(false);
+  const [hostListError, setHostListError] = useState<string | null>(null);
+  /** agentType → 不支持说明：本次弹窗内记住，切到别的 agent 会重新探测 */
+  const [hostUnsupported, setHostUnsupported] = useState<Record<string, string>>({});
+  const [importingHostId, setImportingHostId] = useState<string | null>(null);
 
   const { getDisplayName, getEnabledAgentTypes, getTransport } = useAgentRegistry();
 
@@ -317,6 +346,15 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       setCustomCwd('');
       setSessionTemperature(0.7);
       setSessionMaxTokens(undefined);
+      // 导入视图是本次弹窗的临时态：重开弹窗一律回到一级视图
+      setHostImportOpen(false);
+      setHostSessions([]);
+      setHostNextCursor(null);
+      setHostListLoading(false);
+      setHostLoadingMore(false);
+      setHostListError(null);
+      setHostUnsupported({});
+      setImportingHostId(null);
 
       // Auto-select first enabled agent
       const enabled = getEnabledAgentTypes().filter(t => t !== 'api');
@@ -437,6 +475,94 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     }
   };
 
+  // ── 从宿主导入会话 ──
+  const loadHostSessions = useCallback(async (agentType: string, cursor?: string) => {
+    const more = !!cursor;
+    if (more) setHostLoadingMore(true);
+    else {
+      setHostListLoading(true);
+      setHostSessions([]);
+      setHostNextCursor(null);
+    }
+    setHostListError(null);
+    try {
+      const outcome = await invoke<HostSessionListOutcome>('acp_list_sessions', {
+        agentType,
+        cwd: customCwd.trim() || null,
+        cursor: cursor ?? null,
+      });
+      if (outcome.status === 'unsupported') {
+        setHostUnsupported((prev) => ({ ...prev, [agentType]: outcome.hint }));
+        setHostSessions([]);
+        setHostNextCursor(null);
+      } else {
+        setHostSessions((prev) => {
+          if (!more) return outcome.sessions;
+          // 分页去重：对端可能把同一会话重复返回
+          const seen = new Set(prev.map((s) => s.sessionId));
+          return [...prev, ...outcome.sessions.filter((s) => !seen.has(s.sessionId))];
+        });
+        setHostNextCursor(outcome.nextCursor ?? null);
+      }
+    } catch (err) {
+      const msg = errorMessage(err);
+      setHostListError(msg);
+      showToast(`加载宿主会话失败: ${msg}`, 'error');
+    } finally {
+      setHostListLoading(false);
+      setHostLoadingMore(false);
+    }
+  }, [customCwd]);
+
+  const openHostImport = useCallback(() => {
+    setHostImportOpen(true);
+    setHostSessions([]);
+    setHostNextCursor(null);
+    setHostListError(null);
+    // 本弹窗内已知不支持：直接展示说明，不再重复拉一次
+    if (!hostUnsupported[newSessionType]) void loadHostSessions(newSessionType);
+  }, [hostUnsupported, newSessionType, loadHostSessions]);
+
+  const handleImportHost = useCallback(async (row: HostSessionRow) => {
+    if (importingHostId) return;
+    const agentType = newSessionType;
+    const existing = sessions.find(
+      (s) => s.agentType === agentType && s.agentSessionId === row.sessionId,
+    );
+    if (existing) {
+      setShowNewDialog(false);
+      void selectSession(existing.id);
+      return;
+    }
+
+    setImportingHostId(row.sessionId);
+    const cwd = (row.cwd || customCwd).trim() || undefined;
+    const title = (row.title || '').trim() || '导入的会话';
+    let createdId: string | null = null;
+    try {
+      const local = await createSession(agentType, cwd, title);
+      createdId = local.id;
+      const count = await invoke<number>('acp_import_host_session', {
+        agentType,
+        hostSessionId: row.sessionId,
+        cwd: cwd ?? null,
+        localSessionId: local.id,
+      });
+      setShowNewDialog(false);
+      showToast(`已导入 ${count} 条消息`, 'success');
+      // 导入的消息已落库，选中后从库里加载回来
+      void selectSession(local.id);
+    } catch (err) {
+      // 导入失败不留空会话
+      if (createdId) {
+        try { await deleteSession(createdId); } catch { /* ignore */ }
+      }
+      showToast(`导入失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setImportingHostId(null);
+    }
+  }, [importingHostId, newSessionType, sessions, customCwd, createSession, deleteSession, selectSession]);
+
   const handleArchive = useCallback(async (id: string) => {
     try {
       // Notify Sidecar to close the Agent session
@@ -538,6 +664,12 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   };
 
   const currentApiProvider = apiProviders.find((p) => p.id === selectedApiProvider);
+  // 「从宿主导入会话」入口：仅 ACP 接入且环境检测判定可用的 CLI Agent
+  const hostImportAvailable =
+    newSessionType !== 'api' &&
+    getTransport(newSessionType) === 'acp' &&
+    isAgentAvailable(envInfo, newSessionType);
+  const hostUnsupportedHint = hostUnsupported[newSessionType] ?? null;
 
   return (
     <aside
@@ -716,8 +848,117 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             className="w-auto min-w-[420px] max-w-[560px] rounded-xl p-4"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
           >
-            <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>{t('sessionList.dialog.title', '新建会话')}</h3>
+            <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
+              {hostImportOpen
+                ? t('sessionList.import.title', '从宿主导入会话')
+                : t('sessionList.dialog.title', '新建会话')}
+            </h3>
 
+            {hostImportOpen ? (
+              <div className="space-y-3 mb-4">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setHostImportOpen(false)}
+                    className="pd-btn pd-btn-sm"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                  >
+                    ← {t('sessionList.import.back', '返回')}
+                  </button>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    {getDisplayName(newSessionType)}
+                  </span>
+                </div>
+
+                {hostListLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="pilotdesk-spinner" />
+                  </div>
+                ) : hostUnsupportedHint ? (
+                  <div
+                    className="px-3 py-2 rounded-lg text-xs"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                  >
+                    {hostUnsupportedHint}
+                  </div>
+                ) : hostListError ? (
+                  <div className="space-y-2">
+                    <div
+                      className="px-3 py-2 rounded-lg text-xs"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                    >
+                      {hostListError}
+                    </div>
+                    <button
+                      onClick={() => void loadHostSessions(newSessionType)}
+                      className="pd-btn pd-btn-sm"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      {t('sessionList.import.retry', '重试')}
+                    </button>
+                  </div>
+                ) : hostSessions.length === 0 ? (
+                  <div className="px-3 py-6 text-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    {t('sessionList.import.empty', '宿主暂无会话记录')}
+                  </div>
+                ) : (
+                  <div
+                    className="max-h-[320px] overflow-y-auto space-y-1"
+                    onScroll={(e) => {
+                      const el = e.currentTarget;
+                      if (!hostNextCursor || hostLoadingMore) return;
+                      if (el.scrollHeight - el.scrollTop - el.clientHeight < 24) {
+                        void loadHostSessions(newSessionType, hostNextCursor);
+                      }
+                    }}
+                  >
+                    {hostSessions.map((row) => {
+                      const existing = sessions.find(
+                        (s) => s.agentType === newSessionType && s.agentSessionId === row.sessionId,
+                      );
+                      const busy = importingHostId === row.sessionId;
+                      return (
+                        <div
+                          key={row.sessionId}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+                          style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                              {row.title || '（无标题）'}
+                            </div>
+                            <div
+                              className="text-[10px] truncate"
+                              title={row.cwd || undefined}
+                              style={{ color: 'var(--text-tertiary)' }}
+                            >
+                              {formatHostUpdatedAt(row.updatedAt)} · {row.cwd || '-'}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => void handleImportHost(row)}
+                            disabled={importingHostId !== null}
+                            className="pd-btn pd-btn-sm shrink-0"
+                            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                          >
+                            {busy
+                              ? t('sessionList.import.importing', '导入中…')
+                              : existing
+                                ? t('sessionList.import.openExisting', '打开已有会话')
+                                : t('sessionList.import.action', '导入')}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {hostLoadingMore && (
+                      <div className="py-2 text-center text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        {t('sessionList.import.loadingMore', '加载中…')}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+            <>
             {/* 会话方式：一级「CLI Agent / API Agent」两个按钮 + 二级下拉（与 InputBar 快捷开始同构） */}
             <div className="mb-4">
               {(() => {
@@ -778,6 +1019,19 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                 );
               })()}
             </div>
+
+            {/* 次要入口：从 ACP 宿主导入既有会话（仅 ACP 接入且环境检测可用时出现） */}
+            {hostImportAvailable && (
+              <div className="mb-4">
+                <button
+                  onClick={openHostImport}
+                  className="text-xs px-2 py-1 rounded-lg transition-colors hover:opacity-80"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
+                >
+                  {t('sessionList.import.entry', '从宿主导入会话…')}
+                </button>
+              </div>
+            )}
 
             {/* Agent sessions: optional title & cwd */}
             {newSessionType !== 'api' && (
@@ -1008,6 +1262,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                 {creating ? t('sessionList.dialog.creating', '创建中...') : t('sessionList.dialog.create', '创建')}
               </button>
             </div>
+            </>
+            )}
           </div>
         </div>
       )}

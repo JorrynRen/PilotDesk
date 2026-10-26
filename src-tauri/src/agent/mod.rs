@@ -19,6 +19,8 @@ pub mod config;
 // P1 描述符：把 agents / api_providers 两张表统一成同一种内存模型（步骤 A，零 DDL）
 pub mod descriptor;
 pub mod handler;
+// 宿主会话导入（`session/list` + `session/load` 回放），与运行链路互不复用状态
+pub mod host_sessions;
 pub mod line_processor;
 pub mod list_skills;
 pub mod lifecycle;

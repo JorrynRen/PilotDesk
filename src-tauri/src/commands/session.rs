@@ -582,6 +582,15 @@ pub fn update_session_agent_id(
     agent_session_id: String,
 ) -> Result<(), AppError> {
     let conn = state.get_conn()?;
+    update_session_agent_id_inner(&conn, &session_id, &agent_session_id)
+}
+
+/// `update_session_agent_id` 的库层实现（宿主会话导入等后端路径共用）。
+pub fn update_session_agent_id_inner(
+    conn: &Connection,
+    session_id: &str,
+    agent_session_id: &str,
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE sessions SET agent_session_id = ?1 WHERE id = ?2",
         params![agent_session_id, session_id],

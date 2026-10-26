@@ -13,6 +13,7 @@ pub mod env;
 pub mod file_history;
 pub mod fs_util;
 pub mod groupchat;
+pub mod host_sessions;
 pub mod inspiration;
 pub mod install_log;
 pub mod knowledge;

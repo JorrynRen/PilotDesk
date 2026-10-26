@@ -102,6 +102,8 @@ pub mod method {
     pub const INITIALIZE: &str = "initialize";
     /// 新建会话
     pub const SESSION_NEW: &str = "session/new";
+    /// 列出既有会话（导入宿主会话用；对端不支持时回 `-32601`）
+    pub const SESSION_LIST: &str = "session/list";
     /// 载入既有会话（会话恢复）
     pub const SESSION_LOAD: &str = "session/load";
     /// 恢复既有会话但**不重放**历史（`sessionCapabilities.resume`）
