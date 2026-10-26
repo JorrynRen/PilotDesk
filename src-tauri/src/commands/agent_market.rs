@@ -1152,6 +1152,33 @@ async fn run_install(
 
     drop(mgr);
 
+    // 版本核对：包管理器对不可达 / 不存在的目标版本可能以 0 退出却什么都不改。
+    // 不核对就会出现「点了安装/更新、提示成功、版本其实没变」。
+    if let (Some(expected), Some(actual)) = (spec.pinned_version(), installed_version.as_deref()) {
+        let norm = |v: &str| v.trim().trim_start_matches(['v', 'V']).to_string();
+        if norm(&expected) != norm(actual) {
+            let msg = format!(
+                "安装未生效：期望 v{}，本机实际 v{}（请检查网络 / npm 镜像，或按官方文档手动安装）",
+                expected, actual
+            );
+            set_pkg_state(
+                state,
+                agent_type,
+                PkgState::failed(msg.clone(), crate::utils::now()),
+            )?;
+            let _ = app.emit(
+                "install-progress",
+                json!({
+                    "agent": agent_type,
+                    "message": msg,
+                    "progress": 100,
+                    "error": true
+                }),
+            );
+            return Err(AppError::External(msg));
+        }
+    }
+
     let mut ready = PkgState::ready(crate::utils::now());
     ready.bins = bins.clone();
     ready.installed_version = installed_version.clone();

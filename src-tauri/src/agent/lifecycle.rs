@@ -270,6 +270,21 @@ impl LifecycleSpec {
             .or_else(|| self.packages.first())
     }
 
+    /// 规格里**钉死**的版本号（npm 包名带 `@x.y.z` 时取它）。
+    ///
+    /// 用于安装后核对「是否真的装上了目标版本」：`npm install` 对不可达/不存在的
+    /// 目标版本可能以 0 退出却什么也不改。`@latest` / 无版本后缀返回 `None`，
+    /// 此时不做版本比对（预置条目的 `version` 是配置版本号，不可比）。
+    pub fn pinned_version(&self) -> Option<String> {
+        let pkg = &self.primary_package()?.package;
+        let rest = pkg.get(package_without_version(pkg).len()..)?;
+        let v = rest.trim_start_matches('@').trim();
+        if v.is_empty() || !v.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            return None;
+        }
+        Some(v.to_string())
+    }
+
     /// P1 是否支持该 kind 的安装流程。
     ///
     /// `binary` 只支持受限子集（当前平台 + zip + 带 sha256 + 非 `.cmd` 启动器）：
@@ -496,6 +511,22 @@ mod tests {
             cmds.version_probe.as_deref(),
             Some("npm ls -g @agentclientprotocol/codex-acp --json")
         );
+    }
+
+    #[test]
+    fn pinned_version_only_reads_explicit_numeric_suffix() {
+        let spec = |pkg: &str| LifecycleSpec {
+            kind: LifecycleKind::Npm,
+            packages: vec![npm_spec(PackageRole::Adapter, pkg, &[])],
+            ..Default::default()
+        };
+        assert_eq!(
+            spec("@agentclientprotocol/codex-acp@2.2.2").pinned_version().as_deref(),
+            Some("2.2.2")
+        );
+        // 无版本后缀 / @latest 都不算钉死版本（预置条目不可比）
+        assert_eq!(spec("@openai/codex").pinned_version(), None);
+        assert_eq!(spec("pkg@latest").pinned_version(), None);
     }
 
     #[test]
