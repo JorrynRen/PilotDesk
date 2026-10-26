@@ -104,6 +104,8 @@ pub mod method {
     pub const SESSION_NEW: &str = "session/new";
     /// 载入既有会话（会话恢复）
     pub const SESSION_LOAD: &str = "session/load";
+    /// 恢复既有会话但**不重放**历史（`sessionCapabilities.resume`）
+    pub const SESSION_RESUME: &str = "session/resume";
     /// 提交一轮用户输入
     pub const SESSION_PROMPT: &str = "session/prompt";
     /// 取消当前回合（通知）
@@ -116,6 +118,29 @@ pub mod peer_method {
     pub const SESSION_UPDATE: &str = "session/update";
     /// 权限请求（请求，需回写响应）
     pub const SESSION_REQUEST_PERMISSION: &str = "session/request_permission";
+}
+
+/// 已有 `resume_id` 时如何接上对端会话（按 `initialize` 公布的能力位降级）。
+///
+/// 优先级：`resume`（不重放）→ `load`（重放，需抑制事件）→ `new`（对端不支持恢复）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResumePlan {
+    Resume,
+    Load,
+    New,
+}
+
+fn resume_plan(has_resume_id: bool, resume_supported: bool, load_supported: bool) -> ResumePlan {
+    if !has_resume_id {
+        return ResumePlan::New;
+    }
+    if resume_supported {
+        ResumePlan::Resume
+    } else if load_supported {
+        ResumePlan::Load
+    } else {
+        ResumePlan::New
+    }
 }
 
 /// ACP `stopReason` → 本应用 `StopReason`。
@@ -554,6 +579,11 @@ impl AgentSession for AcpSession {
             }
         });
 
+        // 回放抑制：`session/load` 会把整段历史以 `session/update` 重放一遍；
+        // 我们自己已保存消息记录，原样转发会让当前回合"重播全部旧消息"。
+        let suppress_replay = Arc::new(AtomicBool::new(false));
+        let suppress_update = Arc::clone(&suppress_replay);
+
         // ── 2) 注册"对端 → 客户端"的处理器 ──
         // 2a) session/update：流式正文/思考/工具/计划
         let tx_update = evt_tx.clone();
@@ -563,6 +593,10 @@ impl AgentSession for AcpSession {
         peer.on(
             peer_method::SESSION_UPDATE,
             Arc::new(move |_peer, _id, params| {
+                // 回放期间丢弃：上下文由对端自己恢复，历史由本应用落库
+                if suppress_update.load(Ordering::Relaxed) {
+                    return;
+                }
                 for ev in project_session_update(&sid_update, &params) {
                     // 在途工具计数：工具执行期间对端静默是**正常**的（见 IdleState）
                     match &ev {
@@ -677,7 +711,7 @@ impl AgentSession for AcpSession {
         );
 
         // ── 3) initialize 握手 ──
-        let _init = peer
+        let init = peer
             .request_with_timeout(
                 method::INITIALIZE,
                 json!({
@@ -691,34 +725,110 @@ impl AgentSession for AcpSession {
             .await
             .map_err(|e| with_peer_stderr(e, &stderr_text))?;
 
-        // ── 4) 建会话（有 resume_id 则走 session/load）──
+        // 对端能力位：决定既有会话走 resume（不重放）还是 load（重放，需抑制事件）。
+        // `sessionCapabilities.resume` 在 schema 里是对象（如 `{}`），也兼容布尔写法。
+        let agent_caps = &init["agentCapabilities"];
+        let resume_supported = agent_caps["sessionCapabilities"]["resume"]
+            .as_object()
+            .is_some()
+            || agent_caps["sessionCapabilities"]["resume"]
+                .as_bool()
+                .unwrap_or(false);
+        let load_supported = agent_caps["loadSession"].as_bool().unwrap_or(false);
+
+        // ── 4) 建/恢复会话 ──
+        // 有 resume_id 时优先 `session/resume`（不重放）；对端不支持 resume 才退回
+        // `session/load`（会重放历史，期间抑制事件）；两者都不支持只能新建。
         let new_params = json!({ "cwd": conn.cwd, "mcpServers": [] });
-        let resp = match &conn.resume_id {
-            Some(rid) => {
-                let mut p = new_params.clone();
-                p["sessionId"] = json!(rid);
-                peer.request_with_timeout(method::SESSION_LOAD, p, HANDSHAKE_TIMEOUT)
-                    .await
-            }
-            None => {
-                peer.request_with_timeout(method::SESSION_NEW, new_params, HANDSHAKE_TIMEOUT)
-                    .await
-            }
+        let mut resume_params = new_params.clone();
+        if let Some(rid) = &conn.resume_id {
+            resume_params["sessionId"] = json!(rid);
         }
-        .map_err(|e| with_peer_stderr(e, &stderr_text))?;
+        let plan = resume_plan(conn.resume_id.is_some(), resume_supported, load_supported);
+        let resp_result = match plan {
+            ResumePlan::Resume => {
+                let first = peer
+                    .request_with_timeout(
+                        method::SESSION_RESUME,
+                        resume_params.clone(),
+                        HANDSHAKE_TIMEOUT,
+                    )
+                    .await;
+                match first {
+                    Ok(v) => Ok(v),
+                    Err(e) => {
+                        // 声明支持 resume 但实际失败（版本/实现差异）：按能力退回，
+                        // 不要因为恢复失败让整轮消息直接报错。
+                        log::warn!("[acp] session/resume 失败，按能力退回：{}", e);
+                        if load_supported {
+                            suppress_replay.store(true, Ordering::Relaxed);
+                            let r = peer
+                                .request_with_timeout(
+                                    method::SESSION_LOAD,
+                                    resume_params.clone(),
+                                    HANDSHAKE_TIMEOUT,
+                                )
+                                .await;
+                            suppress_replay.store(false, Ordering::Relaxed);
+                            r
+                        } else {
+                            peer.request_with_timeout(
+                                method::SESSION_NEW,
+                                new_params.clone(),
+                                HANDSHAKE_TIMEOUT,
+                            )
+                            .await
+                        }
+                    }
+                }
+            }
+            ResumePlan::Load => {
+                suppress_replay.store(true, Ordering::Relaxed);
+                let r = peer
+                    .request_with_timeout(
+                        method::SESSION_LOAD,
+                        resume_params.clone(),
+                        HANDSHAKE_TIMEOUT,
+                    )
+                    .await;
+                // 回放在 load 响应前已全部送达，这里解除抑制
+                suppress_replay.store(false, Ordering::Relaxed);
+                r
+            }
+            ResumePlan::New => {
+                peer.request_with_timeout(
+                    method::SESSION_NEW,
+                    new_params.clone(),
+                    HANDSHAKE_TIMEOUT,
+                )
+                .await
+            }
+        };
+        let resp = resp_result.map_err(|e| with_peer_stderr(e, &stderr_text))?;
 
         self.remote_id = resp["sessionId"]
             .as_str()
             .map(|s| s.to_string())
             .or_else(|| conn.resume_id.clone());
 
+        // 把对端会话 id 回传前端：前端写回 `sessions.agent_session_id`，
+        // 下一轮才能 resume/load 同一会话。缺了这一步，每条消息都会 `session/new`
+        // 出一个孤立的宿主会话（同一会话列表里"每条消息一个 session"）。
+        if let Some(remote) = self.remote_id.clone() {
+            self.emit(UnifiedAgentEvent::AgentSessionId {
+                session_id: self.session_id.clone(),
+                agent_session_id: remote,
+            });
+        }
+
         // ACP 天生具备结构化能力（工具事件/思考/常驻会话/会话恢复）；
+        // resume 按对端实际公布的能力位标记（resume 或 load 任一可用即算可恢复）。
         // permission 暂标 false：审批尚未接入（见 2b 的 TODO），不能声称支持。
         self.caps = Capabilities {
             tool_events: true,
             permission: false,
             reasoning: true,
-            resume: true,
+            resume: resume_supported || load_supported,
             persistent: true,
             automatable: true,
         };
@@ -889,6 +999,18 @@ impl AgentSession for AcpSession {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn resume_plan_falls_back_by_capability() {
+        // 首次会话（无 resume_id）一律新建
+        assert_eq!(resume_plan(false, true, true), ResumePlan::New);
+        // 已有 id：resume 优先（不重放）
+        assert_eq!(resume_plan(true, true, true), ResumePlan::Resume);
+        // 不支持 resume → 退回 load（重放，调用方会抑制事件）
+        assert_eq!(resume_plan(true, false, true), ResumePlan::Load);
+        // 两者都不支持 → 只能新建（新 id 会回传前端，后续仍可继续）
+        assert_eq!(resume_plan(true, false, false), ResumePlan::New);
+    }
 
     #[test]
     fn stop_reason_maps_known_values() {
