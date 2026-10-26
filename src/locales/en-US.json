@@ -94,6 +94,9 @@
   "statusBar.notIntegrated": "Not installed or not configured",
   "statusBar.openAgentSettings": "Open settings to configure Agent integration",
   "statusBar.notInstalled": "Not installed",
+  "statusBar.notAvailable": "Unavailable",
+  "statusBar.notReady": "{{count}} not ready",
+  "statusBar.ready": "Ready",
   "statusBar.refreshEnv": "Click to refresh environment detection",
   "statusBar.viewEnv": "Click to view environment detection",
 

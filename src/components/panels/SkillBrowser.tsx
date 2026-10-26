@@ -5,7 +5,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useSkillStore, type SkillInfo } from '../../stores/skillStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { useEnvInfo } from '../../hooks/useEnvInfo';
+import { useEnvInfo, isAgentInstalled } from '../../hooks/useEnvInfo';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -113,11 +113,12 @@ export function SkillBrowser() {
     const fetchAll = async () => {
       setLoading(true);
       try {
-        // Derive installed agents from detect_env (version non-null = installed)
-        const agentVersions = envInfo?.agentVersions ?? {};
-        const installed = Object.entries(agentVersions)
-          .filter(([, version]) => version !== null && version !== undefined)
-          .map(([agentType]) => agentType);
+        // 已装 Agent 取自 detect_env 的 health（版本号取不到不代表未安装）
+        const types = new Set([
+          ...Object.keys(envInfo?.agentVersions ?? {}),
+          ...Object.keys(envInfo?.agentHealth ?? {}),
+        ]);
+        const installed = [...types].filter((agentType) => isAgentInstalled(envInfo, agentType));
         // API Agent 独立于 DB/detect_env，需显式纳入技能请求
         const targets = Array.from(new Set([...installed, 'api']));
         for (const agent of targets) {

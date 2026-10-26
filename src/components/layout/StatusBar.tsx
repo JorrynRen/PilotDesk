@@ -1,6 +1,6 @@
 import { Loader2, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useEnvInfo, type AgentDetectStatus } from '../../hooks/useEnvInfo';
+import { useEnvInfo, isAgentInstalled, isAgentAvailable, type AgentDetectStatus } from '../../hooks/useEnvInfo';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useI18n } from '../../hooks/useI18n';
 import type { AgentConfig } from '../../types';
@@ -32,14 +32,23 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
     dotColor: string;
   } => {
     const status = agentStatus[agent.agentType];
-    if (status === 'done' && version) {
-      return { status: 'done', label: version, dotColor: agent.color || '#9CA3AF' };
+    if (status !== 'done' && status !== 'error') {
+      // pending / detecting — colon only, spinner indicates progress
+      return { status: 'detecting', label: '', dotColor: '#9CA3AF' };
     }
-    if (status === 'error' || (status === 'done' && !version)) {
+    // 与「环境检测」页同口径（AgentHealth）：版本号缺失 ≠ 未安装。
+    // 版本探测命令超时 / 网络失败时 version 为 null，但 installed 仍为真；
+    // 若这里只看 version，就会出现「检测页显示可用、状态栏显示未安装」的矛盾。
+    const installed = isAgentInstalled(envInfo, agent.agentType);
+    const available = isAgentAvailable(envInfo, agent.agentType);
+    if (!installed) {
       return { status: 'error', label: t('statusBar.notInstalled', '未安装'), dotColor: '#9CA3AF' };
     }
-    // pending or detecting — colon only, spinner indicates progress
-    return { status: 'detecting', label: '', dotColor: '#9CA3AF' };
+    if (!available) {
+      return { status: 'error', label: t('statusBar.notAvailable', '不可用'), dotColor: '#9CA3AF' };
+    }
+    // 版本号只用于展示：取不到时显示「就绪」，不降级成未安装
+    return { status: 'done', label: version || t('statusBar.ready', '就绪'), dotColor: agent.color || '#9CA3AF' };
   };
 
   // 聚合展示所需的派生状态：逐个判定后汇总；版本号只进 tooltip，不常驻占位
@@ -102,7 +111,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
             {detecting
               ? t('statusBar.detecting', '检测中…')
               : notReady.length > 0
-                ? t('statusBar.notReady', `${notReady.length} 个未安装`, { count: notReady.length })
+                ? t('statusBar.notReady', `${notReady.length} 个未就绪`, { count: notReady.length })
                 : t('statusBar.agentsReady', '就绪')}
           </button>
         )}

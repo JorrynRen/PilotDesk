@@ -18,6 +18,33 @@ import type { EnvInfo } from '../types';
 /** Per-agent detection state */
 export type AgentDetectStatus = 'pending' | 'detecting' | 'done' | 'error';
 
+/**
+ * Agent 是否已安装 —— 与环境检测页同口径（以 `agentHealth.installed` 为准）。
+ *
+ * ⚠️ 不要用「版本号是否有值」判断：版本探测命令超时 / 网络异常时 `agentVersions[x]`
+ * 为 null，但 Agent 其实已装且可用；只看版本号会出现「环境检测页显示可用、
+ * 底部状态栏 / 会话选择器却当成未安装」的矛盾。
+ */
+export function isAgentInstalled(
+  envInfo: EnvInfo | null | undefined,
+  agentType: string,
+): boolean {
+  const health = envInfo?.agentHealth?.[agentType];
+  if (health) return health.installed;
+  // 老数据 / 尚未拿到 health 时退回版本号
+  return (envInfo?.agentVersions?.[agentType] ?? null) !== null;
+}
+
+/** Agent 当前是否可用（已安装，且启动命令可解析；ACP 还要求握手通过）。 */
+export function isAgentAvailable(
+  envInfo: EnvInfo | null | undefined,
+  agentType: string,
+): boolean {
+  const health = envInfo?.agentHealth?.[agentType];
+  if (health) return health.available;
+  return isAgentInstalled(envInfo, agentType);
+}
+
 interface EnvState {
   info: EnvInfo | null;
   loading: boolean;
@@ -63,24 +90,25 @@ function setupListeners() {
   // Per-agent version + 健康度（安装 / 可用）
   listen<{ agentType: string; version: string | null; installed?: boolean; available?: boolean; reason?: string | null }>('env-agent-version', (event) => {
     const { agentType, version, installed, available, reason } = event.payload;
+    const health = {
+      installed: installed ?? version !== null,
+      available: available ?? version !== null,
+      reason: reason ?? null,
+    };
     globalState.info = {
       nodeVersion: globalState.info?.nodeVersion ?? null,
       gitVersion: globalState.info?.gitVersion ?? null,
       pythonVersion: globalState.info?.pythonVersion ?? null,
       agentVersions: { ...(globalState.info?.agentVersions ?? {}), [agentType]: version },
-      agentHealth: {
-        ...(globalState.info?.agentHealth ?? {}),
-        [agentType]: {
-          installed: installed ?? version !== null,
-          available: available ?? version !== null,
-          reason: reason ?? null,
-        },
-      },
+      agentHealth: { ...(globalState.info?.agentHealth ?? {}), [agentType]: health },
       agentLatestVersions: globalState.info?.agentLatestVersions,
     };
     globalState.agentStatus = {
       ...globalState.agentStatus,
-      [agentType]: version !== null ? 'done' : 'error',
+      // 「版本号取不到」≠「未安装」：版本探测命令超时 / 网络失败时 version 为 null，
+      // 但 installed 仍为真。这里必须按 installed 判定，否则会出现
+      // 「环境检测页显示可用、底部状态栏显示未安装」的矛盾。
+      [agentType]: health.installed ? 'done' : 'error',
     };
     notifyListeners();
   }).then((unlisten) => unlistenFns.push(unlisten));
@@ -88,9 +116,17 @@ function setupListeners() {
   // Per-agent latest version (arrives incrementally, Phase 2)
   listen<{ agentType: string; version: string | null }>('env-agent-latest-version', (event) => {
     const { agentType, version } = event.payload;
+    // 用显式字段重建而不是 `...globalState.info!`：Phase 2 的事件可能早于 Phase 1 的
+    // invoke 结果到达，此时 info 仍为 null，展开 null 会把 agentVersions / agentHealth 抹掉，
+    // 表现为「全部 Agent 突然变成未安装」。
+    const prev = globalState.info;
     globalState.info = {
-      ...globalState.info!,
-      agentLatestVersions: { ...(globalState.info?.agentLatestVersions ?? {}), [agentType]: version },
+      nodeVersion: prev?.nodeVersion ?? null,
+      gitVersion: prev?.gitVersion ?? null,
+      pythonVersion: prev?.pythonVersion ?? null,
+      agentVersions: prev?.agentVersions ?? {},
+      agentHealth: prev?.agentHealth ?? {},
+      agentLatestVersions: { ...(prev?.agentLatestVersions ?? {}), [agentType]: version },
     };
     notifyListeners();
   }).then((unlisten) => unlistenFns.push(unlisten));
@@ -98,10 +134,13 @@ function setupListeners() {
   // Final complete result (write to cache on Rust side)
   listen<EnvInfo>('env-detect-done', (event) => {
     globalState.info = event.payload;
-    // Mark all remaining agents as done
+    // Mark all remaining agents as done（按 health.installed 判定，不看版本号是否有值）
     const finalStatus: Record<string, AgentDetectStatus> = {};
     for (const key of Object.keys(event.payload.agentVersions)) {
-      finalStatus[key] = event.payload.agentVersions[key] !== null ? 'done' : 'error';
+      finalStatus[key] =
+        (event.payload.agentHealth?.[key]?.installed ?? event.payload.agentVersions[key] !== null)
+          ? 'done'
+          : 'error';
     }
     globalState.agentStatus = finalStatus;
     notifyListeners();
@@ -124,7 +163,10 @@ async function fetchEnv(): Promise<EnvInfo | null> {
       globalState.info = info;
       const finalStatus: Record<string, AgentDetectStatus> = {};
       for (const key of Object.keys(info.agentVersions)) {
-        finalStatus[key] = info.agentVersions[key] !== null ? 'done' : 'error';
+        finalStatus[key] =
+          (info.agentHealth?.[key]?.installed ?? info.agentVersions[key] !== null)
+            ? 'done'
+            : 'error';
       }
       globalState.agentStatus = finalStatus;
       return info;

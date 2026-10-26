@@ -35,7 +35,7 @@ import { useGroupChatStore } from '../../stores/groupChatStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { useCommandCenterStore, COMMAND_CENTER_USAGE_DAYS } from '../../stores/commandCenterStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { useEnvInfo } from '../../hooks/useEnvInfo';
+import { useEnvInfo, isAgentAvailable } from '../../hooks/useEnvInfo';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 
 /** 进行中状态（工作流实例 / 群聊房间）：终态不进「进行中」。 */
@@ -371,10 +371,11 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const { envInfo } = useEnvInfo();
   const { createAgentSession } = useAgentEvent();
   const [starting, setStarting] = useState(false);
-  // API 就绪 = 有提供商已配 Key 且至少一个模型；CLI 就绪 = 有已启用且本机已安装的 CLI Agent
+  // API 就绪 = 有提供商已配 Key 且至少一个模型；CLI 就绪 = 有已启用且本机可用的 CLI Agent
+  // （可用性按 health 判定：版本号取不到不代表不可用）
   const apiProvider = providers.find((p) => p.apiKeySet && p.models.length > 0);
   const cliAgentType = getEnabledAgentTypes().find(
-    (t) => (envInfo?.agentVersions?.[t] ?? null) !== null
+    (t) => isAgentAvailable(envInfo, t)
       // ACP 还要求环境检测未判定不可用（未登录等握手失败时不能拿来起首次会话）
       && (getTransport(t) !== 'acp' || envInfo?.agentHealth?.[t]?.available !== false),
   );

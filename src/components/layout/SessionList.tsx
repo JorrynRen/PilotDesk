@@ -9,7 +9,7 @@ import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { useEnvInfo } from '../../hooks/useEnvInfo';
+import { useEnvInfo, isAgentInstalled } from '../../hooks/useEnvInfo';
 import { isWorkflowSession } from '../../utils/sessionType';
 import { errorMessage } from '../../utils/errorMessage';
 import { useI18n } from '../../hooks/useI18n';
@@ -138,10 +138,15 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const [syncedEnvInfo, setSyncedEnvInfo] = useState<typeof envInfo | null>(null);
   if (syncedEnvInfo !== envInfo) {
     setSyncedEnvInfo(envInfo);
-    if (envInfo?.agentVersions) {
+    if (envInfo?.agentVersions || envInfo?.agentHealth) {
+      // 已装判定走 health.installed：版本号取不到（探测超时 / 网络问题）不等于未安装
+      const types = new Set([
+        ...Object.keys(envInfo?.agentVersions ?? {}),
+        ...Object.keys(envInfo?.agentHealth ?? {}),
+      ]);
       const installed = new Set<string>();
-      for (const [agentType, version] of Object.entries(envInfo.agentVersions)) {
-        if (version) installed.add(agentType);
+      for (const agentType of types) {
+        if (isAgentInstalled(envInfo, agentType)) installed.add(agentType);
       }
       setInstalledAgents(installed);
     }

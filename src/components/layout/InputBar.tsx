@@ -20,7 +20,7 @@ import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { useSessionDraftStore, GLOBAL_CWD, cliChoice, apiChoice, parseChoice } from '../../stores/sessionDraftStore';
 
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { useEnvInfo } from '../../hooks/useEnvInfo';
+import { useEnvInfo, isAgentAvailable } from '../../hooks/useEnvInfo';
 
 
 const MODE_ICONS: Record<ChatMode, typeof Send> = {
@@ -153,8 +153,11 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   const installedClis = useMemo(
     () => getEnabledAgentTypes().filter((t) => {
       if (t === 'api') return false;
+      // ACP：健康度未知时先列出（检测完再收敛）；本地 CLI：按可用性判定。
+      // 两者都不能用「版本号是否有值」——版本探测超时 / 网络失败会让 version 为 null，
+      // 但 Agent 仍然可用，按版本号过滤会把它从选择器里错误剔除。
       if (getTransport(t) === 'acp') return envInfo?.agentHealth?.[t]?.available !== false;
-      return (envInfo?.agentVersions?.[t] ?? null) !== null;
+      return isAgentAvailable(envInfo, t);
     }),
     [getEnabledAgentTypes, getTransport, envInfo],
   );
