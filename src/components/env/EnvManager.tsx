@@ -463,7 +463,19 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       </SettingsSection>
 
       {/* Agent Detection with Update Check */}
-      <SettingsSection title="Agent 检测">
+      <SettingsSection
+        title="Agent 检测"
+        actions={
+          <SettingsButton
+            onClick={fetchEnvWithLog}
+            disabled={envLoading}
+            variant="secondary"
+            icon={<RefreshCw size={12} className={envLoading ? 'animate-spin' : ''} />}
+          >
+            重新检测环境
+          </SettingsButton>
+        }
+      >
         <div className="space-y-2">
           {agentDependencies.map((dep) => (
             <SettingsCard key={dep.name} highlight={dep.hasUpdate}>
@@ -613,16 +625,6 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
           ))}
         </div>
       </SettingsSection>
-
-      {/* Refresh button */}
-      <SettingsButton
-        onClick={fetchEnvWithLog}
-        disabled={envLoading}
-        variant="secondary"
-        icon={<RefreshCw size={12} className={envLoading ? 'animate-spin' : ''} />}
-      >
-        重新检测环境
-      </SettingsButton>
 
       {/* Install Log */}
       <InstallLog logs={logs} isActive={!!installing} onClear={() => { setLogs([]); invoke('clear_logs').catch(() => {}); }} />
