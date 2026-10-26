@@ -8,6 +8,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { SettingsCard, SettingsButton } from '../settings';
 import { AgentIcon } from '../common/AgentIcon';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { useEnvInfo } from '../../hooks/useEnvInfo';
 import type { LifecycleSpec } from '../../types';
 
 /**
@@ -81,6 +82,8 @@ export function AgentConfigMarket() {
   const navigate = useNavigate();
   /** 全局 Agent 列表是单例缓存，获取后必须主动刷新，否则配置页看不到新条目。 */
   const { fetchAgents } = useAgentRegistry();
+  /** 安装/更新后刷新全局环境信息（运行与策略页共用同一份 envInfo） */
+  const { refresh: refreshEnv } = useEnvInfo();
   // 两个市场各自独立保存加载态：任一来源超时只影响自己的 Tab，不会让另一个市场空白。
   const [market, setMarket] = useState<Record<MarketCategory, MarketCategoryState>>(MARKET_STATE_INITIAL);
   const [busyType, setBusyType] = useState<string | null>(null);
@@ -165,8 +168,10 @@ export function AgentConfigMarket() {
       showToast(`更新失败: ${errorMessage(err)}`, 'error');
     }
     setBusyType(null);
-    // 更新只影响该条目所在市场，按需刷新即可
+    // 更新只影响该条目所在市场，按需刷新即可；
+    // 同时刷新全局环境信息，否则「运行与策略」还显示更新前的版本。
     await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
+    void refreshEnv();
   };
 
   const renderAction = (agent: MarketAgent) => {

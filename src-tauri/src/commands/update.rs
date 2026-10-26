@@ -114,6 +114,20 @@ pub async fn check_agent_update(
     let config = crate::commands::agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
 
+    // ACP 官方目录来源：最新版本就是目录里的版本（「更新」装的也是它）。
+    // 不能用 npm view —— npm latest 与目录版本是两套，会永远显示「有更新」，
+    // 而更新后版本不变（装回同一个目录版本）。
+    if let Some(ds) = config.dist_source.as_ref() {
+        if ds.source == crate::agent::lifecycle::SOURCE_ACP_REGISTRY {
+            if let Some(v) = ds.registry_version.clone().filter(|s| !s.trim().is_empty()) {
+                return Ok(VersionTimeInfo {
+                    version: v,
+                    release_time: None,
+                });
+            }
+        }
+    }
+
     let cmd = config
         .lifecycle
         .as_ref()

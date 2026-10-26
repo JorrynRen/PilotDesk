@@ -458,7 +458,6 @@ pub(crate) fn cached_agent_health(agent_type: &str) -> Option<AgentHealth> {
     Some(health.clone())
 }
 
-
 /// 通过 AgentManager 异步路径执行环境检测
 async fn detect_env_with_console(
     app: &tauri::AppHandle,
@@ -603,10 +602,21 @@ async fn detect_env_with_console(
         // 先归集「查什么命令」：有生命周期规格的直接派生；
         // 没有规格的历史本地 CLI 记下来，稍后按同名预置补齐（否则这类 Agent 永远查不到最新版本）。
         let mut jobs: Vec<(String, String)> = Vec::new();
+        // ACP 官方目录来源：最新版本直接取目录版本（更新装的就是它）。
+        // 不能用 npm view —— npm latest 与目录版本是两套，会永远显示「有更新」。
+        let mut pinned_latest: Vec<(String, String)> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
         for agent in &db_agents {
             if !agent.is_enabled {
                 continue;
+            }
+            if let Some(ds) = agent.dist_source.as_ref() {
+                if ds.source == crate::agent::lifecycle::SOURCE_ACP_REGISTRY {
+                    if let Some(v) = ds.registry_version.clone().filter(|s| !s.trim().is_empty()) {
+                        pinned_latest.push((agent.agent_type.clone(), v));
+                        continue;
+                    }
+                }
             }
             match agent
                 .lifecycle
@@ -660,6 +670,17 @@ async fn detect_env_with_console(
                 }),
             );
             log_env!("[env/Phase2] {} latest={:?}", agent_type, version);
+        }
+        // 目录来源的最新版本：直接回填，不发命令
+        for (agent_type, version) in pinned_latest {
+            let _ = app_clone.emit(
+                "env-agent-latest-version",
+                serde_json::json!({
+                    "agentType": agent_type,
+                    "version": version,
+                }),
+            );
+            log_env!("[env/Phase2] {} latest(registry)={}", agent_type, version);
         }
     });
 

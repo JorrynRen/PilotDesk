@@ -1152,15 +1152,22 @@ async fn run_install(
 
     drop(mgr);
 
-    // 版本核对：包管理器对不可达 / 不存在的目标版本可能以 0 退出却什么都不改。
-    // 不核对就会出现「点了安装/更新、提示成功、版本其实没变」。
-    if let (Some(expected), Some(actual)) = (spec.pinned_version(), installed_version.as_deref()) {
+    // 版本核对：包管理器对不可达 / 不存在的目标版本可能以 0 退出却什么都不改；
+    // 探针失败（拿不到已装版本）同样不能当成成功——否则就是「提示更新完成、版本没变」。
+    if let Some(expected) = spec.pinned_version() {
         let norm = |v: &str| v.trim().trim_start_matches(['v', 'V']).to_string();
-        if norm(&expected) != norm(actual) {
-            let msg = format!(
+        let mismatch = match installed_version.as_deref() {
+            Some(actual) if norm(&expected) == norm(actual) => None,
+            Some(actual) => Some(format!(
                 "安装未生效：期望 v{}，本机实际 v{}（请检查网络 / npm 镜像，或按官方文档手动安装）",
                 expected, actual
-            );
+            )),
+            None => Some(format!(
+                "安装未生效：未检测到期望版本 v{}（安装命令可能未真正执行，请检查网络 / npm 镜像）",
+                expected
+            )),
+        };
+        if let Some(msg) = mismatch {
             set_pkg_state(
                 state,
                 agent_type,

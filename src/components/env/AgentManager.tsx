@@ -38,6 +38,9 @@ export function AgentManager() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { agents, loading, fetchAgents } = useAgentRegistry();
+  // 安装/更新/卸载会改变本机版本：同步刷新全局环境信息，
+  // 否则「设置 › 运行与策略」仍显示更新前的版本（跨页面共用同一份 envInfo）。
+  const { refresh: refreshEnv } = useEnvInfo();
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<AgentConfig> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -91,6 +94,7 @@ export function AgentManager() {
     }
     setInstalling(null);
     const fresh = await fetchAgents();
+    void refreshEnv();
     // 编辑面板若正开着这个 Agent，同步包状态——否则用户会一直看到「待安装」。
     const updated = fresh.find((a) => a.agentType === agentType);
     setEditForm((prev) =>
@@ -119,6 +123,7 @@ export function AgentManager() {
     }
     setUninstalling(null);
     const fresh = await fetchAgents();
+    void refreshEnv();
     const updated = fresh.find((a) => a.agentType === agentType);
     setEditForm((prev) =>
       prev && prev.agentType === agentType
@@ -142,6 +147,7 @@ export function AgentManager() {
     }
     setUpdating(null);
     const fresh = await fetchAgents();
+    void refreshEnv();
     const updated = fresh.find((a) => a.agentType === agentType);
     setEditForm((prev) =>
       prev && prev.agentType === agentType
