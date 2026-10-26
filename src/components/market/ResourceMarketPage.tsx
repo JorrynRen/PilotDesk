@@ -21,7 +21,7 @@ import { errorMessage } from '../../utils/errorMessage';
  * 4 个 tab 各管一类资源：
  *   插件         → 在线插件商店（安装/更新插件）
  *   工作流模板   → 在线模板市场（浏览/安装工作流模板）
- *   CLI Agent 配置 → 在线 Agent 市场（拉取/覆盖 Agent 配置）
+ *   Agent 配置   → 在线 Agent 市场（拉取/覆盖 Agent 配置）
  *   灵感         → 在线灵感市场（浏览提示词，一键抄进自己的灵感库）
  *
  * 每个 tab 都给出「我的在哪」出口：市集只负责"获取"，自己的数据仍在各自的原生地管理
@@ -36,7 +36,7 @@ const TABS: { key: MarketTab; label: string; icon: typeof Store }[] = [
   // 插件用 Package（与设置›插件「已安装插件」标题同源），避免和页面标题的 Store 图标撞脸
   { key: 'plugins', label: '插件', icon: Package },
   { key: 'workflow', label: '工作流模板', icon: Workflow },
-  { key: 'agents', label: 'CLI Agent 配置', icon: Bot },
+  { key: 'agents', label: 'Agent 配置', icon: Bot },
   // 灵感用 Lightbulb（💡），不用 Sparkles —— 后者在工作流模板「精选」等处已密集使用
   { key: 'inspiration', label: '灵感', icon: Lightbulb },
 ];

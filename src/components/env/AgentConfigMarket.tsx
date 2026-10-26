@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 
-import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
+import { SettingsCard, SettingsButton } from '../settings';
 import { AgentIcon } from '../common/AgentIcon';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { LifecycleSpec } from '../../types';
@@ -227,64 +227,60 @@ export function AgentConfigMarket() {
 
   return (
     <div className="h-full overflow-y-auto p-4 pd-scroll-stable">
-      <SettingsSection
-        title="Agent 市集"
-        actions={
-          <SettingsButton
-            variant="secondary"
-            icon={<RefreshCw size={11} className={market.acp.loading || market.cli.loading ? 'animate-spin' : undefined} />}
-            onClick={() => refreshAll(true)}
-            disabled={market.acp.loading || market.cli.loading}
-            title="刷新两个市场的数据源（ACP 官方目录缓存 24 小时，过期自动后台更新）"
-          >
-            刷新目录
-          </SettingsButton>
-        }
-      >
-        {/* 分类 + 搜索 */}
-        <div className="flex items-center gap-2 mb-3 flex-wrap">
-          <div className="flex items-center gap-1">
-            {CATEGORY_TABS.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setCategory(t.key)}
-                className={'pd-tab' + (category === t.key ? ' pd-tab-active' : '')}
-                title={t.hint}
-              >
-                {t.label}
-                <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  {counts[t.key]}
-                </span>
-              </button>
-            ))}
-          </div>
-          <div className="relative flex-1 min-w-[160px] max-w-md">
-            <Search
-              size={13}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-              style={{ color: 'var(--text-tertiary)' }}
-            />
-            <input
-              type="text"
-              className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
-              style={{
-                height: 28, /* 对齐同行 Tab 组高度 */
-                backgroundColor: 'var(--bg-field)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border)',
-              }}
-              placeholder="搜索名称 / 标识 / 包名"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-            />
-          </div>
+      {/* 分类 + 搜索 + 刷新目录：同一行（页面标题由「资源市集」页签承载，这里不再重复） */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-1">
+          {CATEGORY_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setCategory(t.key)}
+              className={'pd-tab' + (category === t.key ? 'pd-tab-active' : '')}
+              title={t.hint}
+            >
+              {t.label}
+              <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                {counts[t.key]}
+              </span>
+            </button>
+          ))}
         </div>
+        <div className="relative flex-1 min-w-[160px] max-w-md">
+          <Search
+            size={13}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+            style={{ color: 'var(--text-tertiary)' }}
+          />
+          <input
+            type="text"
+            className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
+            style={{
+              height: 28, /* 对齐同行 Tab 组高度 */
+              backgroundColor: 'var(--bg-field)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
+            }}
+            placeholder="搜索名称 / 标识 / 包名"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+          />
+        </div>
+        <SettingsButton
+          variant="secondary"
+          className="ml-auto"
+          icon={<RefreshCw size={11} className={market.acp.loading || market.cli.loading ? 'animate-spin' : undefined} />}
+          onClick={() => refreshAll(true)}
+          disabled={market.acp.loading || market.cli.loading}
+          title="刷新两个市场的数据源（ACP 官方目录缓存 24 小时，过期自动后台更新）"
+        >
+          刷新目录
+        </SettingsButton>
+      </div>
 
-        <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
-          {category === 'acp'
-            ? '获取后会在本机安装对应适配器（npm 全局包）；安装完成前该 Agent 不可用于会话。'
-            : '兼容模式配置通过命令行子进程调用，获取后需在本机安装对应的 CLI 工具。'}
-        </div>
+      <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
+        {category === 'acp'
+          ? '获取后会在本机安装对应适配器（npm 全局包）；安装完成前该 Agent 不可用于会话。'
+          : '兼容模式配置通过命令行子进程调用，获取后需在本机安装对应的 CLI 工具。'}
+      </div>
 
         <div className="space-y-2">
           {/* 每个市场独立报错：一侧数据源故障不影响另一侧的浏览与获取 */}
@@ -308,7 +304,7 @@ export function AgentConfigMarket() {
           )}
           {visible.length === 0 ? (
             <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>
-              {current.loading ? '正在加载 Agent 市集...' : current.error ? '' : '没有匹配的条目'}
+              {current.loading ? '正在加载 Agent 配置...' : current.error ? '' : '没有匹配的条目'}
             </div>
           ) : (
             visible.map((agent) => {
@@ -408,7 +404,6 @@ export function AgentConfigMarket() {
             })
           )}
         </div>
-      </SettingsSection>
     </div>
   );
 }

@@ -706,7 +706,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               <PanelIcon size={13} />
             </button>
           )}
-          {/* 资源市集：获取类入口（插件 / 工作流模板 / CLI Agent 配置 / 灵感）的聚合页，独立路由 /market */}
+          {/* 资源市集：获取类入口（插件 / 工作流模板 / Agent 配置 / 灵感）的聚合页，独立路由 /market */}
           {onOpenMarket && (
             <button
               onClick={onOpenMarket}
@@ -723,7 +723,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               }}
               title={marketOpen
                 ? t('titleBar.market.back', '资源市集：点击返回主界面')
-                : t('titleBar.market', '资源市集：插件 / 工作流模板 / CLI Agent 配置 / 灵感')}
+                : t('titleBar.market', '资源市集：插件 / 工作流模板 / Agent 配置 / 灵感')}
             >
               <Store size={13} />
             </button>
