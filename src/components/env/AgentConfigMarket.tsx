@@ -229,20 +229,32 @@ export function AgentConfigMarket() {
     <div className="h-full overflow-y-auto p-4 pd-scroll-stable">
       {/* 分类 + 搜索 + 刷新目录：同一行（页面标题由「资源市集」页签承载，这里不再重复） */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <div className="flex items-center gap-1">
-          {CATEGORY_TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setCategory(t.key)}
-              className={'pd-tab' + (category === t.key ? 'pd-tab-active' : '')}
-              title={t.hint}
-            >
-              {t.label}
-              <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                {counts[t.key]}
-              </span>
-            </button>
-          ))}
+        {/* 二级筛选用胶囊开关（与工作流模板的筛选胶囊同款），不要复用一级页签的 pd-tab */}
+        <div className="flex items-center gap-1.5">
+          {CATEGORY_TABS.map((t) => {
+            const active = category === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setCategory(t.key)}
+                className="pd-btn px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1"
+                style={{
+                  backgroundColor: active ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                  color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                  border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                }}
+                title={t.hint}
+              >
+                {t.label}
+                <span
+                  className="text-[10px]"
+                  style={{ color: active ? 'var(--accent)' : 'var(--text-tertiary)' }}
+                >
+                  {counts[t.key]}
+                </span>
+              </button>
+            );
+          })}
         </div>
         <div className="relative flex-1 min-w-[160px] max-w-md">
           <Search
