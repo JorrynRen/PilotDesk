@@ -13,6 +13,7 @@ import { FileText, Loader2, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSessionStore } from '../../stores/sessionStore';
+import { RepoStatusBar } from './RepoStatusBar';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 
@@ -44,6 +45,10 @@ function formatTime(secs: number): string {
 
 export function SessionFileHistory() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  // 仓库状态条看的是会话项目根（cwd）；会话没选目录时后端回退到全局工作区
+  const currentCwd = useSessionStore(
+    (s) => s.sessions.find((x) => x.id === s.currentSessionId)?.cwd ?? null,
+  );
 
   const [items, setItems] = useState<FileHistoryEntry[]>([]);
   const [total, setTotal] = useState(0);
@@ -184,6 +189,11 @@ export function SessionFileHistory() {
           </button>
         </div>
       </div>
+
+      {/* 仓库状态（只读）：上方是 Git 真实状态，下方是本会话 Agent 的写入快照 */}
+      {currentSessionId && (
+        <RepoStatusBar cwd={currentCwd} refreshToken={total} snapshotCount={total} />
+      )}
 
       {/* 列表：左右内边距与上方搜索区一致（px-3），两边宽度对齐 */}
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1.5 pd-scroll-stable">

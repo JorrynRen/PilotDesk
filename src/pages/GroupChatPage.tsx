@@ -24,6 +24,7 @@ import { MarkdownRenderer } from '../components/message/MarkdownRenderer';
 import { AgentIcon } from '../components/common/AgentIcon';
 import { collapseBlankLines, tightenListGaps } from '../components/message/markdownText';
 import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
+import { RepoStatusBar } from '../components/panels/RepoStatusBar';
 import { ConfirmationCard } from '../components/confirmation/ConfirmationCard';
 import { parseConfirmation } from '../components/confirmation/confirmationUtils';
 import { ThinkingChain } from '../components/message/ThinkingChain';
@@ -3231,6 +3232,14 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 />
               </button>
             </div>
+            {/* 仓库状态（只读）：房间产物目录所在仓库的真实状态，与本房间的写入快照互补 */}
+            {currentRoomId && (
+              <RepoStatusBar
+                cwd={currentRoom?.outputDir || null}
+                refreshToken={roomHistory.length}
+                snapshotCount={roomHistory.length}
+              />
+            )}
             <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
               {historyLoading ? (
                 <div className="flex items-center justify-center py-3">

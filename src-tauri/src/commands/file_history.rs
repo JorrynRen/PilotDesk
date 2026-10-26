@@ -9,6 +9,7 @@ use tauri::State;
 
 use crate::db::init::DbPool;
 use crate::utils::errors::AppError;
+use crate::utils::process::hidden_command;
 
 /// 超过该字节数不备份（避免数据库膨胀）
 const MAX_BACKUP_BYTES: usize = 2_000_000;
@@ -241,4 +242,198 @@ pub fn undo_file_history(
     )?;
 
     Ok(format!("已撤销对文件的修改: {}", file_path))
+}
+
+// ─────────────────────────────────────────────────────────────
+// 仓库状态（会话 / 圆桌右侧「文件历史」面板顶部的状态条）
+//
+// 与上面的 `file_history` 快照互补而非同类：
+// - 快照：本会话 Agent 通过 write_file / edit_file 写过什么，可逐条撤销；
+// - 仓库状态：该目录在 Git 下的真实状态（含用户手改、未跟踪文件），只读。
+//
+// 不是 Git 仓库、或本机没有 Git 时返回 `is_repo = false`，前端整条隐藏（Git 属推荐依赖）。
+// ─────────────────────────────────────────────────────────────
+
+/// 未提交明细最多返回多少条（前端展开查看用；总数另行统计）
+const MAX_REPO_STATUS_ENTRIES: usize = 50;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusEntry {
+    /// 相对仓库根的路径（重命名取新路径）
+    pub path: String,
+    /// 精简状态码：M / A / D / R / C / U / ?（`?` = 未跟踪）
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoStatus {
+    pub is_repo: bool,
+    /// 仓库根（绝对路径）：会话目录是仓库子目录时，用它说明"属于哪个仓库"
+    pub root: Option<String>,
+    /// 分支名；detached HEAD 时为空
+    pub branch: Option<String>,
+    /// 最新提交短 hash；空仓库（无提交）时为空
+    pub head: Option<String>,
+    /// 已跟踪文件的改动条数
+    pub changed_count: i64,
+    /// 未跟踪条目数（未跟踪目录按一条计，避免 node_modules 之类撑爆）
+    pub untracked_count: i64,
+    /// 前 N 条明细
+    pub entries: Vec<GitStatusEntry>,
+}
+
+impl RepoStatus {
+    fn not_a_repo() -> Self {
+        Self {
+            is_repo: false,
+            root: None,
+            branch: None,
+            head: None,
+            changed_count: 0,
+            untracked_count: 0,
+            entries: Vec::new(),
+        }
+    }
+}
+
+/// 在 `dir` 下执行只读 git 命令；失败（含未装 Git）返回 `None`。
+fn run_git(dir: &str, args: &[&str]) -> Option<String> {
+    let out = hidden_command("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// 解析 `git status --porcelain=v1` 的一行：`XY <path>` / `XY <old> -> <new>`。
+fn parse_status_line(line: &str) -> Option<GitStatusEntry> {
+    if line.len() < 4 {
+        return None;
+    }
+    let code = line[..2].trim();
+    let raw = line[3..].trim();
+    // 重命名/复制取新路径；带引号的路径（含特殊字符）去掉包裹的引号
+    let path = raw
+        .rsplit(" -> ")
+        .next()
+        .unwrap_or(raw)
+        .trim_matches('"')
+        .to_string();
+    if path.is_empty() {
+        return None;
+    }
+    let status = if code.is_empty() {
+        "?".to_string()
+    } else if code == "??" {
+        "?".to_string()
+    } else {
+        code.chars().next().unwrap_or('?').to_string()
+    };
+    Some(GitStatusEntry { path, status })
+}
+
+fn collect_repo_status(dir: &str) -> RepoStatus {
+    if dir.trim().is_empty() {
+        return RepoStatus::not_a_repo();
+    }
+    let Some(root) = run_git(dir, &["rev-parse", "--show-toplevel"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    else {
+        return RepoStatus::not_a_repo();
+    };
+
+    // 分支名在 detached HEAD 时为空；HEAD 在空仓库（无提交）时取不到
+    let branch = run_git(&root, &["branch", "--show-current"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let head = run_git(&root, &["rev-parse", "--short", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // 统一在仓库根执行：路径相对根，前端可与 root 拼成绝对路径打开文件
+    let raw = run_git(&root, &["status", "--porcelain=v1", "-unormal"]).unwrap_or_default();
+    let mut changed_count = 0i64;
+    let mut untracked_count = 0i64;
+    let mut entries = Vec::new();
+    for line in raw.lines() {
+        let Some(entry) = parse_status_line(line) else {
+            continue;
+        };
+        if entry.status == "?" {
+            untracked_count += 1;
+        } else {
+            changed_count += 1;
+        }
+        if entries.len() < MAX_REPO_STATUS_ENTRIES {
+            entries.push(entry);
+        }
+    }
+
+    RepoStatus {
+        is_repo: true,
+        root: Some(root),
+        branch,
+        head,
+        changed_count,
+        untracked_count,
+        entries,
+    }
+}
+
+/// 查询目录所属仓库的状态（文件历史面板顶部状态条）。
+/// `cwd` 为空时回退到全局工作区（与 Agent / 房间未指定项目根时的默认目录一致）。
+#[tauri::command]
+pub async fn git_repo_status(
+    state: State<'_, crate::DbState>,
+    cwd: Option<String>,
+) -> Result<RepoStatus, AppError> {
+    let dir = match cwd.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => v.to_string(),
+        None => {
+            let conn = state.get_conn()?;
+            crate::utils::paths::resolve_workspace_path(None, "", &conn)
+                .to_string_lossy()
+                .to_string()
+        }
+    };
+    // git 命令是阻塞调用（大仓库 status 可能耗时），放到阻塞线程池，避免占住异步执行器
+    tauri::async_runtime::spawn_blocking(move || collect_repo_status(&dir))
+        .await
+        .map_err(|e| AppError::External(format!("仓库状态查询失败: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_status_line;
+
+    #[test]
+    fn parses_modified_and_untracked_lines() {
+        let modified = parse_status_line(" M src/lib.rs").expect("应解析出改动行");
+        assert_eq!(modified.status, "M");
+        assert_eq!(modified.path, "src/lib.rs");
+
+        let untracked = parse_status_line("?? outputs/").expect("应解析出未跟踪行");
+        assert_eq!(untracked.status, "?");
+        assert_eq!(untracked.path, "outputs/");
+    }
+
+    #[test]
+    fn parses_rename_takes_new_path() {
+        let renamed = parse_status_line("R  old/name.rs -> new/name.rs").expect("应解析出重命名行");
+        assert_eq!(renamed.status, "R");
+        assert_eq!(renamed.path, "new/name.rs");
+    }
+
+    #[test]
+    fn ignores_short_lines() {
+        assert!(parse_status_line("").is_none());
+        assert!(parse_status_line("M").is_none());
+    }
 }

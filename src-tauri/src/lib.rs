@@ -2691,6 +2691,7 @@ pub fn run() {
             commands::file_history::list_file_history_sessions,
             commands::file_history::undo_file_history,
             commands::file_history::delete_file_history,
+            commands::file_history::git_repo_status,
             commands::fs_util::write_text_file,
             get_theme,
             set_theme_cmd,
