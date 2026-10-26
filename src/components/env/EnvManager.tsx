@@ -409,7 +409,10 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       {meta.tier}
                     </span>
                     {detecting && <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
-                    <span className="text-[10px]" style={{ color: installed ? 'var(--text-secondary)' : '#EF4444' }}>
+                    <span
+                      className="text-[10px]"
+                      style={{ color: installed ? 'var(--text-secondary)' : meta.tier === '必需' ? '#EF4444' : '#F59E0B' }}
+                    >
                       {detecting ? '检查中' : (version ?? '未安装')}
                     </span>
                   </div>
