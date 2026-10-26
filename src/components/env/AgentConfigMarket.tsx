@@ -229,19 +229,24 @@ export function AgentConfigMarket() {
     <div className="h-full overflow-y-auto p-4 pd-scroll-stable">
       {/* 分类 + 搜索 + 刷新目录：同一行（页面标题由「资源市集」页签承载，这里不再重复） */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        {/* 二级筛选用胶囊开关（与工作流模板的筛选胶囊同款），不要复用一级页签的 pd-tab */}
-        <div className="flex items-center gap-1.5">
+        {/* 二级分类：组合开关（一个凹槽容器 + 选中段高亮），与一级页签的 pd-tab 区分开 */}
+        <div
+          className="inline-flex items-center gap-0.5 p-0.5 rounded-full shrink-0"
+          style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+          role="tablist"
+        >
           {CATEGORY_TABS.map((t) => {
             const active = category === t.key;
             return (
               <button
                 key={t.key}
+                role="tab"
+                aria-selected={active}
                 onClick={() => setCategory(t.key)}
-                className="pd-btn px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1"
+                className="pd-btn px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 transition-colors"
                 style={{
-                  backgroundColor: active ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                  backgroundColor: active ? 'var(--accent-light)' : 'transparent',
                   color: active ? 'var(--accent)' : 'var(--text-secondary)',
-                  border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
                 }}
                 title={t.hint}
               >
