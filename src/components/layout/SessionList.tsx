@@ -739,8 +739,15 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             'acp_delete_host_session',
             { agentType: hostAgent, hostSessionId: id, cwd: cwdOf(id) },
           );
-          if (outcome.status === 'ok') deleted.push(id);
-          else unsupportedHint = outcome.hint || unsupportedHint;
+          if (outcome.status === 'ok') {
+            deleted.push(id);
+            // **逐条移除**：连同删除中的样式一起消失，用户能看到"删一条少一条"，
+            // 而不是等整个批次跑完才一起消失（那样中途像卡住了）
+            setHostSessions((prev) => prev.filter((s) => s.sessionId !== id));
+            if (hostPreview?.hostSessionId === id) closePreview();
+          } else {
+            unsupportedHint = outcome.hint || unsupportedHint;
+          }
         } catch (err) {
           firstError = firstError ?? errorMessage(err);
         } finally {
@@ -755,9 +762,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       setHostBatchDeleting(false);
     }
 
+    // 列表移除与预览关闭已在每条成功时即时完成，这里只做汇总提示与状态收尾
     if (deleted.length > 0) {
-      setHostSessions((prev) => prev.filter((s) => !deleted.includes(s.sessionId)));
-      if (hostPreview && deleted.includes(hostPreview.hostSessionId)) closePreview();
       showToast(`已删除 ${deleted.length} 条宿主会话`, 'success');
     }
     if (unsupportedHint) showToast(unsupportedHint, 'warning');
