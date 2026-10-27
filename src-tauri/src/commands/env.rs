@@ -147,10 +147,12 @@ pub(crate) async fn probe_agent(
             .execute_command_output_async(&cmd, "", 15, &label)
             .await
             .ok()
-            .map(|v| {
-                lifecycle
-                    .and_then(|l| l.parse_installed_version(&v))
-                    .unwrap_or_else(|| clean_version_string(&v))
+            .and_then(|out| match lifecycle {
+                // 有安装规格就只认它自己的解析：解析不出来说明版本真的不可知，
+                // 回退到「从整段输出里猜数字」会把构建日期（如 `(2026.9.24)`）当成版本号。
+                Some(l) => l.parse_installed_version(&out),
+                // 手工配置的 Agent 没有规格，只能按通用规则猜
+                None => Some(clean_version_string(&out)).filter(|v| !v.trim().is_empty()),
             }),
         None => None,
     };

@@ -479,8 +479,15 @@ impl LifecycleSpec {
 
 /// 从任意文本里提取第一个 semver（`0.16.0` / `v1.2.3-beta`）。
 pub fn extract_semver(text: &str) -> Option<String> {
+    // 先剔除括号内容：`Hermes Agent vunknown (2026.9.24)` 这类输出把**构建日期**
+    // 放在括号里，不剔除就会把日期（2026.9.24）当成版本号显示。
+    // 剔除后仍找不到版本就返回 None，由上层显示「版本未知」，不猜。
+    let stripped = regex::Regex::new(r"\([^)]*\)")
+        .ok()?
+        .replace_all(text, " ")
+        .to_string();
     let re = regex::Regex::new(r"[vV]?(\d+\.\d+\.\d+[\w.\-]*)").ok()?;
-    re.captures(text)
+    re.captures(&stripped)
         .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
 }
 
@@ -650,5 +657,16 @@ mod tests {
         assert_eq!(extract_semver("hermes 1.4.2 (build 3)").as_deref(), Some("1.4.2"));
         assert_eq!(extract_semver("v0.16.0-beta.1").as_deref(), Some("0.16.0-beta.1"));
         assert!(extract_semver("no version here").is_none());
+    }
+
+    #[test]
+    fn semver_extraction_ignores_parenthesized_build_date() {
+        // 括号里是构建日期，真正的版本在前
+        assert_eq!(
+            extract_semver("Hermes Agent v0.19.0 (2026.7.20)").as_deref(),
+            Some("0.19.0")
+        );
+        // 版本本身不可知时不能把日期当版本
+        assert!(extract_semver("Hermes Agent vunknown (2026.9.24)").is_none());
     }
 }
