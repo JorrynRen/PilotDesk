@@ -163,7 +163,7 @@ export function SkillBrowser() {
     <div className="flex flex-col">
       {/* Header —— 左右内边距交给外层（设置页内容区），这样标题/搜索框与列表、与其它设置页左右对齐 */}
       <div className="pb-3 mb-1" style={{ borderBottom: '1px solid var(--border)' }}>
-        <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+        <h3 className="text-xs font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
           全部技能
         </h3>
         <div className="relative">

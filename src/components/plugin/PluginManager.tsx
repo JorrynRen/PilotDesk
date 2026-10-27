@@ -385,12 +385,9 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
           {!loading && (
             <>
             <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <Package size={14} style={{ color: 'var(--accent)' }} />
-                <h3 className="text-sm" style={{ color: 'var(--text-primary)', margin: 0 }}>
-                  已安装插件
-                </h3>
-              </div>
+              <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)', margin: 0 }}>
+                已安装插件
+              </h3>
               <div className="flex items-center gap-2">
                 {plugins.length > 0 && (
                   <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>

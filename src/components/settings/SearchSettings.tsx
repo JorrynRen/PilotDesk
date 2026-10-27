@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Save, Loader2, Search } from 'lucide-react';
+import { Save, Loader2 } from 'lucide-react';
 import { SettingsSection, SettingsButton } from './index';
 import { Select } from '../common/Select';
 
@@ -65,7 +65,6 @@ export function SearchSettings() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <Search size={14} style={{ color: 'var(--text-secondary)' }} />
         <div>
           <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
             联网搜索

@@ -1966,7 +1966,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     key={id}
                     onClick={() => setActiveTab(id)}
                     className={"pd-side-item" + (activeTab === id ? " pd-side-item-active" : "")}
-                    title={t(labelKey, labelZh)}
                   >
                     <Icon size={13} className="shrink-0" />
                     <span className="truncate">{t(labelKey, labelZh)}</span>

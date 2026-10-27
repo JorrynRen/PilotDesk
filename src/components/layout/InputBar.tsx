@@ -545,6 +545,20 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     return [{ label: '当前模型', options: [{ value: sessionChoice, label }] }, ...apiChoiceGroups];
   }, [session, sessionChoice, apiChoiceGroups, apiProviders]);
 
+  /**
+   * 选择值 → 展示名。
+   *
+   * 「会话方式 / 模型」的按钮会被工具栏宽度挤到截断，tooltip 显示**完整名称**比显示
+   * 功能说明更能补上这块信息（名称本身也是用户最想确认的东西）。
+   */
+  const choiceLabels = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const group of [...choiceGroups, ...sessionModelGroups]) {
+      for (const opt of group.options) map.set(opt.value, opt.label);
+    }
+    return map;
+  }, [choiceGroups, sessionModelGroups]);
+
   /** 切换会话模型：仅 API 会话可用，切换后对**后续**消息生效（后端比较后再写） */
   const handleSwitchModel = useCallback(async (choice: string) => {
     if (!session || choice === sessionChoice) return;
@@ -928,7 +942,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                     border: '1px solid var(--border)',
                     height: '24px',
                   }}
-                  title="新建会话（Ctrl+N）：回到快捷开始，沿用当前会话的工作目录与会话方式"
+                  title="新建会话（Ctrl+N）"
                 >
                   <Plus size={12} />
                   {!compact && '新会话'}
@@ -1169,17 +1183,15 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   panelMinWidth={230}
                   title={
                     isGenerating
-                      ? '生成中不能切换模型，生成结束后可切换'
-                      : sessionModelGroups.length === 0
-                        ? '暂无可切换的模型：请先在「设置」里配置 API 提供商'
-                        : '当前会话的模型，切换后对后续消息生效'
+                      ? `${choiceLabels.get(sessionChoice) || '当前模型'}（生成中，暂不可切换）`
+                      : choiceLabels.get(sessionChoice) || '当前会话的模型'
                   }
                 />
               ) : session ? (
                 <span
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs truncate"
                   style={{ color: 'var(--text-tertiary)', height: 24, minWidth: 120, maxWidth: 'max-content', flex: '1 1 0' }}
-                  title="当前会话的会话方式（CLI 会话另建会话才能换）"
+                  title={getDisplayName(session.agentType)}
                 >
                   {/* CLI Agent 用其自身图标；兜底用 Bot —— 不能用 Cpu（那是「技能」的图标） */}
                   <AgentIcon
@@ -1203,7 +1215,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   title={
                     choiceGroups.length === 0
                       ? '暂无可用的会话方式：请先在「设置」里配置 API 提供商或安装 CLI Agent'
-                      : '新会话的会话方式（CLI Agent / API Agent）'
+                      : choiceLabels.get(draftChoice) || '选择会话方式'
                   }
                 />
               )}
