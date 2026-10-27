@@ -89,47 +89,51 @@ export function SearchSettings() {
         </p>
       </SettingsSection>
 
-      <SettingsSection
-        title="API Key（可选）"
-        description="仅当切换为 Tavily 或 Bing API 后端时需要填写。留空则相关后端不可用。"
-      >
-        <div className="space-y-3">
-          <div>
-            <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-              Tavily API Key
-            </label>
-            <input
-              type="password"
-              value={config.tavilyApiKey}
-              onChange={(e) => setConfig((prev) => ({ ...prev, tavilyApiKey: e.target.value }))}
-              placeholder="tvly-..."
-              className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
-              style={{
-                backgroundColor: 'var(--bg-field)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border)',
-              }}
-            />
+      {/* API Key 是可选的附加配置，与上一段拉开一档：容器 space-y-4 的 16px
+          加上这里的 8px = 24px，对齐其他设置页的段间距（space-y-6） */}
+      <div className="pt-2">
+        <SettingsSection
+          title="API Key（可选）"
+          description="仅当切换为 Tavily 或 Bing API 后端时需要填写。留空则相关后端不可用。"
+        >
+          <div className="space-y-3">
+            <div>
+              <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                Tavily API Key
+              </label>
+              <input
+                type="password"
+                value={config.tavilyApiKey}
+                onChange={(e) => setConfig((prev) => ({ ...prev, tavilyApiKey: e.target.value }))}
+                placeholder="tvly-..."
+                className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
+                style={{
+                  backgroundColor: 'var(--bg-field)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                Bing Web Search API Key
+              </label>
+              <input
+                type="password"
+                value={config.bingApiKey}
+                onChange={(e) => setConfig((prev) => ({ ...prev, bingApiKey: e.target.value }))}
+                placeholder="Azure 订阅密钥（Ocp-Apim-Subscription-Key）"
+                className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
+                style={{
+                  backgroundColor: 'var(--bg-field)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+              />
+            </div>
           </div>
-          <div>
-            <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-              Bing Web Search API Key
-            </label>
-            <input
-              type="password"
-              value={config.bingApiKey}
-              onChange={(e) => setConfig((prev) => ({ ...prev, bingApiKey: e.target.value }))}
-              placeholder="Azure 订阅密钥（Ocp-Apim-Subscription-Key）"
-              className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
-              style={{
-                backgroundColor: 'var(--bg-field)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border)',
-              }}
-            />
-          </div>
-        </div>
-      </SettingsSection>
+        </SettingsSection>
+      </div>
 
       <div className="flex items-center justify-end">
         <SettingsButton
