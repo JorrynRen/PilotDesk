@@ -281,7 +281,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
           </div>
         ) : agentTheme.icon ? (
           <div className="w-7 h-7 rounded-full flex items-center justify-center overflow-hidden">
-            <AgentIcon icon={agentTheme.icon} size={22} fallback={
+            <AgentIcon icon={agentTheme.icon} size={22} accentColor={agentColor} fallback={
               <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold"
                 style={{ backgroundColor: `${agentColor}20`, color: agentColor }}
               >

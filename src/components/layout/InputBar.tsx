@@ -1142,6 +1142,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   <AgentIcon
                     icon={getTheme(session.agentType).icon}
                     size={12}
+                    accentColor={getTheme(session.agentType).color}
                     fallback={<Bot size={12} style={{ flexShrink: 0 }} />}
                   />
                   <span className="truncate">{getDisplayName(session.agentType)}</span>

@@ -19,6 +19,7 @@ export const AgentBadge = memo(function AgentBadge({ agentType, size = 'sm', isG
       <AgentIcon
         icon={theme.icon}
         size={size === 'sm' ? 16 : 20}
+        accentColor={theme.color}
         className={isGenerating ? 'pd-animate-breathe' : ''}
         fallback={
           <span

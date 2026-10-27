@@ -17,10 +17,10 @@ import { invoke } from '@tauri-apps/api/core';
 /**
  * 图片图标的底板。
  *
- * - `light`（默认）：**主题色淡染**的浅底（主题色 16% + 白）。保留主题感，
- *   同时亮度足够承托「透明底黑色矢量」；`color-mix` 不可用时自动退回纯白。
- * - `accent`：纯主题色实底。视觉最贴合主题，但黑色矢量的对比度会掉到
- *   3.5–6:1（取决于主题），只建议给彩色/白色图标用。
+ * - `light`（默认）：**Agent 品牌色淡染**的浅底（品牌色 16% + 白）。既保留该 Agent
+ *   的识别色，又保证亮度足够承托「透明底黑色矢量」；`color-mix` 不可用时退回纯白。
+ * - `accent`：纯 Agent 品牌色实底。视觉最贴合品牌，但黑色矢量的对比度会掉到
+ *   3.5–6:1（取决于品牌色），只建议给彩色/白色图标用。
  * - `dark`：深色底，给浅色（白色）矢量图标用。
  * - `none`：不垫底板（外层已有底板时）。
  */
@@ -31,13 +31,23 @@ interface AgentIconProps {
   size?: number;
   className?: string;
   fallback?: React.ReactNode;
-  /** 底板覆盖：默认 light；白色矢量图标传 dark，纯主题色实底传 accent，已有底板传 none */
+  /** 底板覆盖：默认 light；白色矢量图标传 dark，纯品牌色实底传 accent，已有底板传 none */
   plate?: IconPlate;
+  /**
+   * Agent 品牌色（如 `#8B5CF6`）：底板按它淡染/着色。
+   * 不传时退回应用主题色 `var(--accent)`。
+   */
+  accentColor?: string;
 }
 
 /** 底板样式：外框固定为 `size`，图片按 78% 内缩，视觉尺寸与不加底板时接近 */
-function plateStyle(size: number, plate: IconPlate): React.CSSProperties | undefined {
+function plateStyle(
+  size: number,
+  plate: IconPlate,
+  accentColor?: string,
+): React.CSSProperties | undefined {
   if (plate === 'none') return undefined;
+  const tint = accentColor && accentColor.trim() ? accentColor.trim() : 'var(--accent)';
   const base: React.CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -60,18 +70,18 @@ function plateStyle(size: number, plate: IconPlate): React.CSSProperties | undef
   if (plate === 'accent') {
     return {
       ...base,
-      backgroundColor: 'var(--accent)',
+      backgroundColor: tint,
       boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
     };
   }
 
-  // light：主题色淡染。先写 backgroundColor 作兜底，再用 background 覆盖——
+  // light：品牌色淡染。先写 backgroundColor 作兜底，再用 background 覆盖——
   // 浏览器不支持 color-mix 时整条 background 声明会被丢弃，底色退回白色。
   return {
     ...base,
     backgroundColor: '#ffffff',
-    background: 'color-mix(in srgb, var(--accent) 16%, #ffffff)',
-    boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent)',
+    background: `color-mix(in srgb, ${tint} 16%, #ffffff)`,
+    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${tint} 30%, transparent)`,
   };
 }
 
@@ -80,18 +90,20 @@ function IconImage({
   src,
   size,
   plate,
+  accentColor,
   className,
   onError,
 }: {
   src: string;
   size: number;
   plate: IconPlate;
+  accentColor?: string;
   className?: string;
   onError: () => void;
 }) {
   const inner = plate === 'none' ? size : Math.max(8, Math.round(size * 0.78));
   return (
-    <span className={className} style={plateStyle(size, plate)}>
+    <span className={className} style={plateStyle(size, plate, accentColor)}>
       <img
         src={src}
         alt=""
@@ -104,7 +116,7 @@ function IconImage({
   );
 }
 
-export function AgentIcon({ icon, size = 14, className = '', fallback, plate = 'light' }: AgentIconProps) {
+export function AgentIcon({ icon, size = 14, className = '', fallback, plate = 'light', accentColor }: AgentIconProps) {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -146,6 +158,7 @@ export function AgentIcon({ icon, size = 14, className = '', fallback, plate = '
         src={dataUrl}
         size={size}
         plate={plate}
+        accentColor={accentColor}
         className={className}
         onError={() => setFailed(true)}
       />
@@ -165,6 +178,7 @@ export function AgentIcon({ icon, size = 14, className = '', fallback, plate = '
         src={icon}
         size={size}
         plate={plate}
+        accentColor={accentColor}
         className={className}
         onError={() => setFailed(true)}
       />

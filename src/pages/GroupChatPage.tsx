@@ -281,7 +281,7 @@ function ParticipantAvatar({ icon, color, small, agentType }: { icon: IconName; 
       style={{ backgroundColor: `${color}22`, color }}
     >
       {agentIcon
-        ? <AgentIcon icon={agentIcon} size={small ? 12 : 16} fallback={<FallbackIcon size={size} />} />
+        ? <AgentIcon icon={agentIcon} size={small ? 12 : 16} accentColor={agentType ? getTheme(agentType).color : undefined} fallback={<FallbackIcon size={size} />} />
         : <FallbackIcon size={size} />}
     </div>
   );
