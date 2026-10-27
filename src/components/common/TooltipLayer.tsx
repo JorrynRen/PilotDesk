@@ -6,7 +6,9 @@
  * - hover / focus 命中 `[title]`：把文本搬到 `data-pd-title` 并摘掉 `title`（压掉原生提示）；
  * - 用一个挂到 body 的 portal 浮层渲染（气泡 + 指向锚点的小箭头）：最多 360px、自动换行、
  *   超出视口时翻转/夹取；气泡被夹取时箭头仍指向锚点中心；
- * - 离开、点击、滚动、缩放、失焦、Esc 都收起，并把 `title` 原样还原（不影响读屏）。
+ * - 离开 / 失焦 / 卸载时把 `title` 原样还原（不影响读屏）。滚动、点击、Esc 只收起气泡，
+ *   **不还原 title** —— 指针还在元素上，还原后不会再触发 `mouseover`，原生提示会在约 1 秒后
+ *   迟到地冒出来（"长时间悬停仍出现原生提示"就是这么来的）。
  *
  * 豁免：`iframe`、`<svg>` 内部（它们的 title 是图形/文档名称），以及给元素或祖先加
  * `data-pd-tip="off"` 的自绘富提示。
@@ -40,6 +42,14 @@ export function TooltipLayer() {
   const pendingElRef = useRef<HTMLElement | null>(null);
   /** 正在显示提示的元素 */
   const activeElRef = useRef<HTMLElement | null>(null);
+  /**
+   * 当前被摘掉 `title` 的元素（**独立于浮层是否可见**）。
+   *
+   * 收起气泡不等于指针离开了元素：滚动 / 点击 / Esc 之后指针还停着，此时若把 title 还回去，
+   * 浏览器会重新排程原生提示，而指针不动就再也不会触发 `mouseover`，于是 1 秒后冒出原生框。
+   * 因此 title 只在指针真正离开（或失焦 / 卸载）时还原。
+   */
+  const stashedElRef = useRef<HTMLElement | null>(null);
 
   const cancelPending = useCallback((): HTMLElement | null => {
     if (timerRef.current !== null) {
@@ -54,18 +64,41 @@ export function TooltipLayer() {
   /** 还原被摘掉的 title（读屏 / 原生行为都依赖它） */
   const restoreTitle = useCallback((el: HTMLElement | null) => {
     if (!el) return;
+    if (stashedElRef.current === el) stashedElRef.current = null;
     const stashed = el.getAttribute('data-pd-title');
     if (stashed === null) return;
     el.setAttribute('title', stashed);
     el.removeAttribute('data-pd-title');
   }, []);
 
-  const hide = useCallback(() => {
-    restoreTitle(cancelPending());
-    restoreTitle(activeElRef.current);
-    activeElRef.current = null;
-    setTip(null);
-  }, [cancelPending, restoreTitle]);
+  /** 把 title 搬到 data-pd-title（同一时刻只保留一个被摘除的元素） */
+  const stashTitle = useCallback(
+    (el: HTMLElement) => {
+      if (!el.hasAttribute('title')) return;
+      const prev = stashedElRef.current;
+      if (prev && prev !== el) restoreTitle(prev);
+      el.setAttribute('data-pd-title', el.getAttribute('title') ?? '');
+      el.removeAttribute('title');
+      stashedElRef.current = el;
+    },
+    [restoreTitle],
+  );
+
+  /**
+   * 收起气泡。
+   *
+   * `restoreTitle` 仅在指针真的离开 / 失焦 / 卸载时为 true；其余场景（滚动、点击、Esc、缩放）
+   * 只收起视觉，title 继续保持摘除状态，避免原生提示迟到地冒出来。
+   */
+  const hide = useCallback(
+    (restoreTitleToo = true) => {
+      cancelPending();
+      activeElRef.current = null;
+      setTip(null);
+      if (restoreTitleToo) restoreTitle(stashedElRef.current);
+    },
+    [cancelPending, restoreTitle],
+  );
 
   const scheduleShow = useCallback(
     (el: HTMLElement) => {
@@ -76,10 +109,7 @@ export function TooltipLayer() {
       if (el.closest('[data-pd-tip="off"]')) return;
 
       // 先改名压掉原生提示：原生延迟约 1s，同步改名不会闪
-      if (el.hasAttribute('title')) {
-        el.setAttribute('data-pd-title', el.getAttribute('title') ?? '');
-        el.removeAttribute('title');
-      }
+      stashTitle(el);
 
       const prevPending = cancelPending();
       if (prevPending && prevPending !== el) restoreTitle(prevPending);
@@ -99,7 +129,7 @@ export function TooltipLayer() {
         setTip({ text, rect });
       }, SHOW_DELAY_MS);
     },
-    [cancelPending, restoreTitle],
+    [cancelPending, restoreTitle, stashTitle],
   );
 
   useEffect(() => {
@@ -116,12 +146,27 @@ export function TooltipLayer() {
     };
 
     const onOut = (event: Event) => {
-      const anchor = activeElRef.current ?? pendingElRef.current;
+      // 以「仍被摘掉 title 的元素」为准：滚动/点击已把 active 清空，但指针可能还停在原处
+      const anchor = stashedElRef.current ?? activeElRef.current ?? pendingElRef.current;
       if (!anchor) return;
       const to = (event as MouseEvent).relatedTarget;
       // 在锚点内部移动（父 → 子）不收起
       if (to instanceof Node && anchor.contains(to)) return;
-      hide();
+      hide(true);
+    };
+
+    /**
+     * 动态 title 兜底：元素挂着提示时被 React 重新写回 `title`（标题随状态变化、组件重挂载），
+     * 若不管，原生提示会在约 1 秒后冒出来。这里节流复查指针下的元素，重新摘除。
+     */
+    let lastRecheckAt = 0;
+    const onMove = (event: Event) => {
+      const now = performance.now();
+      if (now - lastRecheckAt < 200) return;
+      lastRecheckAt = now;
+      const el = findTrigger(event.target);
+      // 只处理「本来就在被摘除的那个元素」，避免父子元素交替时把上一层 title 还回去
+      if (el && el === stashedElRef.current) stashTitle(el);
     };
 
     const onFocusIn = (event: Event) => {
@@ -130,38 +175,43 @@ export function TooltipLayer() {
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') hide();
+      if (event.key === 'Escape') hide(false);
     };
 
-    const onHide = () => hide();
+    /** 以下几类只收起气泡、不还原 title：指针还在元素上，还回去就会招来原生提示 */
+    const onFocusOut = () => hide(true);
+    const collapseOnly = () => hide(false);
 
     document.addEventListener('mouseover', onOver, true);
     document.addEventListener('mouseout', onOut, true);
+    document.addEventListener('mousemove', onMove, true);
     document.addEventListener('focusin', onFocusIn, true);
-    document.addEventListener('focusout', onHide, true);
-    document.addEventListener('mousedown', onHide, true);
+    document.addEventListener('focusout', onFocusOut, true);
+    document.addEventListener('mousedown', collapseOnly, true);
     // 任意滚动容器 / 页面滚动都收起（浮层是 fixed 定位，不跟随）
-    document.addEventListener('scroll', onHide, true);
-    document.addEventListener('wheel', onHide, { capture: true, passive: true });
+    document.addEventListener('scroll', collapseOnly, true);
+    document.addEventListener('wheel', collapseOnly, { capture: true, passive: true });
     document.addEventListener('keydown', onKeyDown);
-    window.addEventListener('resize', onHide);
-    window.addEventListener('blur', onHide);
+    window.addEventListener('resize', collapseOnly);
+    window.addEventListener('blur', onFocusOut);
 
     return () => {
       document.removeEventListener('mouseover', onOver, true);
       document.removeEventListener('mouseout', onOut, true);
+      document.removeEventListener('mousemove', onMove, true);
       document.removeEventListener('focusin', onFocusIn, true);
-      document.removeEventListener('focusout', onHide, true);
-      document.removeEventListener('mousedown', onHide, true);
-      document.removeEventListener('scroll', onHide, true);
-      document.removeEventListener('wheel', onHide, { capture: true });
+      document.removeEventListener('focusout', onFocusOut, true);
+      document.removeEventListener('mousedown', collapseOnly, true);
+      document.removeEventListener('scroll', collapseOnly, true);
+      document.removeEventListener('wheel', collapseOnly, { capture: true });
       document.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('resize', onHide);
-      window.removeEventListener('blur', onHide);
+      window.removeEventListener('resize', collapseOnly);
+      window.removeEventListener('blur', onFocusOut);
       restoreTitle(cancelPending());
       restoreTitle(activeElRef.current);
+      restoreTitle(stashedElRef.current);
     };
-  }, [cancelPending, hide, restoreTitle, scheduleShow]);
+  }, [cancelPending, hide, restoreTitle, scheduleShow, stashTitle]);
 
   // 渲染后量尺寸：默认在下方，放不下翻到上方，水平/垂直都夹取在视口内。
   // 直接写 DOM 样式（不改 state）：避免多一次渲染，也避开 set-state-in-effect。
