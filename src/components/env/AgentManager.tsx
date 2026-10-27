@@ -1148,9 +1148,11 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
       </div>
       {isAcp && (
         <div className="text-[10px] mt-1.5" style={{ color: 'var(--warning, #d97706)' }}>
-          这里只安装 ACP 适配器，不包含 {displayName || agentType} 本体：若该 Agent 需要单独的
-          命令行工具或账号，请先在本机安装，并在终端完成登录；否则建立会话会在握手阶段失败
-          （具体原因见「环境检测」）。
+          {/* 适配器与本体是否分离因厂商而异：有独立适配器包（codex/claude）→ 分离；
+              没有包、只有运行时命令（hermes）→ 适配器内置于本体，升级即升本体。 */}
+          {(lifecycle.packages ?? []).length === 0
+            ? `${displayName || agentType} 的 ACP 适配器内置于本体：更新适配器会一并更新本体，版本没变化通常说明已是最新。`
+            : `这里只安装 ACP 适配器，不包含 ${displayName || agentType} 本体：若该 Agent 需要单独的命令行工具或账号，请先在本机安装，并在终端完成登录；否则建立会话会在握手阶段失败（具体原因见「环境检测」）。`}
         </div>
       )}
       {(ready || failed) && (
