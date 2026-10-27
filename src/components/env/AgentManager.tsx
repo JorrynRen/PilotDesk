@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Terminal, Repeat, BookOpen, Store as StoreIcon, Play, Package } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Terminal, Repeat, RefreshCw, BookOpen, Store as StoreIcon, Play, Package } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -141,9 +141,10 @@ export function AgentManager() {
     setUpdating(agentType);
     try {
       await invoke('agent_market_update', { agentType, allowUnverified: needsConsent });
-      showToast('已更新到市场最新版本', 'success');
+      // 按钮在「已是最新」时语义是重装，文案不带「更新到最新」以免误导
+      showToast('已按市场最新规格完成安装', 'success');
     } catch (err) {
-      showToast(`更新失败: ${errorMessage(err)}`, 'error');
+      showToast(`操作失败: ${errorMessage(err)}`, 'error');
     }
     setUpdating(null);
     const fresh = await fetchAgents();
@@ -707,6 +708,20 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
     return at > 0 ? raw.slice(0, at) : raw;
   })();
 
+  // 是否真存在「新版本」：本机探测到的安装版本 vs 市场/目录最新版本。
+  // 已是最新时按钮改为「重装」，避免点了「更新」却装回同一个版本（提示成功、版本号不变）。
+  const installedVersion =
+    form.pkgState?.installedVersion ??
+    (form.agentType ? envInfo?.agentVersions?.[form.agentType] : null) ??
+    null;
+  const latestVersion = form.agentType
+    ? envInfo?.agentLatestVersions?.[form.agentType] ?? null
+    : null;
+  const hasNewerVersion =
+    !!installedVersion &&
+    !!latestVersion &&
+    installedVersion.replace(/^v/i, '') !== latestVersion.replace(/^v/i, '');
+
   // ACP 的命令/参数由市场下发（官方目录条目安装后会自动填入解析结果），
   // 集成配置页只保留「自定义填写」入口——预置不再硬编码在前端。
 
@@ -725,6 +740,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           detectedAvailable={detectedHealth?.available}
           detectedVersion={form.agentType ? envInfo?.agentVersions?.[form.agentType] ?? null : null}
           canUpdate={!!form.distSource && form.distSource.source !== 'manual'}
+          hasNewerVersion={hasNewerVersion}
           onInstall={onInstall}
           onUninstall={onUninstall}
           onUpdate={onUpdate}
@@ -1011,7 +1027,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
 
 /** 「本机安装」区：呈现包安装状态并提供安装/重试动作。
  *  安装规格（包名、安装/版本命令、运行参数）由市集下发，这里只呈现结果、不提供编辑。 */
-function InstallStatusSection({ agentType, displayName, transport, pkgState, lifecycle, detectedInstalled, detectedAvailable, detectedVersion, canUpdate, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
+function InstallStatusSection({ agentType, displayName, transport, pkgState, lifecycle, detectedInstalled, detectedAvailable, detectedVersion, canUpdate, hasNewerVersion, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
   agentType: string;
   /** 用于提示「装的是适配器，不是这个 Agent 本身」 */
   displayName?: string;
@@ -1024,6 +1040,8 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
   detectedVersion?: string | null;
   /** 市场是否提供可更新的版本信息（预置/手工配置没有，就不给「更新」按钮） */
   canUpdate?: boolean;
+  /** 市场/目录版本确实高于本机安装版本：false 时按钮语义降级为「重装」 */
+  hasNewerVersion?: boolean;
   onInstall?: (agentType: string) => void;
   onUninstall?: (agentType: string) => void;
   onUpdate?: (agentType: string) => void;
@@ -1096,10 +1114,24 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
             onClick={() => onUpdate?.(agentType)}
             variant="secondary"
             disabled={installing || uninstalling || updating}
-            icon={updating ? <Loader2 size={11} className="animate-spin" /> : <Repeat size={11} />}
-            title="按市场最新规格重新安装（Agent 配置保留）"
+            icon={
+              updating ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : hasNewerVersion ? (
+                <Repeat size={11} />
+              ) : (
+                <RefreshCw size={11} />
+              )
+            }
+            title={
+              hasNewerVersion
+                ? '按市场最新规格更新（Agent 配置保留）'
+                : '已是最新版本；按当前市场规格重新安装（Agent 配置保留）'
+            }
           >
-            {updating ? '更新中' : '更新'}
+            {updating
+              ? hasNewerVersion ? '更新中' : '重装中'
+              : hasNewerVersion ? '更新' : '重装'}
           </SettingsButton>
         )}
         {(ready || failed) && (
