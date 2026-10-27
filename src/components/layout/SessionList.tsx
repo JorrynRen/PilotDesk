@@ -786,6 +786,26 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     );
   }, [hostSessions, searchQuery]);
 
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    // 点菜单外 / 按 Esc 关闭：用文档级监听而不是遮罩层——遮罩会被侧栏的
+    // 层叠上下文/溢出边界限制，点在主区域时未必能命中
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest('[data-session-view-menu]')) return;
+      setViewMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setViewMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [viewMenuOpen]);
+
   return (
     <aside
       className="w-[260px] shrink-0 flex flex-col overflow-hidden rounded-lg"
@@ -795,7 +815,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       {/* Header：标题即视图切换器（本地会话 / 宿主会话）；右侧只放图标按钮，
           260px 宽度下才放得下（原先三个按钮都带文字，已无余量） */}
       <div className="flex items-center px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="relative">
+        <div className="relative" data-session-view-menu>
           <button
             onClick={() => setViewMenuOpen((v) => !v)}
             className="flex items-center gap-1 text-xs font-medium"
@@ -810,41 +830,37 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             <ChevronDown size={12} style={{ color: 'var(--text-tertiary)' }} />
           </button>
           {viewMenuOpen && (
-            <>
-              {/* 点空白处关闭：菜单是页内浮层，不引入额外组件 */}
-              <div className="fixed inset-0 z-10" onClick={() => setViewMenuOpen(false)} />
-              <div
-                className="absolute left-0 top-full mt-1 z-20 py-1 rounded-lg overflow-hidden"
-                style={{
-                  minWidth: 132,
-                  backgroundColor: 'var(--bg-primary)',
-                  border: '1px solid var(--border)',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-                }}
-              >
-                {([
-                  { key: 'local' as const, label: t('sessionList.view.local', '本地会话') },
-                  { key: 'host' as const, label: t('sessionList.view.host', '宿主会话') },
-                ]).map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => {
-                      setViewMenuOpen(false);
-                      if (item.key === 'host') enterHostView();
-                      else setView('local');
-                    }}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left transition-colors hover:opacity-90"
-                    style={{
-                      color: view === item.key ? 'var(--accent)' : 'var(--text-secondary)',
-                      backgroundColor: view === item.key ? 'var(--accent-light)' : 'transparent',
-                    }}
-                  >
-                    {item.label}
-                    {view === item.key && <Check size={11} className="ml-auto" />}
-                  </button>
-                ))}
-              </div>
-            </>
+            <div
+              className="absolute left-0 top-full mt-1 z-20 py-1 rounded-lg overflow-hidden"
+              style={{
+                minWidth: 132,
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--border)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+              }}
+            >
+              {([
+                { key: 'local' as const, label: t('sessionList.view.local', '本地会话') },
+                { key: 'host' as const, label: t('sessionList.view.host', '宿主会话') },
+              ]).map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => {
+                    setViewMenuOpen(false);
+                    if (item.key === 'host') enterHostView();
+                    else setView('local');
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left transition-colors hover:opacity-90"
+                  style={{
+                    color: view === item.key ? 'var(--accent)' : 'var(--text-secondary)',
+                    backgroundColor: view === item.key ? 'var(--accent-light)' : 'transparent',
+                  }}
+                >
+                  {item.label}
+                  {view === item.key && <Check size={11} className="ml-auto" />}
+                </button>
+              ))}
+            </div>
           )}
         </div>
         <div className="flex-1" />
