@@ -203,6 +203,10 @@ pub async fn acp_import_host_session(
         &local_session_id,
         &host_session_id,
     )?;
+    // 把**实际使用**的工作目录写回会话：这轮 ACP 进程就是在这个目录下起的，
+    // 后续发消息的 `session/resume|load` 也会拿会话里的 cwd 去恢复，两者必须一致，
+    // 否则宿主可能认不出该会话（原 cwd 被删/挪走时尤其明显）→ 退回 session/new、上下文丢失。
+    crate::commands::session::update_session_cwd_inner(&conn, &local_session_id, &cfg.cwd)?;
 
     Ok(messages.len())
 }

@@ -662,6 +662,10 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
         localSessionId: local.id,
       });
       closePreview();
+      // 绑定（agentSessionId）与生效 cwd 都只写进了库，内存里还是 `createSession`
+      // 那一刻的副本。不拉新的话首次发送会按"无 agentSessionId"走 `session/new`，
+      // 宿主上下文直接丢失，回写的新 id 还会覆盖原绑定。
+      await refreshSessions();
       showToast(`已导入 ${count} 条消息`, 'success');
       // 导入的消息已落库，选中后从库里加载回来
       void selectSession(local.id);
@@ -674,7 +678,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     } finally {
       setImportingHostId(null);
     }
-  }, [hostAgent, importingHostId, sessions, createSession, deleteSession, selectSession, closePreview]);
+  }, [hostAgent, importingHostId, sessions, createSession, deleteSession, selectSession, closePreview, refreshSessions]);
 
   /** 删除宿主侧会话（只删宿主，本地已导入副本保留） */
   const deleteHostSession = useCallback(async (row: HostSessionRow) => {

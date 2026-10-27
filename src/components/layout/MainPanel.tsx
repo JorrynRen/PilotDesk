@@ -703,11 +703,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     try {
       await invoke('update_session_agent_id', { sessionId, agentSessionId });
       // 局部更新：仅修改目标 session 的 agentSessionId，不触发全量刷新
-      useSessionStore.setState((state) => ({
-        sessions: state.sessions.map((s) =>
-          s.id === sessionId ? { ...s, agentSessionId } : s
-        ),
-      }));
+      useSessionStore.getState().bindAgentSessionId(sessionId, agentSessionId);
     } catch (err) {
       console.error('[Session] Failed to save agent session ID:', err);
     }

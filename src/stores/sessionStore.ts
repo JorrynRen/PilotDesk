@@ -130,6 +130,13 @@ interface SessionState {
   refreshSessions: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   /**
+   * 回填会话在宿主侧的会话 id（`sessions.agent_session_id` 的内存副本）。
+   *
+   * 导入宿主会话时绑定只写进了库，内存里的会话对象还是新建时那份（没有 id）；
+   * 不回填的话，首次发送会按"无 agentSessionId"走 `session/new`，宿主上下文丢失。
+   */
+  bindAgentSessionId: (id: string, agentSessionId: string) => void;
+  /**
    * 回到「快捷开始」：清空当前选中（不建会话、不动数据）。
    * 用于"在已有会话里想开新会话"——输入区切回草稿态，首次发送时才建会话。
    */
@@ -254,6 +261,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error('Failed to refresh sessions:', err);
     }
+  },
+
+  bindAgentSessionId: (id, agentSessionId) => {
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, agentSessionId } : s
+      ),
+    }));
   },
 
   selectSession: async (id: string) => {

@@ -849,6 +849,11 @@ impl AgentSession for AcpSession {
                             suppress_replay.store(false, Ordering::Relaxed);
                             r
                         } else {
+                            // 恢复失败且无 load 兜底：只能新建，本轮不再有历史上下文
+                            log::warn!(
+                                "[acp] 会话恢复失败且对端不支持 load，已新建会话（无历史上下文）: resume_id={}",
+                                conn.resume_id.as_deref().unwrap_or_default()
+                            );
                             peer.request_with_timeout(
                                 method::SESSION_NEW,
                                 new_params.clone(),
@@ -873,6 +878,14 @@ impl AgentSession for AcpSession {
                 r
             }
             ResumePlan::New => {
+                // 有 resume_id 却落到新建：对端既没声明 resume 也没声明 load。
+                // 不阻断本轮（否则用户没法继续用），但必须留痕，便于排查"上下文丢了"。
+                if conn.resume_id.is_some() {
+                    log::warn!(
+                        "[acp] 对端未声明会话恢复能力，已新建会话（无历史上下文）: agent_session_id={}",
+                        conn.resume_id.as_deref().unwrap_or_default()
+                    );
+                }
                 peer.request_with_timeout(
                     method::SESSION_NEW,
                     new_params.clone(),

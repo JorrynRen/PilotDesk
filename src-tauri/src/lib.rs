@@ -24,6 +24,7 @@ use api_agent::system_prompt::{GitContext, SystemPromptBuilder};
 use api_agent::types::*;
 use db::init::{init_db, DbPool};
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::Emitter;
@@ -462,6 +463,26 @@ async fn agent_send_message_with_config(
     let conn = state
         .get_conn()
         .map_err(|e| format!("数据库连接失败: {}", e))?;
+    // `agent_session_id` 缺省时以库为准：调用方可能持有一份过期的会话副本
+    // （典型场景：刚导入宿主会话——绑定只写进了库，前端内存里还是空）。此时若按
+    // 缺省值走 `session/new`，既丢掉上下文，回传的新 id 还会把原绑定覆盖掉。
+    let agent_session_id = match agent_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => Some(id.to_string()),
+        None => conn
+            .query_row(
+                "SELECT agent_session_id FROM sessions WHERE id = ?1",
+                params![session_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询会话失败: {}", e))?
+            .flatten()
+            .filter(|s| !s.trim().is_empty()),
+    };
     let config = commands::agents::get_agent_inner(&conn, &agent_type)
         .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
         .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
