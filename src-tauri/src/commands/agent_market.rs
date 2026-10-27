@@ -1581,10 +1581,20 @@ pub async fn readiness_gate(
     match config.readiness() {
         Readiness::Ready => {}
         Readiness::NotReady { message } => {
-            return Some(format!(
-                "{}（Agent：{}）。请到「设置 › Agent」完成安装后再开始会话。",
-                message, config.agent_type
-            ));
+            // 只有「还没装完」才是确定的不可用。`failed` 可能只是某一次安装/升级命令
+            // 失败（典型：更新命令超时），本机其实还装着一份能用的——这种情况继续往下
+            // 走真实探测，别把上一次的失败原因当成永久结论（会盖住真正的报错）。
+            let pending = config
+                .pkg_state
+                .as_ref()
+                .map(|s| s.status == crate::agent::lifecycle::STATUS_PENDING_INSTALL)
+                .unwrap_or(false);
+            if pending {
+                return Some(format!(
+                    "{}（Agent：{}）。请到「设置 › Agent」完成安装后再开始会话。",
+                    message, config.agent_type
+                ));
+            }
         }
     }
 

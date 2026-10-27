@@ -1020,19 +1020,6 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               })()}
             </div>
 
-            {/* 次要入口：从 ACP 宿主导入既有会话（仅 ACP 接入且环境检测可用时出现） */}
-            {hostImportAvailable && (
-              <div className="mb-4">
-                <button
-                  onClick={openHostImport}
-                  className="text-xs px-2 py-1 rounded-lg transition-colors hover:opacity-80"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
-                >
-                  {t('sessionList.import.entry', '从宿主导入会话…')}
-                </button>
-              </div>
-            )}
-
             {/* Agent sessions: optional title & cwd */}
             {newSessionType !== 'api' && (
               <div className="space-y-3 mb-4">
@@ -1245,7 +1232,19 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               </div>
             )}
 
-            <div className="flex justify-end gap-2">
+            {/* 底部动作条：次要入口（从宿主导入）与「取消 / 创建」同级，
+                不再夹在表单中间打断填写节奏 */}
+            <div className="flex items-center gap-2">
+              {hostImportAvailable && (
+                <button
+                  onClick={openHostImport}
+                  className="text-xs px-2 py-1.5 rounded-lg transition-colors hover:opacity-80"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
+                >
+                  {t('sessionList.import.entry', '从宿主导入会话…')}
+                </button>
+              )}
+              <span className="flex-1" />
               <button
                 onClick={() => setShowNewDialog(false)}
                 className="px-3 py-1.5 rounded-lg text-xs"
