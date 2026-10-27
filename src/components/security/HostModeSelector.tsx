@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 import type { AcpModeOption } from '../../stores/acpModeStore';
-import { confirmDialog } from '../../stores/confirmStore';
 
 /**
  * ACP 宿主会话模式选择器（取代 ACP 会话下的「安全模式」）。
@@ -11,6 +10,10 @@ import { confirmDialog } from '../../stores/confirmStore';
  *
  * 语义：真正的权限由宿主按所选模式执行；本应用只在宿主**不提供模式**时，
  * 才退回自己的安全模式（兜底审批策略）。
+ *
+ * 刻意**不**按 id/name 关键词猜"哪一档是完全放开"：协议没有这个语义位，
+ * 关键词只能覆盖已知适配器，反而会让用户把"没标红"误读成"安全"。
+ * 判断依据只交给宿主自己写的 name / description。
  */
 interface HostModeSelectorProps {
   modes: AcpModeOption[];
@@ -22,12 +25,6 @@ interface HostModeSelectorProps {
   known: boolean;
   dropUp?: boolean;
   onChange: (modeId: string | null) => void;
-}
-
-/** 最宽松档位：切过去等于放开宿主沙箱，需要二次确认并红色警示 */
-function isDangerMode(mode: AcpModeOption): boolean {
-  const text = `${mode.id} ${mode.name}`.toLowerCase();
-  return /bypass|full[-_ ]?access|dont[_ ]?ask|unrestricted|yolo|no[-_ ]?limit/.test(text);
 }
 
 export function HostModeSelector({
@@ -52,7 +49,6 @@ export function HostModeSelector({
 
   const pinnedMode = pinned ? modes.find((m) => m.id === pinned) : undefined;
   const currentMode = currentModeId ? modes.find((m) => m.id === currentModeId) : undefined;
-  const danger = pinnedMode ? isDangerMode(pinnedMode) : false;
   const disabled = !known || modes.length === 0;
 
   const label = !known
@@ -63,19 +59,8 @@ export function HostModeSelector({
         ? `跟随宿主 · ${currentMode.name || currentMode.id}`
         : '跟随宿主';
 
-  const choose = async (mode: AcpModeOption | null) => {
+  const choose = (mode: AcpModeOption | null) => {
     setOpen(false);
-    if (mode && isDangerMode(mode)) {
-      const ok = await confirmDialog({
-        title: '切换到完全放行模式',
-        message:
-          `「${mode.name || mode.id}」会放开宿主侧的权限限制，之后的工具调用可能不再向你确认。\n\n` +
-          '该设置对本会话持续生效（每条消息发送时写回宿主）。',
-        confirmText: '切换',
-        danger: true,
-      });
-      if (!ok) return;
-    }
     onChange(mode ? mode.id : null);
   };
 
@@ -89,9 +74,8 @@ export function HostModeSelector({
         className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs outline-none transition-colors disabled:opacity-60"
         style={{
           backgroundColor: 'var(--bg-tertiary)',
-          color: danger ? 'var(--status-danger)' : 'var(--text-secondary)',
-          border: `1px solid ${danger ? 'var(--status-danger)' : 'var(--border)'}`,
-          fontWeight: danger ? 600 : 400,
+          color: 'var(--text-secondary)',
+          border: '1px solid var(--border)',
           height: '24px',
         }}
         title={
@@ -118,7 +102,7 @@ export function HostModeSelector({
         >
           {/* 跟随宿主：不写回模式，完全沿用宿主侧当前档位 */}
           <button
-            onClick={() => void choose(null)}
+            onClick={() => choose(null)}
             className="w-full text-left px-3 py-2 flex flex-col gap-0.5 outline-none"
             style={{
               backgroundColor: pinned ? 'transparent' : 'var(--bg-hover)',
@@ -143,11 +127,10 @@ export function HostModeSelector({
 
           {modes.map((m) => {
             const active = m.id === pinned;
-            const risky = isDangerMode(m);
             return (
               <button
                 key={m.id}
-                onClick={() => void choose(m)}
+                onClick={() => choose(m)}
                 className="w-full text-left px-3 py-2 flex flex-col gap-0.5 outline-none"
                 style={{
                   backgroundColor: active ? 'var(--bg-hover)' : 'transparent',
@@ -159,7 +142,7 @@ export function HostModeSelector({
                 <span className="flex items-center gap-1.5">
                   <span
                     className="text-xs font-semibold"
-                    style={{ color: risky ? 'var(--status-danger)' : 'var(--text-primary)' }}
+                    style={{ color: 'var(--text-primary)' }}
                   >
                     {m.name || m.id}
                   </span>
@@ -185,7 +168,7 @@ export function HostModeSelector({
             className="px-3 pt-1.5 pb-1 text-[10px]"
             style={{ color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}
           >
-            模式由宿主提供 · 切换后从下一条消息生效
+            模式由宿主提供 · 切换后从下一条消息生效，并对本会话持续生效
           </div>
         </div>
       )}
