@@ -57,6 +57,9 @@ function plateStyle(
     borderRadius: Math.max(3, Math.round(size * 0.24)),
     // 图片铺满 + 裁圆角：不透明图标（自带方底）不会露出外圈底板
     overflow: 'hidden',
+    // border-box + 真实 border：内容被裁到 padding box，边框**始终可见**。
+    // （以前用 inset box-shadow 画边，图片铺满后会盖住它，看起来像"没边框"）
+    boxSizing: 'border-box',
     flex: '0 0 auto',
     verticalAlign: 'middle',
   };
@@ -65,6 +68,7 @@ function plateStyle(
     return {
       ...base,
       backgroundColor: '#111827',
+      border: '1px solid rgba(255,255,255,0.18)',
     };
   }
 
@@ -72,6 +76,7 @@ function plateStyle(
     return {
       ...base,
       backgroundColor: tint,
+      border: '1px solid rgba(0,0,0,0.14)',
     };
   }
 
@@ -79,7 +84,7 @@ function plateStyle(
   return {
     ...base,
     backgroundColor: '#ffffff',
-    boxShadow: 'inset 0 0 0 1px rgba(15,23,42,0.12)',
+    border: '1px solid rgba(15,23,42,0.14)',
   };
 }
 
@@ -105,14 +110,15 @@ function IconImage({
   className?: string;
   onError: () => void;
 }) {
+  // 有底板时图片按 padding box 的 100% 铺满（边框占 1px，靠 border-box 消化）；
+  // 无底板时没有可参照的容器尺寸，退回显式 size。
+  const fill: number | string = plate === 'none' ? size : '100%';
   return (
     <span className={className} style={plateStyle(size, plate, accentColor)}>
       <img
         src={src}
         alt=""
-        width={size}
-        height={size}
-        style={{ objectFit: 'contain', display: 'block', width: size, height: size }}
+        style={{ objectFit: 'contain', display: 'block', width: fill, height: fill }}
         onError={onError}
       />
     </span>
