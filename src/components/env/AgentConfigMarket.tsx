@@ -50,7 +50,10 @@ interface MarketAgent {
   installed: boolean;
   installedVersion?: string | null;
   pkgStatus?: string | null;
+  /** 目录版本明确高于本机版本（方向感知，不会因"不相等"误报） */
   updateAvailable: boolean;
+  /** 版本无法比较（非标准版本号 / 缺本机版本）：给「强制更新」入口 */
+  forceUpdateAvailable?: boolean;
 }
 
 const CATEGORY_TABS: { key: MarketCategory; label: string; hint: string }[] = [
@@ -220,6 +223,24 @@ export function AgentConfigMarket() {
           title={`更新到 v${agent.version}`}
         >
           {busy ? '更新中' : '更新'}
+        </SettingsButton>
+      );
+    }
+    // 版本无法比较（非标准版本号 / 本机没有版本记录）：仍给一个明确标注的强制重装入口，
+    // 否则这类条目会因"无法判定是否最新"而彻底失去更新手段。
+    if (agent.forceUpdateAvailable) {
+      return (
+        <SettingsButton
+          variant="secondary"
+          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={busy}
+          onClick={() => handleUpdate(agent)}
+          title={
+            `无法比较版本（市场 v${agent.version}，本机 ${agent.installedVersion ? `v${agent.installedVersion}` : '未知'}）；` +
+            '点击按市场规格强制重装（Agent 配置保留）'
+          }
+        >
+          {busy ? '更新中' : '强制更新'}
         </SettingsButton>
       );
     }

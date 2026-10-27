@@ -69,7 +69,11 @@ pub struct MarketAgent {
     pub installed: bool,
     pub installed_version: Option<String>,
     pub pkg_status: Option<String>,
+    /// 目录版本**明确高于**本机安装版本（方向感知；版本无法比较时一律为 false）
     pub update_available: bool,
+    /// 版本无法比较（非标准版本号 / 缺本机版本）但确有目录条目：给「强制更新」入口，
+    /// 由用户自行决定是否按目录规格重装（避免因无法判定而彻底失去更新手段）。
+    pub force_update_available: bool,
 }
 
 // ──────────────────────────────────────────────
@@ -343,6 +347,27 @@ impl MarketEntry {
                 args: p.args.clone(),
             })
             .collect();
+        // 只有来自 ACP 官方目录的条目才有「市场版本」可比：预置的 `version` 是配置版本号，
+        // 拿它和 npm 里的实际包版本比较会产生假的「可更新」。
+        let has_catalog_version =
+            self.registry_version.is_some() && !self.version.trim().is_empty();
+        // 方向感知：只有目录版本严格高于本机版本才算可更新。
+        // 用 `!=` 会在目录快照落后于包管理器最新版时永久误报，点更新还会把本机降级。
+        let newer = if installed.exists && has_catalog_version {
+            installed
+                .installed_version
+                .as_deref()
+                .and_then(|v| crate::agent::lifecycle::is_newer_version(&self.version, v))
+        } else {
+            None
+        };
+        let update_available = newer == Some(true);
+        // 无法比较（版本号非标准 / 本机没有版本记录）且两边版本不一致 → 给「强制更新」，
+        // 让用户仍能按目录规格重装（否则这类条目永远没有更新入口）。
+        let force_update_available = installed.exists
+            && has_catalog_version
+            && newer.is_none()
+            && installed.installed_version.as_deref() != Some(self.version.as_str());
         MarketAgent {
             agent_type: self.agent_type.clone(),
             display_name: self.display_name.clone(),
@@ -364,16 +389,8 @@ impl MarketEntry {
             installed: installed.exists,
             installed_version: installed.installed_version.clone(),
             pkg_status: installed.pkg_status.clone(),
-            // 只有来自 ACP 官方目录的条目才有「市场版本」可比：预置的 `version` 是配置版本号，
-            // 拿它和 npm 里的实际包版本比较会产生假的「可更新」。
-            update_available: installed.exists
-                && self.registry_version.is_some()
-                && !self.version.trim().is_empty()
-                && installed
-                    .installed_version
-                    .as_deref()
-                    .map(|v| v != self.version)
-                    .unwrap_or(false),
+            update_available,
+            force_update_available,
         }
     }
 }
@@ -519,7 +536,16 @@ pub async fn agent_market_list(
     let entries = load_entries(cat).await?;
 
     let conn = state.get_conn()?;
-    let installed = installed_map(&conn)?;
+    let mut installed = installed_map(&conn)?;
+    // 「本机版本」与设置页同源：优先用环境检测的实时探测结果，`pkg_state` 里的安装记录只作兜底
+    // （用户手动 `npm i -g` 升级后记录会过期，两处判断又会分叉）。
+    for (agent_type, version) in crate::commands::env::cached_agent_versions() {
+        if let Some(info) = installed.get_mut(&agent_type) {
+            if info.exists {
+                info.installed_version = Some(version);
+            }
+        }
+    }
     Ok(entries
         .iter()
         .map(|e| {

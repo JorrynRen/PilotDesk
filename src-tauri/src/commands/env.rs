@@ -441,6 +441,25 @@ async fn preset_latest_commands() -> std::collections::HashMap<String, String> {
 static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::RwLock::new(None);
 const CACHE_TTL: Duration = Duration::from_secs(120);
 
+/// 最近一次环境检测得到的 Agent 版本（只读缓存；没检测过时为空）。
+///
+/// 资源市集用它作为「本机版本」，与设置页同源：`pkg_state` 里存的是**安装时**的记录，
+/// 用户手动 `npm i -g` 升级后就会过期，两边会再次出现"一边可更新、一边已是最新"。
+pub(crate) fn cached_agent_versions() -> std::collections::HashMap<String, String> {
+    LAST_DETECT
+        .read()
+        .ok()
+        .and_then(|guard| {
+            guard.as_ref().map(|(_, info)| {
+                info.agent_versions
+                    .iter()
+                    .filter_map(|(k, v)| v.clone().map(|ver| (k.clone(), ver)))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
 /// 最近一次检测得到的 Agent 健康度（按 agent_type，各自带时间戳）。
 ///
 /// 会话门禁直接读它：ACP 的可用性判定要真跑一遍握手，不能在每次建会话/发消息时重做。
@@ -611,8 +630,20 @@ async fn detect_env_with_console(
         // 先归集「查什么命令」：有生命周期规格的直接派生；
         // 没有规格的历史本地 CLI 记下来，稍后按同名预置补齐（否则这类 Agent 永远查不到最新版本）。
         let mut jobs: Vec<(String, String)> = Vec::new();
-        // ACP 官方目录来源：最新版本直接取目录版本（更新装的就是它）。
+        // ACP 官方目录来源：最新版本取**当前目录**版本（与资源市集同源）；
+        // 目录暂不可用时才回退本地安装时记录的快照版本。
         // 不能用 npm view —— npm latest 与目录版本是两套，会永远显示「有更新」。
+        let catalog_versions: std::collections::HashMap<String, String> =
+            crate::agent::registry::load(false)
+                .await
+                .map(|f| {
+                    f.agents
+                        .into_iter()
+                        .filter(|a| !a.version.trim().is_empty())
+                        .map(|a| (a.id, a.version))
+                        .collect()
+                })
+                .unwrap_or_default();
         let mut pinned_latest: Vec<(String, String)> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
         for agent in &db_agents {
@@ -621,7 +652,15 @@ async fn detect_env_with_console(
             }
             if let Some(ds) = agent.dist_source.as_ref() {
                 if ds.source == crate::agent::lifecycle::SOURCE_ACP_REGISTRY {
-                    if let Some(v) = ds.registry_version.clone().filter(|s| !s.trim().is_empty()) {
+                    let key = ds
+                        .registry_id
+                        .clone()
+                        .unwrap_or_else(|| agent.agent_type.clone());
+                    let latest = catalog_versions
+                        .get(&key)
+                        .cloned()
+                        .or_else(|| ds.registry_version.clone());
+                    if let Some(v) = latest.filter(|s| !s.trim().is_empty()) {
                         pinned_latest.push((agent.agent_type.clone(), v));
                         continue;
                     }

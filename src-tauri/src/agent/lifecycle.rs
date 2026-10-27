@@ -491,6 +491,59 @@ pub fn extract_semver(text: &str) -> Option<String> {
         .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
 }
 
+/// 方向感知的版本比较：`candidate` 是否**严格新于** `base`。
+///
+/// 返回 `None` = 两者无法比较（空串、非纯数字段、预发布后缀等）。
+/// 调用方据此**不提示更新**（宁可少报、不误报）：只比 `!=` 会在目录快照落后于
+/// 包管理器最新版时永久误报「可更新」，点击后还可能把本机装回更旧的版本。
+///
+/// 与前端环境检测页的 `isOlder` 同口径：去 `v` 前缀、缺段补 0、逐段数值比较。
+pub fn is_newer_version(candidate: &str, base: &str) -> Option<bool> {
+    fn parse(v: &str) -> Option<Vec<u64>> {
+        let v = v.trim().trim_start_matches(['v', 'V']);
+        if v.is_empty() {
+            return None;
+        }
+        v.split('.').map(|s| s.parse::<u64>().ok()).collect()
+    }
+    let a = parse(candidate)?;
+    let b = parse(base)?;
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return Some(x > y);
+        }
+    }
+    Some(false)
+}
+
+#[cfg(test)]
+mod version_compare_tests {
+    use super::is_newer_version;
+
+    #[test]
+    fn direction_aware_comparison() {
+        assert_eq!(is_newer_version("2.1.0", "2.2.2"), Some(false));
+        assert_eq!(is_newer_version("2.2.2", "2.1.0"), Some(true));
+        assert_eq!(is_newer_version("2.2.2", "2.2.2"), Some(false));
+        // v 前缀 / 缺段补 0
+        assert_eq!(is_newer_version("v2.1", "2.0.9"), Some(true));
+        assert_eq!(is_newer_version("1.0", "1.0.0"), Some(false));
+        // 多段版本（构建号）
+        assert_eq!(is_newer_version("1.2.3.4", "1.2.3"), Some(true));
+    }
+
+    #[test]
+    fn unparsable_versions_are_not_comparable() {
+        assert_eq!(is_newer_version("", "1.0.0"), None);
+        assert_eq!(is_newer_version("latest", "1.0.0"), None);
+        assert_eq!(is_newer_version("1.0.0-beta.1", "1.0.0"), None);
+        assert_eq!(is_newer_version("1.0.0", "unknown"), None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

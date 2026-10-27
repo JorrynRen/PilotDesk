@@ -1126,7 +1126,7 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
             title={
               hasNewerVersion
                 ? '按市场最新规格更新（Agent 配置保留）'
-                : '已是最新版本；按当前市场规格重新安装（Agent 配置保留）'
+                : '已是最新版本；按市场规格重新安装（Agent 配置保留；若本机版本更高，会回到市场版本）'
             }
           >
             {updating
