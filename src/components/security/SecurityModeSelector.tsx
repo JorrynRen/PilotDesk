@@ -16,6 +16,8 @@ export function SecurityModeSelector({
   value,
   onChange,
   dropUp = true,
+  disabled = false,
+  disabledReason,
 }: {
   value: SecurityModeValue;
   onChange: (v: SecurityModeValue) => void;
@@ -24,6 +26,15 @@ export function SecurityModeSelector({
    * 会话默认页把输入区搬到了顶部，向上展开会被窗口上边缘截断，那里传 `false` 改为向下展开。
    */
   dropUp?: boolean;
+  /**
+   * 置灰：该接入方式不支持由本应用控制审批（如本地 CLI 接入）。
+   *
+   * 本地 CLI 的工具调用发生在 CLI 进程内，权限由它自己的启动参数决定，
+   * 本应用拿不到双向审批通道；此时保留控件但禁用，避免"看起来能选、其实无效"。
+   */
+  disabled?: boolean;
+  /** 置灰原因（悬停提示） */
+  disabledReason?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -45,16 +56,19 @@ export function SecurityModeSelector({
     <div ref={ref} className="relative shrink-0">
       {/* 触发器：仅显示当前模式名称（说明在展开时显示）；样式与会话模式按钮统一 */}
       <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs outline-none transition-colors"
+        onClick={() => {
+          if (!disabled) setOpen((o) => !o);
+        }}
+        disabled={disabled}
+        className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs outline-none transition-colors disabled:opacity-60"
         style={{
           backgroundColor: 'var(--bg-tertiary)',
-          color: current.danger ? 'var(--status-danger)' : 'var(--text-secondary)',
-          border: `1px solid ${current.danger ? 'var(--status-danger)' : 'var(--border)'}`,
-          fontWeight: current.danger ? 600 : 400,
+          color: current.danger && !disabled ? 'var(--status-danger)' : 'var(--text-secondary)',
+          border: `1px solid ${current.danger && !disabled ? 'var(--status-danger)' : 'var(--border)'}`,
+          fontWeight: current.danger && !disabled ? 600 : 400,
           height: '24px',
         }}
-        title={current.desc}
+        title={disabled ? disabledReason || current.desc : current.desc}
       >
         <current.icon size={11} style={{ flexShrink: 0, color: current.color }} />
         <span>{current.name}</span>

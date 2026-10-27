@@ -155,6 +155,13 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   const acpPinned = useAcpModeStore((s) =>
     acpAgentType ? s.resolvePinned(session?.id ?? null, acpAgentType) : null,
   );
+  // 本地 CLI 接入：工具调用发生在 CLI 进程内，权限由它自己的启动参数决定，
+  // 本应用既拿不到审批请求也无法拦截 → 安全模式对它无效，置灰而不是假装可选。
+  const cliSecurityDisabled = useMemo(() => {
+    const agentType = session?.agentType ?? parseChoice(draftChoice)?.agentType ?? '';
+    if (!agentType || agentType === 'api') return false;
+    return getTransport(agentType) === 'subprocess';
+  }, [session, draftChoice, getTransport]);
 
   // 首次进入会话模式时把两份数据源拉起来（指挥中心等处也会拉，重复调用无害）
   useEffect(() => {
@@ -1071,7 +1078,13 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   }}
                 />
               ) : securityMode && onSecurityModeChange ? (
-                <SecurityModeSelector value={securityMode} onChange={onSecurityModeChange} dropUp={dropUp} />
+                <SecurityModeSelector
+                  value={securityMode}
+                  onChange={onSecurityModeChange}
+                  dropUp={dropUp}
+                  disabled={cliSecurityDisabled}
+                  disabledReason="本地 CLI 接入的权限由该 CLI 自身的启动参数决定，本应用无法逐条审批；如需调整请修改该 Agent 的启动参数"
+                />
               ) : null}
 
               {/* 工作目录：已有会话 → 切换该会话目录；无会话 → 选定"快捷开始"的草稿目录（必选）。
