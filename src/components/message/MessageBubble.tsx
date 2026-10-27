@@ -391,8 +391,10 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               // 去掉圆角会让高亮框变成直角矩形。
               return (
                 <div className="w-full rounded-lg py-2" style={{ ...highlightStyle }}>
-                  <div className="flex items-center gap-2">
-                    <span className="shrink-0" style={{ color: accentColor }}>
+                  {/* 图标与**首行**对齐（items-start + 微调），不要在多行文案里垂直居中：
+                      居中会让图标飘到整段文字的中间，和标题行对不上 */}
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0 mt-[3px]" style={{ color: accentColor }}>
                       {isError ? (
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                       ) : isTimeout ? (

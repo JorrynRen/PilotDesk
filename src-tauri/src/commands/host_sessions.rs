@@ -71,12 +71,26 @@ fn prepare(conn: &Connection, agent_type: &str, cwd: Option<&str>) -> Result<Pre
         .unwrap_or_default();
     let env = conn_json["env"].as_object().cloned();
 
-    let cwd = match cwd.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(dir) => dir.to_string(),
-        // 与发消息同口径：未指定时回退全局工作区
-        None => crate::utils::paths::resolve_workspace_path(None, "", conn)
+    // 工作目录校验：宿主返回的 `cwd` 可能已经不存在（目录被删/挪走），也可能是
+    // 非本机路径。直接拿它做 `current_dir` 会让进程启动直接失败
+    // （Windows: os error 267「目录名称无效」），删除/预览都跟着报错。
+    let fallback_cwd = || {
+        crate::utils::paths::resolve_workspace_path(None, "", conn)
             .to_string_lossy()
-            .to_string(),
+            .to_string()
+    };
+    let cwd = match cwd.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(dir) if std::path::Path::new(dir).is_dir() => dir.to_string(),
+        Some(dir) => {
+            log::warn!(
+                "[host_sessions] 忽略不存在的工作目录，改用全局工作区: agent={} cwd={}",
+                agent_type,
+                dir
+            );
+            fallback_cwd()
+        }
+        // 与发消息同口径：未指定时回退全局工作区
+        None => fallback_cwd(),
     };
 
     Ok(Prepared {
