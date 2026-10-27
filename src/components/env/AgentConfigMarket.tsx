@@ -348,6 +348,8 @@ export function AgentConfigMarket() {
                       <AgentIcon
                         icon={agent.icon || undefined}
                         size={20}
+                        // 外层容器本身已是一块浅色底板（远程图标固定 #F6F6F8），再垫一层会变成双底
+                        plate="none"
                         fallback={
                           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
                             {agent.displayName.slice(0, 1).toUpperCase()}
