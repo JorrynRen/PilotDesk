@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo, type ReactNode } from 'react';
-import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal, RefreshCw, Trash2, Download, Check, ListChecks } from 'lucide-react';
+import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal, RefreshCw, Trash2, Download, Check, ListChecks, Loader2 } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -124,6 +124,10 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   /** 宿主会话批量选择（只支持批量删除；批量导入见下方说明） */
   const [hostBatchMode, setHostBatchMode] = useState(false);
   const [selectedHostIds, setSelectedHostIds] = useState<Set<string>>(new Set());
+  /** 正在删除的宿主会话（逐行反馈，避免"点了没反应"被重复点） */
+  const [deletingHostIds, setDeletingHostIds] = useState<Set<string>>(new Set());
+  /** 批量删除进行中 */
+  const [hostBatchDeleting, setHostBatchDeleting] = useState(false);
   /** 当前列表数据所属的宿主（换宿主必须重拉，否则会显示上一个宿主的会话） */
   const loadedAgentRef = useRef<string | null>(null);
 
@@ -661,6 +665,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   /** 删除宿主侧会话（只删宿主，本地已导入副本保留） */
   const deleteHostSession = useCallback(async (row: HostSessionRow) => {
     if (!hostAgent) return;
+    if (deletingHostIds.has(row.sessionId)) return;
     const ok = await confirmDialog({
       title: '删除宿主会话',
       message: `确定要删除宿主侧的会话「${(row.title || '').trim() || '（无标题）'}」吗？\n\n只删除宿主里的记录，已导入到本应用的会话不受影响。`,
@@ -668,6 +673,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       danger: true,
     });
     if (!ok) return;
+    // 标记为"删除中"：行内显示进度并禁用按钮，避免用户以为没执行而重复点击
+    setDeletingHostIds((prev) => new Set(prev).add(row.sessionId));
     try {
       const outcome = await invoke<{ status: 'ok' | 'unsupported'; hint?: string }>(
         'acp_delete_host_session',
@@ -682,8 +689,14 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       if (hostPreview?.hostSessionId === row.sessionId) closePreview();
     } catch (err) {
       showToast(`删除失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setDeletingHostIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.sessionId);
+        return next;
+      });
     }
-  }, [hostAgent, hostPreview, closePreview]);
+  }, [hostAgent, hostPreview, closePreview, deletingHostIds]);
 
   const toggleHostSelect = useCallback((sessionId: string) => {
     setSelectedHostIds((prev) => {
@@ -701,7 +714,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
    * 避免 N 条会话刷 N 个 toast。不支持删除的适配器（如 hermes）单独说明。
    */
   const batchDeleteHostSessions = useCallback(async () => {
-    if (!hostAgent || selectedHostIds.size === 0) return;
+    if (!hostAgent || selectedHostIds.size === 0 || hostBatchDeleting) return;
     const ids = Array.from(selectedHostIds);
     const ok = await confirmDialog({
       title: '批量删除宿主会话',
@@ -711,21 +724,35 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     });
     if (!ok) return;
 
+    // 逐条删除耗时较长：置忙并让按钮显示进度，避免重复点击
+    setHostBatchDeleting(true);
     const cwdOf = (id: string) => hostSessions.find((s) => s.sessionId === id)?.cwd ?? null;
     const deleted: string[] = [];
     let unsupportedHint: string | null = null;
     let firstError: string | null = null;
-    for (const id of ids) {
-      try {
-        const outcome = await invoke<{ status: 'ok' | 'unsupported'; hint?: string }>(
-          'acp_delete_host_session',
-          { agentType: hostAgent, hostSessionId: id, cwd: cwdOf(id) },
-        );
-        if (outcome.status === 'ok') deleted.push(id);
-        else unsupportedHint = outcome.hint || unsupportedHint;
-      } catch (err) {
-        firstError = firstError ?? errorMessage(err);
+    try {
+      for (const id of ids) {
+        // 逐条显示"删除中"，用户能看到进度在推进
+        setDeletingHostIds((prev) => new Set(prev).add(id));
+        try {
+          const outcome = await invoke<{ status: 'ok' | 'unsupported'; hint?: string }>(
+            'acp_delete_host_session',
+            { agentType: hostAgent, hostSessionId: id, cwd: cwdOf(id) },
+          );
+          if (outcome.status === 'ok') deleted.push(id);
+          else unsupportedHint = outcome.hint || unsupportedHint;
+        } catch (err) {
+          firstError = firstError ?? errorMessage(err);
+        } finally {
+          setDeletingHostIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        }
       }
+    } finally {
+      setHostBatchDeleting(false);
     }
 
     if (deleted.length > 0) {
@@ -738,7 +765,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
     setSelectedHostIds(new Set());
     if (deleted.length > 0) setHostBatchMode(false);
-  }, [hostAgent, selectedHostIds, hostSessions, hostPreview, closePreview]);
+  }, [hostAgent, selectedHostIds, hostSessions, hostPreview, closePreview, hostBatchDeleting]);
 
   const handleArchive = useCallback(async (id: string) => {
     try {
@@ -1061,6 +1088,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           <button
             onClick={() => setSelectedHostIds(new Set(filteredHostSessions.map((r) => r.sessionId)))}
             className="pd-btn pd-btn-sm"
+            disabled={hostBatchDeleting}
             style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             title="全选"
           >
@@ -1069,6 +1097,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           <button
             onClick={() => setSelectedHostIds(new Set())}
             className="pd-btn pd-btn-sm"
+            disabled={hostBatchDeleting}
             style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             title="取消全选"
           >
@@ -1077,16 +1106,24 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           <div className="w-px h-4 mx-0.5" style={{ backgroundColor: 'var(--border)' }} />
           <button
             onClick={() => void batchDeleteHostSessions()}
-            disabled={selectedHostIds.size === 0}
+            disabled={selectedHostIds.size === 0 || hostBatchDeleting}
             className="pd-btn pd-btn-sm pd-btn-danger"
             title="批量删除宿主会话（只删宿主，本地已导入的副本保留）"
           >
-            {t('sessionList.batchDelete', '删({count})', { count: selectedHostIds.size })}
+            {hostBatchDeleting ? (
+              <span className="flex items-center gap-1">
+                <Loader2 size={11} className="animate-spin" />
+                删除中({selectedHostIds.size})
+              </span>
+            ) : (
+              t('sessionList.batchDelete', '删({count})', { count: selectedHostIds.size })
+            )}
           </button>
           <div className="flex-1" />
           <button
             onClick={() => { setHostBatchMode(false); setSelectedHostIds(new Set()); }}
             className="pd-btn pd-btn-sm"
+            disabled={hostBatchDeleting}
             style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             title="退出批量模式"
           >
@@ -1190,6 +1227,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               {filteredHostSessions.map((row) => {
                 const busyPreview = previewingHostId === row.sessionId;
                 const busyImport = importingHostId === row.sessionId;
+                const deleting = deletingHostIds.has(row.sessionId);
                 const isPreviewing = hostPreview?.hostSessionId === row.sessionId;
                 const selected = selectedHostIds.has(row.sessionId);
                 const updatedLabel = formatHostTime(row.updatedAt);
@@ -1209,8 +1247,11 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                         selected || isPreviewing
                           ? 'linear-gradient(to right, var(--accent) 3px, transparent 3px)'
                           : undefined,
+                      // 删除中整行降透明度：明确的"已受理、正在处理"反馈
+                      opacity: deleting ? 0.55 : 1,
                     }}
                     onClick={() => {
+                      if (deleting || hostBatchDeleting) return;
                       if (hostBatchMode) {
                         toggleHostSelect(row.sessionId);
                         return;
@@ -1240,11 +1281,13 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1">
                           <span className="text-xs truncate">
-                            {busyPreview
-                              ? t('sessionList.host.loading', '回放中…')
-                              : row.title || '（无标题）'}
+                            {deleting
+                              ? '删除中…'
+                              : busyPreview
+                                ? t('sessionList.host.loading', '回放中…')
+                                : row.title || '（无标题）'}
                           </span>
-                          {updatedLabel && (
+                          {updatedLabel && !deleting && (
                             <span
                               className="text-[10px] shrink-0"
                               style={{ color: 'var(--text-secondary)' }}
@@ -1257,7 +1300,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                           className="text-[10px] mt-0.5 truncate"
                           style={{ color: 'var(--text-secondary)' }}
                         >
-                          {row.cwd || '-'}
+                          {deleting ? '正在删除宿主侧记录…' : row.cwd || '-'}
                         </p>
                       </div>
                       {!hostBatchMode && (
@@ -1267,8 +1310,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                               e.stopPropagation();
                               void importHostSession(row);
                             }}
-                            disabled={!!importingHostId}
-                            className="pd-btn p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
+                            disabled={!!importingHostId || deleting || hostBatchDeleting}
+                            className="pd-btn p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90 disabled:opacity-40"
                             style={{ color: 'var(--accent)' }}
                             title={t('sessionList.host.import', '导入并继续')}
                           >
@@ -1279,11 +1322,12 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                               e.stopPropagation();
                               void deleteHostSession(row);
                             }}
-                            className="p-0.5 rounded transition-all hover:bg-red-500/20 active:scale-90"
+                            disabled={deleting || hostBatchDeleting}
+                            className="p-0.5 rounded transition-all hover:bg-red-500/20 active:scale-90 disabled:opacity-40"
                             style={{ color: '#EF4444' }}
-                            title={t('sessionList.host.delete', '删除宿主会话')}
+                            title={deleting ? '正在删除…' : t('sessionList.host.delete', '删除宿主会话')}
                           >
-                            <Trash2 size={11} />
+                            {deleting ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
                           </button>
                         </div>
                       )}
