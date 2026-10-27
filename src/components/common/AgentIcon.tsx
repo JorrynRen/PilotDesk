@@ -17,12 +17,12 @@ import { invoke } from '@tauri-apps/api/core';
 /**
  * 图片图标的底板。
  *
- * - `light`（默认）：**Agent 品牌色淡染**的浅底（品牌色 16% + 白）。既保留该 Agent
- *   的识别色，又保证亮度足够承托「透明底黑色矢量」；`color-mix` 不可用时退回纯白。
- * - `accent`：纯 Agent 品牌色实底。视觉最贴合品牌，但黑色矢量的对比度会掉到
- *   3.5–6:1（取决于品牌色），只建议给彩色/白色图标用。
+ * - `light`（默认）：**纯白**圆角底板 + 中性细描边。白色最干净——淡染
+ *   （品牌色 16% + 白）在深色主题下会显得发灰发脏，已弃用。
+ * - `accent`：纯 Agent 品牌色实底。适合本身是彩色/白色矢量的图标；
+ *   黑色矢量压在上面只有 3.5–6:1，慎用。
  * - `dark`：深色底，给浅色（白色）矢量图标用。
- * - `none`：不垫底板（外层已有底板时）。
+ * - `none`：不垫底板（外层已有底板、或图标自带不透明背景时）。
  */
 export type IconPlate = 'light' | 'accent' | 'dark' | 'none';
 
@@ -34,13 +34,13 @@ interface AgentIconProps {
   /** 底板覆盖：默认 light；白色矢量图标传 dark，纯品牌色实底传 accent，已有底板传 none */
   plate?: IconPlate;
   /**
-   * Agent 品牌色（如 `#8B5CF6`）：底板按它淡染/着色。
+   * Agent 品牌色（如 `#8B5CF6`）：`accent` 档位的实底颜色。
    * 不传时退回应用主题色 `var(--accent)`。
    */
   accentColor?: string;
 }
 
-/** 底板样式：外框固定为 `size`，图片按 78% 内缩，视觉尺寸与不加底板时接近 */
+/** 底板样式：外框固定为 `size`，图片**铺满**整块底板（图标自带的背景不再露出外圈） */
 function plateStyle(
   size: number,
   plate: IconPlate,
@@ -55,6 +55,8 @@ function plateStyle(
     width: size,
     height: size,
     borderRadius: Math.max(3, Math.round(size * 0.24)),
+    // 图片铺满 + 裁圆角：不透明图标（自带方底）不会露出外圈底板
+    overflow: 'hidden',
     flex: '0 0 auto',
     verticalAlign: 'middle',
   };
@@ -62,8 +64,7 @@ function plateStyle(
   if (plate === 'dark') {
     return {
       ...base,
-      backgroundColor: 'rgba(17,24,39,0.88)',
-      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.16)',
+      backgroundColor: '#111827',
     };
   }
 
@@ -71,21 +72,24 @@ function plateStyle(
     return {
       ...base,
       backgroundColor: tint,
-      boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
     };
   }
 
-  // light：品牌色淡染。先写 backgroundColor 作兜底，再用 background 覆盖——
-  // 浏览器不支持 color-mix 时整条 background 声明会被丢弃，底色退回白色。
+  // light：纯白 + 中性描边（浅色主题下也能与白色背景区分）
   return {
     ...base,
     backgroundColor: '#ffffff',
-    background: `color-mix(in srgb, ${tint} 16%, #ffffff)`,
-    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${tint} 30%, transparent)`,
+    boxShadow: 'inset 0 0 0 1px rgba(15,23,42,0.12)',
   };
 }
 
-/** 图片图标：底板 + 按比例内缩的图片（加载失败由调用方决定是否退回 fallback） */
+/**
+ * 图片图标：底板 + 铺满底板的图片（加载失败由调用方决定是否退回 fallback）。
+ *
+ * 图片**不内缩**（= size）：不同厂商图标本身留白不同，内缩会让自带方底的图标
+ * 露出外圈底板（看起来像两层背景）；铺满后不透明图标直接盖住底板，透明图标
+ * 仍由底板提供对比度。
+ */
 function IconImage({
   src,
   size,
@@ -101,15 +105,14 @@ function IconImage({
   className?: string;
   onError: () => void;
 }) {
-  const inner = plate === 'none' ? size : Math.max(8, Math.round(size * 0.78));
   return (
     <span className={className} style={plateStyle(size, plate, accentColor)}>
       <img
         src={src}
         alt=""
-        width={inner}
-        height={inner}
-        style={{ objectFit: 'contain', display: 'block' }}
+        width={size}
+        height={size}
+        style={{ objectFit: 'contain', display: 'block', width: size, height: size }}
         onError={onError}
       />
     </span>
