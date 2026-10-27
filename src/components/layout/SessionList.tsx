@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo, type ReactNode } from 'react';
-import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal, RefreshCw, Trash2, Download, Check } from 'lucide-react';
+import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal, RefreshCw, Trash2, Download, Check, ListChecks } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -889,7 +889,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               }}
               title={t('sessionList.batch.title', '批量操作')}
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+              {/* 语义=多选/批量；不要用宫格图标（与顶部门户标签的 LayoutGrid 撞脸） */}
+              <ListChecks size={11} />
             </button>
             <button
               onClick={toggleArchived}
