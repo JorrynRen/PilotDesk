@@ -1070,6 +1070,7 @@ async fn run_install(
     spec: &LifecycleSpec,
     version: Option<&str>,
     allow_unverified: bool,
+    is_update: bool,
 ) -> Result<(), AppError> {
     // 二进制没有包管理器可代劳：下载/校验/解压由应用自己做，不走 shell
     if spec.kind == LifecycleKind::Binary {
@@ -1085,24 +1086,48 @@ async fn run_install(
         .await;
     }
 
-    let install_cmd = spec
-        .commands()
-        .map_err(AppError::Config)?
-        .install
-        .ok_or_else(|| AppError::Config(format!("『{}』未配置安装命令", agent_type)))?;
+    let cmds = spec.commands().map_err(AppError::Config)?;
+    // 已有安装时优先走 update 命令：shell 类型的 install_cmd 多半是 no-op
+    // （例如 `pip install hermes-agent` 对已装的 0.17 只会输出 “Requirement already
+    // satisfied” 并以 0 退出，版本永远不变），升级必须用 `update_cmd`。
+    let install_cmd = if is_update {
+        cmds.update.clone().or_else(|| cmds.install.clone())
+    } else {
+        cmds.install.clone()
+    }
+    .ok_or_else(|| AppError::Config(format!("『{}』未配置安装命令", agent_type)))?;
 
     let _ = app.emit(
         "install-progress",
         json!({
             "agent": agent_type,
-            "message": format!("正在安装 {}...", display_name),
+            "message": format!("正在{} {}...", if is_update { "更新" } else { "安装" }, display_name),
             "progress": 20
         }),
     );
 
     let mgr = agent_mgr.lock().await;
+    // 无钉死版本的规格（shell 预置）升级后没法靠「期望版本」核对，
+    // 先记下更新前的版本，用来区分「真的升级了」和「命令是 no-op」。
+    let before_version = if is_update && spec.pinned_version().is_none() {
+        match cmds.version_probe.clone() {
+            Some(cmd) => mgr
+                .execute_command_output_async(&cmd, "", 60, "读取更新前版本")
+                .await
+                .ok()
+                .and_then(|out| spec.parse_installed_version(&out)),
+            None => None,
+        }
+    } else {
+        None
+    };
     let result = mgr
-        .execute_command_output_async(&install_cmd, "", 600, &format!("安装 {}", agent_type))
+        .execute_command_output_async(
+            &install_cmd,
+            "",
+            600,
+            &format!("{} {}", if is_update { "更新" } else { "安装" }, agent_type),
+        )
         .await;
 
     if let Err(e) = result {
@@ -1186,6 +1211,11 @@ async fn run_install(
         }
     }
 
+    // 无钉死版本的升级无法用「期望版本」核对：命令以 0 退出但版本没变时，
+    // 如实说「已是最新」，不要给出看起来像升级成功的结论。
+    let unchanged_on_update =
+        is_update && before_version.is_some() && before_version == installed_version;
+
     let mut ready = PkgState::ready(crate::utils::now());
     ready.bins = bins.clone();
     ready.installed_version = installed_version.clone();
@@ -1213,11 +1243,23 @@ async fn run_install(
     }
 
     crate::commands::env::clear_env_cache();
+    let done_msg = if unchanged_on_update {
+        format!(
+            "{} 已是最新版本{}",
+            display_name,
+            installed_version
+                .as_deref()
+                .map(|v| format!(" v{}", v))
+                .unwrap_or_default()
+        )
+    } else {
+        format!("{} 已就绪", display_name)
+    };
     let _ = app.emit(
         "install-progress",
         json!({
             "agent": agent_type,
-            "message": format!("{} 已就绪", display_name),
+            "message": done_msg,
             "progress": 100
         }),
     );
@@ -1315,6 +1357,7 @@ pub async fn agent_market_install(
         &spec,
         Some(config.version.as_str()).filter(|v| !v.trim().is_empty()),
         allow_unverified.unwrap_or(false),
+        false,
     )
     .await?;
 
@@ -1414,6 +1457,7 @@ pub async fn agent_market_update(
         &entry.lifecycle,
         Some(entry.version.as_str()).filter(|v| !v.trim().is_empty()),
         allow_unverified.unwrap_or(false),
+        true,
     )
     .await?;
 

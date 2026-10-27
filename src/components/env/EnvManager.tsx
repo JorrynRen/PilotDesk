@@ -92,7 +92,9 @@ export type { EnvManagerProps };
 
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const { envInfo, loading: envLoading, agentStatus, refresh: fetchEnv } = useEnvInfo();
-  const { agents } = useAgentRegistry();
+  // Agent 列表是全局单例缓存：本页装/卸完必须让它重拉，
+  // 否则「设置 › 集成配置」里的包状态（待安装 / 已就绪）一直停在旧值。
+  const { agents, fetchAgents } = useAgentRegistry();
   const [installing, setInstalling] = useState<string | null>(null);
   const [logs, setLogs] = useState<Array<{ timestamp: number; message: string; level: 'info' | 'warn' | 'error' | 'success' }>>([]);
   /** Latest versions from remote registries */
@@ -298,7 +300,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         await invoke('install_agent', { agentType: key, allowUnverified });
       }
       addLog(`${name} ${mode === 'update' ? '更新' : '安装'}成功`, 'success');
-      await fetchEnv();
+      // 两处状态都要刷：环境检测（版本/可用性）与 Agent 列表（包状态/lifecycle）
+      await Promise.all([fetchEnv(), fetchAgents()]);
       // 安装完成后直接触发版本检测（autoDetected 守卫阻止 useEffect 重复执行）
       checkAgentUpdate(key);
     } catch (err) {
@@ -316,7 +319,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     try {
       await invoke('uninstall_agent', { agentType: key });
       addLog(`${name} 卸载成功`, 'success');
-      await fetchEnv();
+      // 同安装：包状态与本机版本分属两份缓存，都要刷新
+      await Promise.all([fetchEnv(), fetchAgents()]);
       setLatestVersions((prev) => ({ ...prev, [key]: null }));
     } catch (err) {
       const msg = errorMessage(err);

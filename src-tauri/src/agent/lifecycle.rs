@@ -167,11 +167,14 @@ impl Default for LifecycleKind {
     }
 }
 
-/// 派生出的命令（安装/卸载/版本探测）。
+/// 派生出的命令（安装/卸载/更新/版本探测）。
 #[derive(Debug, Clone, Default)]
 pub struct LifecycleCommands {
     pub install: Option<String>,
     pub uninstall: Option<String>,
+    /// 已有安装时的升级命令。npm 不单列（装带版本号的包本身就是升级），
+    /// shell 类型必须用它——`pip install <pkg>` 对已装版本是 no-op，升级得靠 `update_cmd`。
+    pub update: Option<String>,
     pub version_probe: Option<String>,
     pub latest_version: Option<String>,
 }
@@ -355,6 +358,8 @@ impl LifecycleSpec {
                 };
                 Ok(LifecycleCommands {
                     install: Some(join(&|p| format!("npm install -g {}", p))),
+                    // 不带版本号的 npm 规格装的就是 latest，安装即升级，无需单列 update
+                    update: None,
                     uninstall: Some(
                         pkgs.iter()
                             .rev()
@@ -379,6 +384,7 @@ impl LifecycleSpec {
             LifecycleKind::Shell => Ok(LifecycleCommands {
                 install: self.install_cmd.clone().filter(|s| !s.trim().is_empty()),
                 uninstall: self.uninstall_cmd.clone().filter(|s| !s.trim().is_empty()),
+                update: self.update_cmd.clone().filter(|s| !s.trim().is_empty()),
                 version_probe: self.version_cmd.clone().filter(|s| !s.trim().is_empty()),
                 latest_version: self
                     .latest_version_cmd
@@ -625,11 +631,17 @@ mod tests {
         let spec = LifecycleSpec {
             kind: LifecycleKind::Shell,
             install_cmd: Some("pip install hermes-agent".into()),
+            update_cmd: Some("pip install --upgrade hermes-agent".into()),
             version_cmd: Some("hermes --version".into()),
             ..Default::default()
         };
         let cmds = spec.commands().unwrap();
         assert_eq!(cmds.install.as_deref(), Some("pip install hermes-agent"));
+        // shell 的升级必须走 update_cmd：install_cmd 对已装版本是 no-op
+        assert_eq!(
+            cmds.update.as_deref(),
+            Some("pip install --upgrade hermes-agent")
+        );
         assert!(cmds.uninstall.is_none());
     }
 

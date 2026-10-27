@@ -16,7 +16,7 @@
         "runtime": { "command": "hermes", "args": ["acp"] },
         "installCmd": "pip install hermes-agent",
         "uninstallCmd": "pip uninstall hermes-agent -y",
-        "updateCmd": "hermes update",
+        "updateCmd": "pip install --upgrade hermes-agent",
         "versionCmd": "hermes --version",
         "latestVersionCmd": "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version"
       },
@@ -39,7 +39,7 @@
         "runtime": { "command": "hermes", "args": [] },
         "installCmd": "pip install hermes-agent",
         "uninstallCmd": "pip uninstall hermes-agent -y",
-        "updateCmd": "hermes update",
+        "updateCmd": "pip install --upgrade hermes-agent",
         "versionCmd": "hermes --version",
         "latestVersionCmd": "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version"
       },
