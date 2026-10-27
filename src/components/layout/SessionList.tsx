@@ -15,6 +15,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { useI18n } from '../../hooks/useI18n';
 import { SessionListItem } from './SessionListItem';
 import { Select } from '../common/Select';
+import { AgentBadge } from '../common/AgentBadge';
 import { useHostPreviewStore } from '../../stores/hostPreviewStore';
 
 type NewSessionType = string;
@@ -31,11 +32,22 @@ type HostSessionListOutcome =
   | { status: 'ok'; sessions: HostSessionRow[]; nextCursor?: string | null }
   | { status: 'unsupported'; capability: string; hint: string };
 
-/** 宿主会话 `updatedAt` 的本地化展示：缺失给「-」，无法解析时原样展示 */
-function formatHostUpdatedAt(value?: string | null): string {
-  if (!value) return '-';
+/**
+ * 与本地会话列表一致的相对时间（今天 / 昨天 / 月日）。
+ *
+ * 宿主返回的是 ISO 字符串，直接 `toLocaleString()` 又长又挤，放在行尾会把标题压没。
+ */
+function formatHostTime(value?: string | null): string {
+  if (!value) return '';
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return value;
+  const now = new Date();
+  const timeStr = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return `今天 ${timeStr}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `昨天 ${timeStr}`;
+  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
 }
 
 /** 「工作流会话」折叠分组的展开状态（纯 UI 状态，存 localStorage 即可，不入库）。 */
@@ -109,6 +121,9 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const [importingHostId, setImportingHostId] = useState<string | null>(null);
   /** 正在回放（点击预览）的宿主会话 */
   const [previewingHostId, setPreviewingHostId] = useState<string | null>(null);
+  /** 宿主会话批量选择（只支持批量删除；批量导入见下方说明） */
+  const [hostBatchMode, setHostBatchMode] = useState(false);
+  const [selectedHostIds, setSelectedHostIds] = useState<Set<string>>(new Set());
   /** 当前列表数据所属的宿主（换宿主必须重拉，否则会显示上一个宿主的会话） */
   const loadedAgentRef = useRef<string | null>(null);
 
@@ -556,6 +571,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   /** 切换宿主（下拉）：换人必须重拉，否则会显示上一个宿主的会话 */
   const switchHostAgent = useCallback((agentType: string | null) => {
     setAgentType(agentType);
+    // 选中项属于上一个宿主，换了宿主必须清掉
+    setSelectedHostIds(new Set());
     if (!agentType) return;
     // 右侧若还停着上一个宿主的预览，先收掉（否则标题与会话对不上）
     if (hostPreview && hostPreview.agentType !== agentType) closePreview();
@@ -667,6 +684,61 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       showToast(`删除失败: ${errorMessage(err)}`, 'error');
     }
   }, [hostAgent, hostPreview, closePreview]);
+
+  const toggleHostSelect = useCallback((sessionId: string) => {
+    setSelectedHostIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }, []);
+
+  /**
+   * 批量删除宿主会话。
+   *
+   * 逐条调用（ACP 每次都要起一个一次性进程）；结果合并成一条提示，
+   * 避免 N 条会话刷 N 个 toast。不支持删除的适配器（如 hermes）单独说明。
+   */
+  const batchDeleteHostSessions = useCallback(async () => {
+    if (!hostAgent || selectedHostIds.size === 0) return;
+    const ids = Array.from(selectedHostIds);
+    const ok = await confirmDialog({
+      title: '批量删除宿主会话',
+      message: `确定要删除宿主侧的 ${ids.length} 条会话吗？\n\n只删除宿主里的记录，已导入到本应用的会话不受影响。`,
+      confirmText: '删除',
+      danger: true,
+    });
+    if (!ok) return;
+
+    const cwdOf = (id: string) => hostSessions.find((s) => s.sessionId === id)?.cwd ?? null;
+    const deleted: string[] = [];
+    let unsupportedHint: string | null = null;
+    let firstError: string | null = null;
+    for (const id of ids) {
+      try {
+        const outcome = await invoke<{ status: 'ok' | 'unsupported'; hint?: string }>(
+          'acp_delete_host_session',
+          { agentType: hostAgent, hostSessionId: id, cwd: cwdOf(id) },
+        );
+        if (outcome.status === 'ok') deleted.push(id);
+        else unsupportedHint = outcome.hint || unsupportedHint;
+      } catch (err) {
+        firstError = firstError ?? errorMessage(err);
+      }
+    }
+
+    if (deleted.length > 0) {
+      setHostSessions((prev) => prev.filter((s) => !deleted.includes(s.sessionId)));
+      if (hostPreview && deleted.includes(hostPreview.hostSessionId)) closePreview();
+      showToast(`已删除 ${deleted.length} 条宿主会话`, 'success');
+    }
+    if (unsupportedHint) showToast(unsupportedHint, 'warning');
+    else if (firstError) showToast(`删除失败: ${firstError}`, 'error');
+
+    setSelectedHostIds(new Set());
+    if (deleted.length > 0) setHostBatchMode(false);
+  }, [hostAgent, selectedHostIds, hostSessions, hostPreview, closePreview]);
 
   const handleArchive = useCallback(async (id: string) => {
     try {
@@ -847,8 +919,13 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                   key={item.key}
                   onClick={() => {
                     setViewMenuOpen(false);
-                    if (item.key === 'host') enterHostView();
-                    else setView('local');
+                    if (item.key === 'host') {
+                      enterHostView();
+                    } else {
+                      setView('local');
+                      setHostBatchMode(false);
+                      setSelectedHostIds(new Set());
+                    }
                   }}
                   className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left transition-colors hover:opacity-90"
                   style={{
@@ -865,19 +942,35 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
         </div>
         <div className="flex-1" />
         {view === 'host' ? (
-          <button
-            onClick={() => {
-              if (!hostAgent) return;
-              loadedAgentRef.current = hostAgent;
-              void loadHostSessions(hostAgent, undefined, true);
-            }}
-            disabled={!hostAgent || hostListLoading}
-            className="pd-btn pd-btn-sm"
-            style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
-            title={t('sessionList.host.refresh', '刷新宿主会话')}
-          >
-            <RefreshCw size={11} className={hostListLoading ? 'animate-spin' : ''} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setHostBatchMode((v) => !v);
+                setSelectedHostIds(new Set());
+              }}
+              className="pd-btn pd-btn-sm"
+              style={{
+                backgroundColor: hostBatchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
+                color: hostBatchMode ? '#fff' : 'var(--text-secondary)',
+              }}
+              title={t('sessionList.batch.title', '批量操作')}
+            >
+              <ListChecks size={11} />
+            </button>
+            <button
+              onClick={() => {
+                if (!hostAgent) return;
+                loadedAgentRef.current = hostAgent;
+                void loadHostSessions(hostAgent, undefined, true);
+              }}
+              disabled={!hostAgent || hostListLoading}
+              className="pd-btn pd-btn-sm"
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
+              title={t('sessionList.host.refresh', '刷新宿主会话')}
+            >
+              <RefreshCw size={11} className={hostListLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
         ) : (
           <div className="flex items-center gap-1">
             <button
@@ -960,6 +1053,48 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           </button>
         </div>
       )}
+      {/* 宿主会话批量动作条：只提供批量删除。
+          批量导入暂不做——每条导入都要单独拉起一次 ACP 进程并重放整段历史，
+          N 条会话会串行等待 N 次，且会一次性在本地列表里堆出 N 条会话，风险大于收益。 */}
+      {view === 'host' && hostBatchMode && (
+        <div className="flex items-center gap-1 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+          <button
+            onClick={() => setSelectedHostIds(new Set(filteredHostSessions.map((r) => r.sessionId)))}
+            className="pd-btn pd-btn-sm"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="全选"
+          >
+            {t('sessionList.selectAll', '全')}
+          </button>
+          <button
+            onClick={() => setSelectedHostIds(new Set())}
+            className="pd-btn pd-btn-sm"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="取消全选"
+          >
+            {t('sessionList.clearAll', '重')}
+          </button>
+          <div className="w-px h-4 mx-0.5" style={{ backgroundColor: 'var(--border)' }} />
+          <button
+            onClick={() => void batchDeleteHostSessions()}
+            disabled={selectedHostIds.size === 0}
+            className="pd-btn pd-btn-sm pd-btn-danger"
+            title="批量删除宿主会话（只删宿主，本地已导入的副本保留）"
+          >
+            {t('sessionList.batchDelete', '删({count})', { count: selectedHostIds.size })}
+          </button>
+          <div className="flex-1" />
+          <button
+            onClick={() => { setHostBatchMode(false); setSelectedHostIds(new Set()); }}
+            className="pd-btn pd-btn-sm"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="退出批量模式"
+          >
+            {t('sessionList.exitBatch', '退')}
+          </button>
+        </div>
+      )}
+
       {/* Search / 宿主选择：宿主视图复用同一个输入框做客户端过滤 */}
       {view === 'host' ? (
         <div className="px-3 py-1.5 space-y-1.5">
@@ -1051,50 +1186,107 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                 : t('sessionList.import.empty', '宿主暂无会话记录')}
             </div>
           ) : (
-            <div className="py-1">
+            <div className="py-0">
               {filteredHostSessions.map((row) => {
                 const busyPreview = previewingHostId === row.sessionId;
                 const busyImport = importingHostId === row.sessionId;
                 const isPreviewing = hostPreview?.hostSessionId === row.sessionId;
+                const selected = selectedHostIds.has(row.sessionId);
+                const updatedLabel = formatHostTime(row.updatedAt);
                 return (
                   <div
                     key={row.sessionId}
+                    // 与本地会话行保持同一套视觉：内边距/分隔线/选中竖条/悬停才出现的行内动作
+                    className="group px-3 py-2 cursor-pointer transition-colors"
+                    style={{
+                      backgroundColor: selected
+                        ? 'var(--accent-light)'
+                        : isPreviewing
+                          ? 'var(--border)'
+                          : 'transparent',
+                      borderBottom: '1px solid var(--border)',
+                      backgroundImage:
+                        selected || isPreviewing
+                          ? 'linear-gradient(to right, var(--accent) 3px, transparent 3px)'
+                          : undefined,
+                    }}
                     onClick={() => {
+                      if (hostBatchMode) {
+                        toggleHostSelect(row.sessionId);
+                        return;
+                      }
                       if (busyPreview || busyImport) return;
                       void previewHostSession(row);
                     }}
-                    className="mx-2 my-0.5 px-2 py-1.5 rounded-lg cursor-pointer"
-                    style={{
-                      backgroundColor: isPreviewing ? 'var(--accent-light)' : 'transparent',
-                      border: `1px solid ${isPreviewing ? 'var(--accent)' : 'transparent'}`,
-                    }}
                     title={row.cwd || undefined}
                   >
-                    <div className="flex items-center gap-1">
-                      <span className="text-xs truncate flex-1" style={{ color: 'var(--text-primary)' }}>
-                        {busyPreview ? t('sessionList.host.loading', '回放中…') : row.title || '（无标题）'}
-                      </span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); void importHostSession(row); }}
-                        disabled={!!importingHostId}
-                        className="pd-btn p-0.5 rounded shrink-0"
-                        style={{ color: 'var(--accent)' }}
-                        title={t('sessionList.host.import', '导入并继续')}
-                      >
-                        <Download size={11} />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); void deleteHostSession(row); }}
-                        className="pd-btn p-0.5 rounded shrink-0"
-                        style={{ color: 'var(--danger, #dc2626)' }}
-                        title={t('sessionList.host.delete', '删除宿主会话')}
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                    <div className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>
-                      {formatHostUpdatedAt(row.updatedAt)}
-                      {row.cwd ? ` · ${row.cwd}` : ''}
+                    <div className="flex items-start gap-2">
+                      {hostBatchMode && (
+                        <div className="shrink-0 pt-1">
+                          <div
+                            className="w-4 h-4 rounded border flex items-center justify-center transition-colors"
+                            style={{
+                              borderColor: selected ? 'var(--accent)' : 'var(--border)',
+                              backgroundColor: selected ? 'var(--accent)' : 'transparent',
+                            }}
+                          >
+                            {selected && <Check size={10} color="#fff" />}
+                          </div>
+                        </div>
+                      )}
+                      <div className="shrink-0">
+                        <AgentBadge agentType={hostAgent ?? ''} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs truncate">
+                            {busyPreview
+                              ? t('sessionList.host.loading', '回放中…')
+                              : row.title || '（无标题）'}
+                          </span>
+                          {updatedLabel && (
+                            <span
+                              className="text-[10px] shrink-0"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              {updatedLabel}
+                            </span>
+                          )}
+                        </div>
+                        <p
+                          className="text-[10px] mt-0.5 truncate"
+                          style={{ color: 'var(--text-secondary)' }}
+                        >
+                          {row.cwd || '-'}
+                        </p>
+                      </div>
+                      {!hostBatchMode && (
+                        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void importHostSession(row);
+                            }}
+                            disabled={!!importingHostId}
+                            className="pd-btn p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
+                            style={{ color: 'var(--accent)' }}
+                            title={t('sessionList.host.import', '导入并继续')}
+                          >
+                            <Download size={11} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void deleteHostSession(row);
+                            }}
+                            className="p-0.5 rounded transition-all hover:bg-red-500/20 active:scale-90"
+                            style={{ color: '#EF4444' }}
+                            title={t('sessionList.host.delete', '删除宿主会话')}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
