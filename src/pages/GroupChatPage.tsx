@@ -2896,16 +2896,22 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         {rightTab === 'stances' ? (
           <>
             {/* ── 立场快照 tab：独立展示参与者立场（自讨论页移出，节省 overview 空间） ── */}
-            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
-              <Scale size={10} style={{ color: 'var(--accent)' }} />
-              立场快照
-              {stances.length > 0 && (
-                <span className="ml-auto flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
-                  <span>支持 <b style={{ color: 'var(--status-success)' }}>{stanceStats.agree}</b></span>
-                  <span>反对 <b style={{ color: 'var(--status-danger)' }}>{stanceStats.disagree}</b></span>
-                  <span>中立 <b style={{ color: 'var(--text-tertiary)' }}>{stanceStats.neutral}</b></span>
-                </span>
-              )}
+            <div className="px-3 py-2 shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
+              <div className="text-[10px] font-medium flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
+                <Scale size={10} style={{ color: 'var(--accent)' }} />
+                立场快照
+                {stances.length > 0 && (
+                  <span className="ml-auto flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                    <span>支持 <b style={{ color: 'var(--status-success)' }}>{stanceStats.agree}</b></span>
+                    <span>反对 <b style={{ color: 'var(--status-danger)' }}>{stanceStats.disagree}</b></span>
+                    <span>中立 <b style={{ color: 'var(--text-tertiary)' }}>{stanceStats.neutral}</b></span>
+                  </span>
+                )}
+              </div>
+              {/* 说明这块信息为何不在「讨论」里（与 tab 的 tooltip 同口径） */}
+              <div className="mt-0.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                （从讨论页独立，节省空间）
+              </div>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
               {stances.length === 0 && (

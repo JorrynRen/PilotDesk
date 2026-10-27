@@ -168,8 +168,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       icon: <Library size={11} />,
       label: t('titleBar.knowledge', '知识库'),
       title: kbPending > 0
-        ? t('titleBar.knowledge.title.pending', `知识库（${kbPending} 条待核实）`, { count: kbPending })
-        : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
+        ? t('titleBar.knowledge.title.pending', `个人知识库（${kbPending} 条待核实）`, { count: kbPending })
+        : t('titleBar.knowledge.title', '个人知识库'),
     },
     // 飞地：独立路由（/enclave），与知识库同为一等段
     { key: 'enclave', icon: <Boxes size={11} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '飞地：团队内网协作空间') },

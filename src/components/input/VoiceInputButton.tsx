@@ -23,8 +23,6 @@ const MAX_RECORD_SECONDS = 120;
 interface VoiceTarget {
   providerId: string;
   model: string;
-  /** 是否来自设置里的专用转写模型（用于按钮提示措辞） */
-  fromSettings: boolean;
 }
 
 interface VoiceInputButtonProps {
@@ -128,9 +126,9 @@ export function VoiceInputButton({
   const target: VoiceTarget | null = useMemo(
     () =>
       voiceOverride.providerId && voiceOverride.model
-        ? { providerId: voiceOverride.providerId, model: voiceOverride.model, fromSettings: true }
+        ? { providerId: voiceOverride.providerId, model: voiceOverride.model }
         : fallbackTarget && fallbackTarget.providerId && fallbackTarget.model
-          ? { providerId: fallbackTarget.providerId, model: fallbackTarget.model, fromSettings: false }
+          ? { providerId: fallbackTarget.providerId, model: fallbackTarget.model }
           : null,
     [voiceOverride.providerId, voiceOverride.model, fallbackTarget],
   );
@@ -242,8 +240,9 @@ export function VoiceInputButton({
       : recording
         ? `录音中 ${recordSeconds}s（上限 ${MAX_RECORD_SECONDS}s）· 点击结束并识别`
         : target
-          ? `语音输入：用${target.fromSettings ? '设置里的转写模型' : '当前会话模型'} ${target.model} 转写后插入输入框`
-          : '语音输入：请先在 设置 › 语音识别 指定专用转写模型';
+          // 两行提示：第一行给"用哪个模型"，第二行给"去哪改"（比解释转写流程更有用）
+          ? `语音输入：转写模型 ${target.model}\n在 设置>运行与策略>语音识别 中设置`
+          : '语音输入：未配置转写模型\n在 设置>运行与策略>语音识别 中设置';
 
   return (
     <button
