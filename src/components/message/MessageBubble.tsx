@@ -37,6 +37,8 @@ interface MessageBubbleProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+  /** 只读预览（宿主会话回放）：隐藏时间戳——回放消息没有可靠时间，编造一个更误导 */
+  hideTimestamp?: boolean;
 }
 
 function formatTimestamp(ts: number): string {
@@ -48,7 +50,7 @@ function formatTimestamp(ts: number): string {
   return `${y}/${m}/${d} ${time}`;
 }
 
-export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, streamingProgress, confirmation, onEdit, onResend, selectable, selected, onToggleSelect }: MessageBubbleProps) {
+export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, streamingProgress, confirmation, onEdit, onResend, selectable, selected, onToggleSelect, hideTimestamp }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   /** 「存为知识」弹窗：把这条消息显式沉淀进某个知识库（进「待确认」队列） */
   const [saveToKb, setSaveToKb] = useState(false);
@@ -79,7 +81,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
       if (providerName) parts.push(providerName);
       if (apiModel) parts.push(apiModel);
     }
-    return parts.join(' | ') + ' ' + time;
+    return hideTimestamp ? parts.join(' | ') : parts.join(' | ') + ' ' + time;
   };
 
   const handleCopy = useCallback(async () => {
@@ -303,12 +305,16 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
           {isUser ? (
             <>
               <span className="text-[11px]" style={{ color: 'var(--text-primary)' }}>User</span>
-              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatTimestamp(message.timestamp)}</span>
+              {!hideTimestamp && (
+                <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatTimestamp(message.timestamp)}</span>
+              )}
             </>
           ) : message.role === 'system' ? (
             <>
               <span className="text-[11px] opacity-60" style={{ color: 'var(--text-tertiary)' }}>系统提示</span>
-              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatTimestamp(message.timestamp)}</span>
+              {!hideTimestamp && (
+                <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatTimestamp(message.timestamp)}</span>
+              )}
             </>
           ) : (
             <>

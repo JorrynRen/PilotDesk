@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, memo, type ReactNode } from 'react';
-import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef, useCallback, memo, type ReactNode } from 'react';
+import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal, RefreshCw, Trash2, Download, Check } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -15,6 +15,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { useI18n } from '../../hooks/useI18n';
 import { SessionListItem } from './SessionListItem';
 import { Select } from '../common/Select';
+import { useHostPreviewStore } from '../../stores/hostPreviewStore';
 
 type NewSessionType = string;
 
@@ -86,16 +87,30 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const [sessionTemperature, setSessionTemperature] = useState(0.7);
   const [sessionMaxTokens, setSessionMaxTokens] = useState<number | undefined>(undefined);
   const [creating, setCreating] = useState(false);
-  // 「从宿主导入会话」二级视图：状态只在本次弹窗生命周期内有效（关闭即清空）
-  const [hostImportOpen, setHostImportOpen] = useState(false);
+  // 「宿主会话」视图：视图/选中宿主/右侧预览态放在独立 store（预览不是库里的会话）
+  const {
+    view,
+    agentType: hostAgent,
+    preview: hostPreview,
+    setView,
+    setAgentType,
+    openPreview,
+    closePreview,
+  } = useHostPreviewStore();
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  /** 宿主会话列表（按当前选中的宿主加载） */
   const [hostSessions, setHostSessions] = useState<HostSessionRow[]>([]);
   const [hostNextCursor, setHostNextCursor] = useState<string | null>(null);
   const [hostListLoading, setHostListLoading] = useState(false);
   const [hostLoadingMore, setHostLoadingMore] = useState(false);
   const [hostListError, setHostListError] = useState<string | null>(null);
-  /** agentType → 不支持说明：本次弹窗内记住，切到别的 agent 会重新探测 */
+  /** agentType → 不支持说明：记住结论，切回来不再重复探测 */
   const [hostUnsupported, setHostUnsupported] = useState<Record<string, string>>({});
   const [importingHostId, setImportingHostId] = useState<string | null>(null);
+  /** 正在回放（点击预览）的宿主会话 */
+  const [previewingHostId, setPreviewingHostId] = useState<string | null>(null);
+  /** 当前列表数据所属的宿主（换宿主必须重拉，否则会显示上一个宿主的会话） */
+  const loadedAgentRef = useRef<string | null>(null);
 
   const { getDisplayName, getEnabledAgentTypes, getTransport } = useAgentRegistry();
 
@@ -346,15 +361,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       setCustomCwd('');
       setSessionTemperature(0.7);
       setSessionMaxTokens(undefined);
-      // 导入视图是本次弹窗的临时态：重开弹窗一律回到一级视图
-      setHostImportOpen(false);
-      setHostSessions([]);
-      setHostNextCursor(null);
-      setHostListLoading(false);
-      setHostLoadingMore(false);
-      setHostListError(null);
-      setHostUnsupported({});
-      setImportingHostId(null);
+      // 宿主会话列表属于左侧视图，不再随弹窗开关重置
 
       // Auto-select first enabled agent
       const enabled = getEnabledAgentTypes().filter(t => t !== 'api');
@@ -475,80 +482,151 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     }
   };
 
-  // ── 从宿主导入会话 ──
-  const loadHostSessions = useCallback(async (agentType: string, cursor?: string) => {
-    const more = !!cursor;
-    if (more) setHostLoadingMore(true);
-    else {
-      setHostListLoading(true);
-      setHostSessions([]);
-      setHostNextCursor(null);
-    }
-    setHostListError(null);
-    try {
-      const outcome = await invoke<HostSessionListOutcome>('acp_list_sessions', {
-        agentType,
-        cwd: customCwd.trim() || null,
-        cursor: cursor ?? null,
-      });
-      if (outcome.status === 'unsupported') {
-        setHostUnsupported((prev) => ({ ...prev, [agentType]: outcome.hint }));
+  // ── 宿主会话（左侧「宿主会话」视图）──
+  /** 可用的 ACP 宿主：只有环境检测判定可用的才出现（起不来就列不出会话来） */
+  const hostAgents = useMemo(
+    () =>
+      getEnabledAgentTypes().filter(
+        (t) => t !== 'api' && getTransport(t) === 'acp' && isAgentAvailable(envInfo, t),
+      ),
+    [envInfo, getEnabledAgentTypes, getTransport],
+  );
+
+  const loadHostSessions = useCallback(
+    async (agentType: string, cursor?: string, force = false) => {
+      if (!agentType) return;
+      const more = !!cursor;
+      if (more) setHostLoadingMore(true);
+      else {
+        setHostListLoading(true);
         setHostSessions([]);
         setHostNextCursor(null);
-      } else {
-        setHostSessions((prev) => {
-          if (!more) return outcome.sessions;
-          // 分页去重：对端可能把同一会话重复返回
-          const seen = new Set(prev.map((s) => s.sessionId));
-          return [...prev, ...outcome.sessions.filter((s) => !seen.has(s.sessionId))];
-        });
-        setHostNextCursor(outcome.nextCursor ?? null);
+        // 手动刷新要重新探测：上次的"不支持"结论可能因为适配器升级而失效
+        if (force) {
+          setHostUnsupported((prev) => {
+            const next = { ...prev };
+            delete next[agentType];
+            return next;
+          });
+        }
       }
+      setHostListError(null);
+      try {
+        const outcome = await invoke<HostSessionListOutcome>('acp_list_sessions', {
+          agentType,
+          cwd: customCwd.trim() || null,
+          cursor: cursor ?? null,
+        });
+        if (outcome.status === 'unsupported') {
+          setHostUnsupported((prev) => ({ ...prev, [agentType]: outcome.hint }));
+          setHostSessions([]);
+          setHostNextCursor(null);
+        } else {
+          setHostSessions((prev) => {
+            if (!more) return outcome.sessions;
+            // 分页去重：对端可能把同一会话重复返回
+            const seen = new Set(prev.map((s) => s.sessionId));
+            return [...prev, ...outcome.sessions.filter((s) => !seen.has(s.sessionId))];
+          });
+          setHostNextCursor(outcome.nextCursor ?? null);
+        }
+      } catch (err) {
+        const msg = errorMessage(err);
+        setHostListError(msg);
+        showToast(`加载宿主会话失败: ${msg}`, 'error');
+      } finally {
+        setHostListLoading(false);
+        setHostLoadingMore(false);
+      }
+    },
+    [customCwd],
+  );
+
+  /** 进入宿主视图（下拉切换 / 弹窗入口共用）：挑第一个可用宿主并加载 */
+  const enterHostView = useCallback(() => {
+    setView('host');
+    const target = hostAgent && hostAgents.includes(hostAgent) ? hostAgent : hostAgents[0];
+    if (!target) return;
+    if (target !== hostAgent) setAgentType(target);
+    if (loadedAgentRef.current === target || hostUnsupported[target]) return;
+    loadedAgentRef.current = target;
+    void loadHostSessions(target);
+  }, [hostAgent, hostAgents, hostUnsupported, setView, setAgentType, loadHostSessions]);
+
+  /** 切换宿主（下拉）：换人必须重拉，否则会显示上一个宿主的会话 */
+  const switchHostAgent = useCallback((agentType: string | null) => {
+    setAgentType(agentType);
+    if (!agentType) return;
+    // 右侧若还停着上一个宿主的预览，先收掉（否则标题与会话对不上）
+    if (hostPreview && hostPreview.agentType !== agentType) closePreview();
+    if (loadedAgentRef.current === agentType || hostUnsupported[agentType]) return;
+    loadedAgentRef.current = agentType;
+    void loadHostSessions(agentType);
+  }, [hostPreview, hostUnsupported, closePreview, setAgentType, loadHostSessions]);
+
+  // 环境检测结果晚于进入宿主视图时（启动早期常见）补一次自动加载。
+  // 用定时器异步触发：effect 内同步 setState 会触发级联渲染（react-hooks/set-state-in-effect）
+  useEffect(() => {
+    if (view !== 'host') return;
+    if (hostAgents.length === 0) return;
+    if (loadedAgentRef.current) return;
+    const timer = setTimeout(() => enterHostView(), 0);
+    return () => clearTimeout(timer);
+  }, [view, hostAgents, enterHostView]);
+
+  /** 点击行：只读回放整段历史（不落库） */
+  const previewHostSession = useCallback(async (row: HostSessionRow) => {
+    if (!hostAgent || previewingHostId) return;
+    setPreviewingHostId(row.sessionId);
+    try {
+      const messages = await invoke<Array<{ role: 'user' | 'assistant'; content: string }>>(
+        'acp_load_host_session',
+        { agentType: hostAgent, hostSessionId: row.sessionId, cwd: row.cwd ?? null },
+      );
+      openPreview({
+        agentType: hostAgent,
+        hostSessionId: row.sessionId,
+        title: (row.title || '').trim() || '导入的会话',
+        cwd: row.cwd ?? null,
+        messages: messages.map((m, i) => ({
+          id: `${row.sessionId}-${i}`,
+          role: m.role,
+          content: m.content,
+        })),
+      });
     } catch (err) {
-      const msg = errorMessage(err);
-      setHostListError(msg);
-      showToast(`加载宿主会话失败: ${msg}`, 'error');
+      showToast(`预览失败: ${errorMessage(err)}`, 'error');
     } finally {
-      setHostListLoading(false);
-      setHostLoadingMore(false);
+      setPreviewingHostId(null);
     }
-  }, [customCwd]);
+  }, [hostAgent, previewingHostId, openPreview]);
 
-  const openHostImport = useCallback(() => {
-    setHostImportOpen(true);
-    setHostSessions([]);
-    setHostNextCursor(null);
-    setHostListError(null);
-    // 本弹窗内已知不支持：直接展示说明，不再重复拉一次
-    if (!hostUnsupported[newSessionType]) void loadHostSessions(newSessionType);
-  }, [hostUnsupported, newSessionType, loadHostSessions]);
-
-  const handleImportHost = useCallback(async (row: HostSessionRow) => {
-    if (importingHostId) return;
-    const agentType = newSessionType;
+  /** 导入为本地会话并切过去（宿主侧会话已导入过则直接打开） */
+  const importHostSession = useCallback(async (row: HostSessionRow) => {
+    if (!hostAgent || importingHostId) return;
     const existing = sessions.find(
-      (s) => s.agentType === agentType && s.agentSessionId === row.sessionId,
+      (s) => s.agentType === hostAgent && s.agentSessionId === row.sessionId,
     );
     if (existing) {
-      setShowNewDialog(false);
+      closePreview();
       void selectSession(existing.id);
       return;
     }
 
     setImportingHostId(row.sessionId);
-    const cwd = (row.cwd || customCwd).trim() || undefined;
+    const cwd = row.cwd ?? null;
     const title = (row.title || '').trim() || '导入的会话';
     let createdId: string | null = null;
     try {
-      const local = await createSession(agentType, cwd, title);
+      const local = await createSession(hostAgent, cwd ?? undefined, title);
       createdId = local.id;
       const count = await invoke<number>('acp_import_host_session', {
-        agentType,
+        agentType: hostAgent,
         hostSessionId: row.sessionId,
-        cwd: cwd ?? null,
+        cwd,
         localSessionId: local.id,
       });
-      setShowNewDialog(false);
+      closePreview();
       showToast(`已导入 ${count} 条消息`, 'success');
       // 导入的消息已落库，选中后从库里加载回来
       void selectSession(local.id);
@@ -561,7 +639,34 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     } finally {
       setImportingHostId(null);
     }
-  }, [importingHostId, newSessionType, sessions, customCwd, createSession, deleteSession, selectSession]);
+  }, [hostAgent, importingHostId, sessions, createSession, deleteSession, selectSession, closePreview]);
+
+  /** 删除宿主侧会话（只删宿主，本地已导入副本保留） */
+  const deleteHostSession = useCallback(async (row: HostSessionRow) => {
+    if (!hostAgent) return;
+    const ok = await confirmDialog({
+      title: '删除宿主会话',
+      message: `确定要删除宿主侧的会话「${(row.title || '').trim() || '（无标题）'}」吗？\n\n只删除宿主里的记录，已导入到本应用的会话不受影响。`,
+      confirmText: '删除',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const outcome = await invoke<{ status: 'ok' | 'unsupported'; hint?: string }>(
+        'acp_delete_host_session',
+        { agentType: hostAgent, hostSessionId: row.sessionId, cwd: row.cwd ?? null },
+      );
+      if (outcome.status === 'unsupported') {
+        showToast(outcome.hint || '该适配器不支持删除宿主会话', 'warning');
+        return;
+      }
+      showToast('已删除宿主会话', 'success');
+      setHostSessions((prev) => prev.filter((s) => s.sessionId !== row.sessionId));
+      if (hostPreview?.hostSessionId === row.sessionId) closePreview();
+    } catch (err) {
+      showToast(`删除失败: ${errorMessage(err)}`, 'error');
+    }
+  }, [hostAgent, hostPreview, closePreview]);
 
   const handleArchive = useCallback(async (id: string) => {
     try {
@@ -664,12 +769,22 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   };
 
   const currentApiProvider = apiProviders.find((p) => p.id === selectedApiProvider);
-  // 「从宿主导入会话」入口：仅 ACP 接入且环境检测判定可用的 CLI Agent
+  // 新建会话弹窗里的快捷入口：仅 ACP 接入且环境检测判定可用（点它跳到左侧宿主视图）
   const hostImportAvailable =
     newSessionType !== 'api' &&
     getTransport(newSessionType) === 'acp' &&
     isAgentAvailable(envInfo, newSessionType);
-  const hostUnsupportedHint = hostUnsupported[newSessionType] ?? null;
+  /** 当前宿主的"不支持会话列表"说明（没有则为空） */
+  const hostUnsupportedHint = hostAgent ? hostUnsupported[hostAgent] ?? null : null;
+  /** 宿主会话的客户端过滤（标题 / 目录） */
+  const filteredHostSessions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return hostSessions;
+    return hostSessions.filter(
+      (r) =>
+        (r.title || '').toLowerCase().includes(q) || (r.cwd || '').toLowerCase().includes(q),
+    );
+  }, [hostSessions, searchQuery]);
 
   return (
     <aside
@@ -677,45 +792,110 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       // 壳层风格：面板靠"底色 + 圆角 + 与相邻面板之间的 8px 缝"区分，不再画 border-right（见 App.tsx 工作区）
       style={{ backgroundColor: 'var(--bg-side)', ...style }}
     >
-      {/* Header */}
+      {/* Header：标题即视图切换器（本地会话 / 宿主会话）；右侧只放图标按钮，
+          260px 宽度下才放得下（原先三个按钮都带文字，已无余量） */}
       <div className="flex items-center px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>
-        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{t('sessionList.title', '会话')}</span>
-        <div className="flex-1" />
-        <div className="flex items-center gap-1">
+        <div className="relative">
           <button
-            onClick={() => setBatchMode(!batchMode)}
-            className="pd-btn pd-btn-sm"
-            style={{
-              backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
-              color: batchMode ? '#fff' : 'var(--text-secondary)',
-            }}
-            title={t('sessionList.batch.title', '批量操作')}
+            onClick={() => setViewMenuOpen((v) => !v)}
+            className="flex items-center gap-1 text-xs font-medium"
+            style={{ color: 'var(--text-primary)' }}
+            title={t('sessionList.view.title', '切换会话视图')}
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-            {t('sessionList.batch', '批量')}
+            <span className="truncate">
+              {view === 'host'
+                ? t('sessionList.host.listTitle', '宿主会话')
+                : t('sessionList.title', '会话')}
+            </span>
+            <ChevronDown size={12} style={{ color: 'var(--text-tertiary)' }} />
           </button>
-          <button
-            onClick={toggleArchived}
-            className="pd-btn pd-btn-sm"
-            style={{ color: showArchived ? 'var(--accent)' : 'var(--text-secondary)', backgroundColor: showArchived ? 'var(--accent-light)' : 'var(--bg-tertiary)' }}
-            title={t('sessionList.archive.title', '归档')}
-          >
-            <Archive size={11} />
-            {t('sessionList.archive', '归档')}
-          </button>
-          <button
-            onClick={() => setShowNewDialog(true)}
-            className="pd-btn pd-btn-sm pd-btn-primary"
-            title={t('sessionList.new.title', '新建会话')}
-          >
-            <Plus size={11} />
-            {t('sessionList.new', '新建')}
-          </button>
+          {viewMenuOpen && (
+            <>
+              {/* 点空白处关闭：菜单是页内浮层，不引入额外组件 */}
+              <div className="fixed inset-0 z-10" onClick={() => setViewMenuOpen(false)} />
+              <div
+                className="absolute left-0 top-full mt-1 z-20 py-1 rounded-lg overflow-hidden"
+                style={{
+                  minWidth: 132,
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                }}
+              >
+                {([
+                  { key: 'local' as const, label: t('sessionList.view.local', '本地会话') },
+                  { key: 'host' as const, label: t('sessionList.view.host', '宿主会话') },
+                ]).map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => {
+                      setViewMenuOpen(false);
+                      if (item.key === 'host') enterHostView();
+                      else setView('local');
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left transition-colors hover:opacity-90"
+                    style={{
+                      color: view === item.key ? 'var(--accent)' : 'var(--text-secondary)',
+                      backgroundColor: view === item.key ? 'var(--accent-light)' : 'transparent',
+                    }}
+                  >
+                    {item.label}
+                    {view === item.key && <Check size={11} className="ml-auto" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
+        <div className="flex-1" />
+        {view === 'host' ? (
+          <button
+            onClick={() => {
+              if (!hostAgent) return;
+              loadedAgentRef.current = hostAgent;
+              void loadHostSessions(hostAgent, undefined, true);
+            }}
+            disabled={!hostAgent || hostListLoading}
+            className="pd-btn pd-btn-sm"
+            style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
+            title={t('sessionList.host.refresh', '刷新宿主会话')}
+          >
+            <RefreshCw size={11} className={hostListLoading ? 'animate-spin' : ''} />
+          </button>
+        ) : (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setBatchMode(!batchMode)}
+              className="pd-btn pd-btn-sm"
+              style={{
+                backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
+                color: batchMode ? '#fff' : 'var(--text-secondary)',
+              }}
+              title={t('sessionList.batch.title', '批量操作')}
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+            </button>
+            <button
+              onClick={toggleArchived}
+              className="pd-btn pd-btn-sm"
+              style={{ color: showArchived ? 'var(--accent)' : 'var(--text-secondary)', backgroundColor: showArchived ? 'var(--accent-light)' : 'var(--bg-tertiary)' }}
+              title={t('sessionList.archive.title', '归档')}
+            >
+              <Archive size={11} />
+            </button>
+            <button
+              onClick={() => setShowNewDialog(true)}
+              className="pd-btn pd-btn-sm pd-btn-primary"
+              title={t('sessionList.new.title', '新建会话')}
+            >
+              <Plus size={11} />
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Batch operations row - above search */}
-      {batchMode && (
+      {/* Batch operations row - above search（仅本地会话视图有意义） */}
+      {batchMode && view === 'local' && (
         <div className="flex items-center gap-1 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
           <button
             onClick={selectAll}
@@ -763,22 +943,154 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           </button>
         </div>
       )}
-      {/* Search */}
-      <div className="px-3 py-1.5">
-        <div className="relative">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t('sessionList.search.placeholder', '搜索会话...')}
-            className="search-input"
-          />
+      {/* Search / 宿主选择：宿主视图复用同一个输入框做客户端过滤 */}
+      {view === 'host' ? (
+        <div className="px-3 py-1.5 space-y-1.5">
+          {hostAgents.length > 1 ? (
+            <Select
+              value={hostAgent ?? ''}
+              onChange={(v) => switchHostAgent(v || null)}
+              options={hostAgents.map((a) => ({ value: a, label: getDisplayName(a) }))}
+              className="w-full"
+            />
+          ) : hostAgents.length === 1 ? (
+            <div className="text-[10px] px-1 truncate" style={{ color: 'var(--text-tertiary)' }}>
+              {getDisplayName(hostAgents[0])}
+            </div>
+          ) : null}
+          <div className="relative">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t('sessionList.host.search', '搜索宿主会话...')}
+              className="search-input"
+            />
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="px-3 py-1.5">
+          <div className="relative">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t('sessionList.search.placeholder', '搜索会话...')}
+              className="search-input"
+            />
+          </div>
+        </div>
+      )}
 
-      {/* Loading */}
-      {isLoadingSessions ? (
+      {/* 宿主会话列表：与本应用会话互斥展示 */}
+      {view === 'host' ? (
+        <div
+          className="flex-1 overflow-y-auto pd-scroll-stable"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            if (!hostNextCursor || hostLoadingMore || !hostAgent) return;
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 24) {
+              void loadHostSessions(hostAgent, hostNextCursor);
+            }
+          }}
+        >
+          {hostAgents.length === 0 ? (
+            <div className="px-4 py-6 text-center text-xs leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+              没有可用的 ACP 宿主。请先在「设置 › 运行与策略 › 环境检测」确认适配器可用。
+            </div>
+          ) : hostListLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="pilotdesk-spinner" />
+            </div>
+          ) : hostUnsupportedHint ? (
+            <div
+              className="m-2 px-3 py-2 rounded-lg text-xs leading-relaxed"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            >
+              {hostUnsupportedHint}
+            </div>
+          ) : hostListError ? (
+            <div className="p-2 space-y-2">
+              <div
+                className="px-3 py-2 rounded-lg text-xs leading-relaxed"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              >
+                {hostListError}
+              </div>
+              <button
+                onClick={() => hostAgent && void loadHostSessions(hostAgent, undefined, true)}
+                className="pd-btn pd-btn-sm"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                {t('sessionList.import.retry', '重试')}
+              </button>
+            </div>
+          ) : filteredHostSessions.length === 0 ? (
+            <div className="px-4 py-6 text-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
+              {searchQuery.trim()
+                ? t('sessionList.host.noMatch', '没有匹配的宿主会话')
+                : t('sessionList.import.empty', '宿主暂无会话记录')}
+            </div>
+          ) : (
+            <div className="py-1">
+              {filteredHostSessions.map((row) => {
+                const busyPreview = previewingHostId === row.sessionId;
+                const busyImport = importingHostId === row.sessionId;
+                const isPreviewing = hostPreview?.hostSessionId === row.sessionId;
+                return (
+                  <div
+                    key={row.sessionId}
+                    onClick={() => {
+                      if (busyPreview || busyImport) return;
+                      void previewHostSession(row);
+                    }}
+                    className="mx-2 my-0.5 px-2 py-1.5 rounded-lg cursor-pointer"
+                    style={{
+                      backgroundColor: isPreviewing ? 'var(--accent-light)' : 'transparent',
+                      border: `1px solid ${isPreviewing ? 'var(--accent)' : 'transparent'}`,
+                    }}
+                    title={row.cwd || undefined}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs truncate flex-1" style={{ color: 'var(--text-primary)' }}>
+                        {busyPreview ? t('sessionList.host.loading', '回放中…') : row.title || '（无标题）'}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void importHostSession(row); }}
+                        disabled={!!importingHostId}
+                        className="pd-btn p-0.5 rounded shrink-0"
+                        style={{ color: 'var(--accent)' }}
+                        title={t('sessionList.host.import', '导入并继续')}
+                      >
+                        <Download size={11} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void deleteHostSession(row); }}
+                        className="pd-btn p-0.5 rounded shrink-0"
+                        style={{ color: 'var(--danger, #dc2626)' }}
+                        title={t('sessionList.host.delete', '删除宿主会话')}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                    <div className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>
+                      {formatHostUpdatedAt(row.updatedAt)}
+                      {row.cwd ? ` · ${row.cwd}` : ''}
+                    </div>
+                  </div>
+                );
+              })}
+              {hostLoadingMore && (
+                <div className="py-2 text-center text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  {t('sessionList.import.loadingMore', '加载中…')}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : isLoadingSessions ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="pilotdesk-spinner" />
         </div>
@@ -849,116 +1161,9 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
           >
             <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
-              {hostImportOpen
-                ? t('sessionList.import.title', '从宿主导入会话')
-                : t('sessionList.dialog.title', '新建会话')}
+              {t('sessionList.dialog.title', '新建会话')}
             </h3>
 
-            {hostImportOpen ? (
-              <div className="space-y-3 mb-4">
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => setHostImportOpen(false)}
-                    className="pd-btn pd-btn-sm"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-                  >
-                    ← {t('sessionList.import.back', '返回')}
-                  </button>
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {getDisplayName(newSessionType)}
-                  </span>
-                </div>
-
-                {hostListLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <div className="pilotdesk-spinner" />
-                  </div>
-                ) : hostUnsupportedHint ? (
-                  <div
-                    className="px-3 py-2 rounded-lg text-xs"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-                  >
-                    {hostUnsupportedHint}
-                  </div>
-                ) : hostListError ? (
-                  <div className="space-y-2">
-                    <div
-                      className="px-3 py-2 rounded-lg text-xs"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-                    >
-                      {hostListError}
-                    </div>
-                    <button
-                      onClick={() => void loadHostSessions(newSessionType)}
-                      className="pd-btn pd-btn-sm"
-                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                    >
-                      {t('sessionList.import.retry', '重试')}
-                    </button>
-                  </div>
-                ) : hostSessions.length === 0 ? (
-                  <div className="px-3 py-6 text-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                    {t('sessionList.import.empty', '宿主暂无会话记录')}
-                  </div>
-                ) : (
-                  <div
-                    className="max-h-[320px] overflow-y-auto space-y-1"
-                    onScroll={(e) => {
-                      const el = e.currentTarget;
-                      if (!hostNextCursor || hostLoadingMore) return;
-                      if (el.scrollHeight - el.scrollTop - el.clientHeight < 24) {
-                        void loadHostSessions(newSessionType, hostNextCursor);
-                      }
-                    }}
-                  >
-                    {hostSessions.map((row) => {
-                      const existing = sessions.find(
-                        (s) => s.agentType === newSessionType && s.agentSessionId === row.sessionId,
-                      );
-                      const busy = importingHostId === row.sessionId;
-                      return (
-                        <div
-                          key={row.sessionId}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
-                          style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
-                              {row.title || '（无标题）'}
-                            </div>
-                            <div
-                              className="text-[10px] truncate"
-                              title={row.cwd || undefined}
-                              style={{ color: 'var(--text-tertiary)' }}
-                            >
-                              {formatHostUpdatedAt(row.updatedAt)} · {row.cwd || '-'}
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => void handleImportHost(row)}
-                            disabled={importingHostId !== null}
-                            className="pd-btn pd-btn-sm shrink-0"
-                            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                          >
-                            {busy
-                              ? t('sessionList.import.importing', '导入中…')
-                              : existing
-                                ? t('sessionList.import.openExisting', '打开已有会话')
-                                : t('sessionList.import.action', '导入')}
-                          </button>
-                        </div>
-                      );
-                    })}
-                    {hostLoadingMore && (
-                      <div className="py-2 text-center text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                        {t('sessionList.import.loadingMore', '加载中…')}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-            <>
             {/* 会话方式：一级「CLI Agent / API Agent」两个按钮 + 二级下拉（与 InputBar 快捷开始同构） */}
             <div className="mb-4">
               {(() => {
@@ -1235,9 +1440,14 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             {/* 底部动作条：次要入口（从宿主导入）与「取消 / 创建」同级，
                 不再夹在表单中间打断填写节奏 */}
             <div className="flex items-center gap-2">
+              {/* 宿主会话管理统一在左侧「宿主会话」视图里做：这里只做跳转，
+                  不再复制一套列表/导入 UI */}
               {hostImportAvailable && (
                 <button
-                  onClick={openHostImport}
+                  onClick={() => {
+                    setShowNewDialog(false);
+                    enterHostView();
+                  }}
                   className="text-xs px-2 py-1.5 rounded-lg transition-colors hover:opacity-80"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
                 >
@@ -1261,8 +1471,6 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                 {creating ? t('sessionList.dialog.creating', '创建中...') : t('sessionList.dialog.create', '创建')}
               </button>
             </div>
-            </>
-            )}
           </div>
         </div>
       )}

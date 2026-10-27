@@ -9,7 +9,10 @@ use tauri::State;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::agent::config::AgentConfig;
-use crate::agent::host_sessions::{list_sessions, load_messages, ListSessionsOutcome};
+use crate::agent::host_sessions::{
+    delete_session, list_sessions, load_messages, DeleteSessionOutcome, ImportedMessage,
+    ListSessionsOutcome,
+};
 use crate::agent::AgentManager;
 use crate::commands::agents::{get_agent_inner, get_agent_transport_inner};
 use crate::utils::errors::AppError;
@@ -188,4 +191,64 @@ pub async fn acp_import_host_session(
     )?;
 
     Ok(messages.len())
+}
+
+/// 只读预览宿主会话：回放消息但**不落库**。
+///
+/// 与导入分开，是为了「只看看」不污染本地会话列表：用户点开预览再关掉，
+/// 本地库不应多出一条会话。
+#[tauri::command]
+pub async fn acp_load_host_session(
+    agent_mgr: State<'_, AsyncMutex<AgentManager>>,
+    state: State<'_, DbState>,
+    agent_type: String,
+    host_session_id: String,
+    cwd: Option<String>,
+) -> Result<Vec<ImportedMessage>, AppError> {
+    let prepared = {
+        let conn = state.get_conn()?;
+        prepare(&conn, &agent_type, cwd.as_deref())?
+    };
+    ensure_ready(&*agent_mgr, &prepared).await?;
+    let cfg = prepared.cfg;
+
+    load_messages(
+        &agent_type,
+        &cfg.command,
+        &cfg.args,
+        cfg.env.as_ref(),
+        &cfg.cwd,
+        &host_session_id,
+    )
+    .await
+    .map_err(AppError::External)
+}
+
+/// 删除宿主侧会话。
+///
+/// 刻意**不跑就绪门禁**：删除是清理动作，不该因为"上次安装/升级失败"被挡住；
+/// 真起不来时由协议错误直接回显（含 stderr 尾部）。
+#[tauri::command]
+pub async fn acp_delete_host_session(
+    state: State<'_, DbState>,
+    agent_type: String,
+    host_session_id: String,
+    cwd: Option<String>,
+) -> Result<DeleteSessionOutcome, AppError> {
+    let prepared = {
+        let conn = state.get_conn()?;
+        prepare(&conn, &agent_type, cwd.as_deref())?
+    };
+    let cfg = prepared.cfg;
+
+    delete_session(
+        &agent_type,
+        &cfg.command,
+        &cfg.args,
+        cfg.env.as_ref(),
+        &cfg.cwd,
+        &host_session_id,
+    )
+    .await
+    .map_err(AppError::External)
 }

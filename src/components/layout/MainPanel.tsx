@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { Users, Workflow } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { MessageList } from '../message/MessageList';
+import { HostSessionPreview } from '../message/HostSessionPreview';
 import { SessionToWorkflowModal } from '../session/SessionToWorkflowModal';
 import { SessionToRoomModal } from '../session/SessionToRoomModal';
 import { InputBar } from './InputBar';
 import { CommandCenter } from './CommandCenter';
 import type { SecurityModeValue } from '../security/SecurityModeSelector';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useHostPreviewStore } from '../../stores/hostPreviewStore';
 import { useGroupChatStore } from '../../stores/groupChatStore';
 import { useTerminal } from '../../TerminalManager';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
@@ -579,6 +581,9 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   const currentSession = sessions.find((s) => s.id === currentSessionId)
     || archivedSessions.find((s) => s.id === currentSessionId)
     || null;
+
+  /** 宿主会话只读预览：整块替换聊天区（预览不是本地会话，不参与发送/审批状态机） */
+  const hostPreview = useHostPreviewStore((s) => s.preview);
 
   const currentAgentType = currentSession?.agentType ?? null;
 
@@ -1219,6 +1224,11 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     securityMode,
     onSecurityModeChange: setSecurityMode,
   };
+
+  // 宿主会话只读预览：整块替换聊天区（数据不落库，返回即回到原视图）
+  if (hostPreview) {
+    return <HostSessionPreview />;
+  }
 
   return (
     <div

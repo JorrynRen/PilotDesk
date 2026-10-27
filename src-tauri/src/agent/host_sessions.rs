@@ -65,6 +65,19 @@ pub struct ImportedMessage {
     pub content: String,
 }
 
+/// `session/delete` 的结果：支持则已删除，不支持则给可直接展示的说明。
+///
+/// 仍按「实际调用结果」判定（`-32601` = 不支持），不依赖 `initialize` 的能力位。
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum DeleteSessionOutcome {
+    Ok,
+    Unsupported {
+        capability: String,
+        hint: String,
+    },
+}
+
 // ──────────────────────────────────────────────
 //  一次性 ACP 子进程
 // ──────────────────────────────────────────────
@@ -377,6 +390,46 @@ async fn load_messages_inner(
         )
         .await
         .map(|_| ())
+}
+
+/// 删除宿主侧的一条会话（`session/delete`）。
+///
+/// 与列表同口径：先握手，再实际调用；`-32601` 即视为不支持（不按 agent 名硬编码）。
+pub async fn delete_session(
+    agent_id: &str,
+    command: &str,
+    args: &[String],
+    env: Option<&Map<String, Value>>,
+    cwd: &str,
+    host_session_id: &str,
+) -> Result<DeleteSessionOutcome, String> {
+    let mut host = AcpHost::spawn(agent_id, command, args, env, cwd).await?;
+    let result = delete_session_inner(&host, host_session_id).await;
+    host.shutdown().await;
+    result.map_err(|e| host.with_stderr(e))
+}
+
+async fn delete_session_inner(
+    host: &AcpHost,
+    host_session_id: &str,
+) -> Result<DeleteSessionOutcome, String> {
+    host.initialize().await?;
+    match host
+        .peer
+        .request_with_timeout(
+            method::SESSION_DELETE,
+            json!({ "sessionId": host_session_id }),
+            HANDSHAKE_TIMEOUT,
+        )
+        .await
+    {
+        Ok(_) => Ok(DeleteSessionOutcome::Ok),
+        Err(e) if is_method_not_found(&e) => Ok(DeleteSessionOutcome::Unsupported {
+            capability: "delete".to_string(),
+            hint: "该适配器没有提供删除会话的能力，请到宿主应用内处理".to_string(),
+        }),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]

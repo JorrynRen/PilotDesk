@@ -108,6 +108,8 @@ pub mod method {
     pub const SESSION_LOAD: &str = "session/load";
     /// 恢复既有会话但**不重放**历史（`sessionCapabilities.resume`）
     pub const SESSION_RESUME: &str = "session/resume";
+    /// 删除宿主侧会话（`sessionCapabilities.delete`；不支持时回 `-32601`）
+    pub const SESSION_DELETE: &str = "session/delete";
     /// 提交一轮用户输入
     pub const SESSION_PROMPT: &str = "session/prompt";
     /// 取消当前回合（通知）
