@@ -3,6 +3,8 @@ import { useAgentStreamStore } from '../stores/agentStreamStore';
 import { useApprovalStore } from '../stores/approvalStore';
 import { useGeneratingStore } from '../stores/generatingStore';
 import { useNotificationStore } from '../stores/notificationStore';
+import { useSessionStore } from '../stores/sessionStore';
+import { useAcpModeStore, type AcpModeOption } from '../stores/acpModeStore';
 
 /**
  * agentEventBus — 模块级单例"agent-*"事件总线（前端统一投影阶段①）。
@@ -124,6 +126,21 @@ function ensureStarted(): void {
     listen<{ sessionId: string; agentSessionId: string }>('agent-session', (event) => {
       dispatch('onSession', event.payload.sessionId, event.payload.agentSessionId);
     }),
+    listen<{ sessionId: string; availableModes: AcpModeOption[]; currentModeId: string | null }>(
+      'agent-session-modes',
+      (event) => {
+        // 宿主模式列表/当前值：每轮建或恢复会话都会回传，写进单例 store 供输入区渲染。
+        // 空列表同样要记（= 该宿主不提供模式，输入区回退到本应用的安全模式）。
+        const { sessionId, availableModes, currentModeId } = event.payload;
+        const st = useSessionStore.getState();
+        const sess =
+          st.sessions.find((s) => s.id === sessionId) ??
+          st.archivedSessions.find((s) => s.id === sessionId);
+        useAcpModeStore
+          .getState()
+          .record(sessionId, sess?.agentType ?? '', availableModes ?? [], currentModeId ?? null);
+      },
+    ),
     listen<{ sessionId: string; toolId: string; toolName: string; arguments: string; riskDescription: string; timeoutSecs?: number }>(
       'agent-approval-required',
       (event) => {

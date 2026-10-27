@@ -10,6 +10,7 @@ import { SkillPicker } from '../input/SkillPicker';
 import { VoiceInputButton } from '../input/VoiceInputButton';
 import { ProjectMemoryDialog } from '../panels/ProjectMemoryDialog';
 import { SecurityModeSelector, type SecurityModeValue } from '../security/SecurityModeSelector';
+import { HostModeSelector } from '../security/HostModeSelector';
 import { Select, type SelectGroup } from '../common/Select';
 import { AgentIcon } from '../common/AgentIcon';
 import { SessionUsageBar } from './SessionUsageBar';
@@ -18,6 +19,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { useSessionDraftStore, GLOBAL_CWD, cliChoice, apiChoice, parseChoice } from '../../stores/sessionDraftStore';
+import { useAcpModeStore } from '../../stores/acpModeStore';
 
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo, isAgentAvailable } from '../../hooks/useEnvInfo';
@@ -137,6 +139,22 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   const setDraftChoice = useSessionDraftStore((s) => s.setChoice);
   const setDraftCwd = useSessionDraftStore((s) => s.setCwd);
   const startNewSession = useSessionStore((s) => s.startNewSession);
+
+  // ── ACP 宿主模式（取代安全模式）──
+  // ACP 的权限档位由宿主定义，直接拉宿主的模式列表让用户选；本应用的安全模式只在
+  // 宿主**不提供模式**时作为兜底审批策略出现（见后端 acp.rs 的 auto_allow_by_security）。
+  const acpAgentType = useMemo(() => {
+    if (session) return getTransport(session.agentType) === 'acp' ? session.agentType : '';
+    const parsed = parseChoice(draftChoice);
+    if (!parsed || parsed.agentType === 'api') return '';
+    return getTransport(parsed.agentType) === 'acp' ? parsed.agentType : '';
+  }, [session, draftChoice, getTransport]);
+  const acpSnapshot = useAcpModeStore((s) =>
+    acpAgentType ? s.snapshotFor(session?.id ?? null, acpAgentType) : undefined,
+  );
+  const acpPinned = useAcpModeStore((s) =>
+    acpAgentType ? s.resolvePinned(session?.id ?? null, acpAgentType) : null,
+  );
 
   // 首次进入会话模式时把两份数据源拉起来（指挥中心等处也会拉，重复调用无害）
   useEffect(() => {
@@ -1039,10 +1057,22 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 )}
               </div>
 
-              {/* 会话安全模式选择器（显示在附件按钮右侧） */}
-              {securityMode && onSecurityModeChange && (
+              {/* 权限档位：ACP 会话用宿主模式（列表来自宿主）；宿主不提供模式时
+                  才显示本应用的安全模式（此时它作为兜底审批策略真正生效） */}
+              {acpAgentType && (!acpSnapshot || acpSnapshot.modes.length > 0) ? (
+                <HostModeSelector
+                  modes={acpSnapshot?.modes ?? []}
+                  pinned={acpPinned}
+                  currentModeId={acpSnapshot?.currentModeId ?? null}
+                  known={Boolean(acpSnapshot)}
+                  dropUp={dropUp}
+                  onChange={(modeId) => {
+                    useAcpModeStore.getState().pin(session?.id ?? null, acpAgentType, modeId);
+                  }}
+                />
+              ) : securityMode && onSecurityModeChange ? (
                 <SecurityModeSelector value={securityMode} onChange={onSecurityModeChange} dropUp={dropUp} />
-              )}
+              ) : null}
 
               {/* 工作目录：已有会话 → 切换该会话目录；无会话 → 选定"快捷开始"的草稿目录（必选）。
                   两条路径都给同一个菜单（选目录 / 使用全局工作空间），避免"新建能选全局、已有会话却不能"。

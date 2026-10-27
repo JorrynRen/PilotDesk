@@ -82,6 +82,8 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
       maxTokens?: number,
       attachments?: Attachment[],
       securityMode?: string,
+      /** ACP 宿主会话模式 id（null/缺省 = 跟随宿主） */
+      acpMode?: string | null,
     ) => {
       try {
         await invoke('agent_send_message_with_config', {
@@ -96,6 +98,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           maxTokens: maxTokens ?? null,
           attachments: attachments && attachments.length > 0 ? attachments : null,
           securityMode: securityMode || 'standard',
+          acpMode: acpMode || null,
         });
       } catch (err) {
         handlersRef.current?.onError?.(sessionId, errorMessage(err));

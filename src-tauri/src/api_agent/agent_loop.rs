@@ -632,7 +632,10 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 /// 审批尺度**只由「工具授权」（`SecurityMode`）决定**，不再有第二套开关：
 /// 模式越严，越低的风险等级也要问；无限制则全放。方向与命令/路径子策略矩阵一致
 /// （L0 最严 → L3 全放），所以「严格」下任何工具调用都会先问一次。
-fn approval_floor(mode: SecurityMode) -> Option<RiskLevel> {
+///
+/// `pub(crate)`：ACP 传输在**宿主不提供 `modes`** 时要用同一套尺度决定
+/// "权限请求要不要打断用户"，避免两处各写一份阈值。
+pub(crate) fn approval_floor(mode: SecurityMode) -> Option<RiskLevel> {
     match mode {
         SecurityMode::Strict => Some(RiskLevel::Low),
         SecurityMode::Standard => Some(RiskLevel::Medium),

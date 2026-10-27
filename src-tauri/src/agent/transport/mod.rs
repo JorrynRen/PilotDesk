@@ -26,6 +26,17 @@ use serde::{Deserialize, Serialize};
 //  事件模型
 // ──────────────────────────────────────────────
 
+/// ACP 对端提供的会话模式（`modes.availableModes` 的一项）。
+///
+/// 模式**取值由宿主自定义**（claude 的 `default`/`bypassPermissions`、codex 的
+/// `read-only`/`agent-full-access`…），本应用不做映射，只原样展示。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AcpMode {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
 /// 统一 Agent 事件：与前端 `agentEventBus` 的 12 类事件一一对应。
 ///
 /// 各传输实现负责把协议事件"投影"到本枚举；上层只认本枚举。
@@ -90,6 +101,15 @@ pub enum UnifiedAgentEvent {
     AgentSessionId {
         session_id: String,
         agent_session_id: String,
+    },
+    /// 对端会话级模式（ACP `modes`）→ `agent-session-modes`
+    ///
+    /// 每轮建/恢复会话都会带回，前端据此渲染宿主模式选择器；
+    /// `available_modes` 为空 = 该宿主不提供模式（前端回退到本应用的审批策略）。
+    SessionModes {
+        session_id: String,
+        available_modes: Vec<AcpMode>,
+        current_mode_id: Option<String>,
     },
     /// 正常结束 → `agent-done`
     Done { session_id: String },
@@ -251,6 +271,15 @@ pub struct AgentConn {
     pub on_pid: Option<PidCallback>,
     /// 审批闸门（`None` = 未接入审批 → 需要授权的请求一律按拒绝处理）
     pub approvals: Option<Arc<dyn ApprovalGate>>,
+    /// 期望的宿主会话模式 id（`None` = 跟随宿主，不调用 `session/set_mode`）。
+    ///
+    /// 只在 ACP 传输生效；由前端按会话/Agent 记录的用户选择传入。
+    pub acp_mode: Option<String>,
+    /// 会话安全模式（`None` = 标准）。
+    ///
+    /// **仅作兜底**：ACP 宿主提供了 `modes` 时权限完全交给宿主，本值不参与判定；
+    /// 宿主不提供模式时才按它决定"权限请求要不要打断用户"。
+    pub security_mode: Option<crate::api_agent::agent_loop::SecurityMode>,
 }
 
 /// 进程启动回调（`Fn` 而非 `FnMut`：可能被多线程共享）。

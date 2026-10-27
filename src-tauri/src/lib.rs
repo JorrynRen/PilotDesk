@@ -427,6 +427,8 @@ async fn agent_send_message_with_config(
     attachments: Option<Vec<Attachment>>,
     // 会话安全模式（strict/standard/relaxed/unrestricted，缺省标准；本消息有效）
     security_mode: Option<String>,
+    // ACP 宿主会话模式 id（None = 跟随宿主；仅 ACP 接入使用，随消息生效）
+    acp_mode: Option<String>,
 ) -> Result<(), String> {
     // ── API Agent 路径：使用 AgentLoop ──
     if agent_type == "api" {
@@ -546,6 +548,9 @@ async fn agent_send_message_with_config(
                 resolved_cwd.as_deref().unwrap_or_default(),
                 agent_session_id.as_deref(),
                 gate,
+                // 宿主提供会话模式时它不参与判定，仅作"宿主无模式"时的兜底审批策略
+                security_mode.as_deref().and_then(SecurityMode::from_str),
+                acp_mode.as_deref(),
             )
             .await;
             return result;

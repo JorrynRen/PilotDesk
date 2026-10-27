@@ -565,6 +565,9 @@ impl AgentManager {
             abort: Arc::clone(&aborted),
             on_pid: Some(on_pid),
             approvals: None,
+            // 本地 CLI 兼容路径不接 ACP 模式/审批策略（其权限由启动参数模板决定）
+            acp_mode: None,
+            security_mode: None,
         };
 
         let mut session =
@@ -1085,6 +1088,10 @@ pub async fn run_transport_session(
     cwd: &str,
     agent_session_id: Option<&str>,
     approvals: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>>,
+    // 会话安全模式（仅 ACP 兜底路径使用：宿主不提供 modes 时决定要不要打断用户）
+    security_mode: Option<crate::api_agent::agent_loop::SecurityMode>,
+    // 用户固定的宿主会话模式 id（None = 跟随宿主；仅 ACP 使用）
+    acp_mode: Option<&str>,
 ) -> Result<(), String> {
     use crate::agent::transport::{
         build_session, AgentConn, AgentError, PromptInput, UnifiedAgentEvent,
@@ -1182,6 +1189,21 @@ pub async fn run_transport_session(
                 serde_json::json!({ "sessionId": sid_evt, "agentSessionId": agent_session_id }),
             );
         }
+        UnifiedAgentEvent::SessionModes {
+            available_modes,
+            current_mode_id,
+            ..
+        } => {
+            // 前端据此渲染宿主模式选择器；空列表 = 该宿主不提供模式（回退安全模式）
+            let _ = app_evt.emit(
+                "agent-session-modes",
+                serde_json::json!({
+                    "sessionId": sid_evt,
+                    "availableModes": available_modes,
+                    "currentModeId": current_mode_id,
+                }),
+            );
+        }
         UnifiedAgentEvent::ApprovalRequired {
             call_id,
             name,
@@ -1238,6 +1260,11 @@ pub async fn run_transport_session(
         abort: std::sync::Arc::clone(&abort),
         on_pid: None,
         approvals,
+        acp_mode: acp_mode
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        security_mode,
     };
 
     let handle = session

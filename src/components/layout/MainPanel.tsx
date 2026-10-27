@@ -10,6 +10,7 @@ import { InputBar } from './InputBar';
 import { CommandCenter } from './CommandCenter';
 import type { SecurityModeValue } from '../security/SecurityModeSelector';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useAcpModeStore } from '../../stores/acpModeStore';
 import { useHostPreviewStore } from '../../stores/hostPreviewStore';
 import { useGroupChatStore } from '../../stores/groupChatStore';
 import { useTerminal } from '../../TerminalManager';
@@ -1081,11 +1082,16 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         const systemPrompt = await getModePrompt(mode);
         // Pass agent_session_id for session continuity (Claude Code --resume)
         const agentSessionId = sess.agentSessionId || undefined;
-        sendChat(sid, message, mode, sess.agentType, sess.cwd || undefined, systemPrompt, agentSessionId, undefined, undefined, attachments, securityMode);
+        // ACP 会话的权限档位由宿主提供：把用户固定的模式随消息带上（null = 跟随宿主，
+        // 后端不调用 session/set_mode）。其它接入方式不传。
+        const acpMode = getTransport(sess.agentType) === 'acp'
+          ? useAcpModeStore.getState().resolvePinned(sess.id, sess.agentType)
+          : null;
+        sendChat(sid, message, mode, sess.agentType, sess.cwd || undefined, systemPrompt, agentSessionId, undefined, undefined, attachments, securityMode, acpMode);
       }
       return true;
     },
-    [sendChat, addMessage, securityMode],
+    [sendChat, addMessage, securityMode, getTransport],
   );
 
   /**

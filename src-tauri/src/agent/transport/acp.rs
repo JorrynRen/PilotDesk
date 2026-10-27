@@ -23,9 +23,11 @@ use tokio::io::AsyncReadExt;
 
 use super::jsonrpc::JsonRpcPeer;
 use crate::agent::transport::{
-    AgentConn, AgentError, AgentSession, Capabilities, EventSink, PermissionDecision, PromptInput,
-    PromptOutput, SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
+    AcpMode, AgentConn, AgentError, AgentSession, Capabilities, EventSink, PermissionDecision,
+    PromptInput, PromptOutput, SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
 };
+use crate::api_agent::agent_loop::{approval_floor, SecurityMode};
+use crate::tools::RiskLevel;
 
 /// 本实现使用的 ACP 协议版本（客户端在 `initialize` 中声明）。
 pub const ACP_PROTOCOL_VERSION: u32 = 1;
@@ -110,6 +112,8 @@ pub mod method {
     pub const SESSION_RESUME: &str = "session/resume";
     /// 删除宿主侧会话（`sessionCapabilities.delete`；不支持时回 `-32601`）
     pub const SESSION_DELETE: &str = "session/delete";
+    /// 切换会话级模式（`modes.availableModes` 里的 id；模式集由宿主自定义）
+    pub const SESSION_SET_MODE: &str = "session/set_mode";
     /// 提交一轮用户输入
     pub const SESSION_PROMPT: &str = "session/prompt";
     /// 取消当前回合（通知）
@@ -338,6 +342,60 @@ pub fn permission_response(options: &[PermissionOption], allowed: bool) -> Value
     json!({ "outcome": { "outcome": "selected", "optionId": option_id } })
 }
 
+// ──────────────────────────────────────────────
+//  会话模式 / 兜底审批策略
+// ──────────────────────────────────────────────
+
+/// 解析会话响应里的 `modes`（`session/new` / `resume` / `load` 都会带回）。
+///
+/// 模式**取值由宿主自定义**，这里只做形状归一，不做任何语义映射。
+pub fn parse_session_modes(resp: &Value) -> (Vec<AcpMode>, Option<String>) {
+    let modes = &resp["modes"];
+    let available = modes["availableModes"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let id = m["id"].as_str()?.to_string();
+                    Some(AcpMode {
+                        id,
+                        name: m["name"].as_str().unwrap_or_default().to_string(),
+                        description: m["description"].as_str().map(str::to_string),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (available, modes["currentModeId"].as_str().map(str::to_string))
+}
+
+/// 权限请求的粗粒度风险：只看 ACP 标准的 `toolCall.kind`。
+///
+/// 分级与既有工具口径对齐（`execute_command`=High、写文件=Medium、读=Low）；
+/// `kind` 缺失或为未知值 → 按中风险（对应「标准模式」文案里的"未知…需确认"）。
+pub fn classify_tool_risk(params: &Value) -> RiskLevel {
+    match params["toolCall"]["kind"].as_str().unwrap_or("") {
+        "read" | "search" | "think" | "fetch" => RiskLevel::Low,
+        "edit" | "move" | "switch_mode" => RiskLevel::Medium,
+        "delete" | "execute" => RiskLevel::High,
+        // `other`、空串、协议未来新增的 kind：一律按中风险
+        _ => RiskLevel::Medium,
+    }
+}
+
+/// 宿主未提供 `modes` 时：按安全模式决定"这条权限请求要不要打断用户"。
+///
+/// 返回 `true` = 直接放行（不发审批卡）；`false` = 照常问人。
+/// 阈值与 API Agent 共用 [`approval_floor`]，不另写一套尺度。
+pub fn auto_allow_by_security(security: Option<SecurityMode>, params: &Value) -> bool {
+    match approval_floor(security.unwrap_or_default()) {
+        // NULL 档（无限制）：一律放行
+        None => true,
+        // 低于阈值 → 不打扰；达到/超过阈值 → 问人
+        Some(floor) => classify_tool_risk(params) < floor,
+    }
+}
+
 #[cfg(test)]
 mod permission_tests {
     use super::*;
@@ -423,6 +481,90 @@ mod permission_tests {
             permission_response(&only_reject, true)["outcome"]["optionId"],
             "r1"
         );
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 会话响应里的 modes 形状归一（三种响应同构）；缺失时给空列表 + None。
+    #[test]
+    fn parses_session_modes() {
+        let resp = json!({
+            "sessionId": "s1",
+            "modes": {
+                "currentModeId": "agent",
+                "availableModes": [
+                    { "id": "read-only", "name": "Read-only", "description": "Ask before edits" },
+                    { "id": "agent", "name": "Auto review" }
+                ]
+            }
+        });
+        let (modes, current) = parse_session_modes(&resp);
+        assert_eq!(current.as_deref(), Some("agent"));
+        assert_eq!(modes.len(), 2);
+        assert_eq!(modes[0].id, "read-only");
+        assert_eq!(modes[1].description, None);
+
+        let (empty, none) = parse_session_modes(&json!({ "sessionId": "s2" }));
+        assert!(empty.is_empty());
+        assert_eq!(none, None);
+    }
+
+    /// `toolCall.kind` → 风险：与既有工具口径对齐；未知/缺失按中风险。
+    #[test]
+    fn classifies_tool_risk_by_kind() {
+        let risk = |kind: &str| classify_tool_risk(&json!({ "toolCall": { "kind": kind } }));
+        assert_eq!(risk("read"), RiskLevel::Low);
+        assert_eq!(risk("search"), RiskLevel::Low);
+        assert_eq!(risk("think"), RiskLevel::Low);
+        assert_eq!(risk("fetch"), RiskLevel::Low);
+        assert_eq!(risk("edit"), RiskLevel::Medium);
+        assert_eq!(risk("move"), RiskLevel::Medium);
+        assert_eq!(risk("switch_mode"), RiskLevel::Medium);
+        assert_eq!(risk("execute"), RiskLevel::High);
+        assert_eq!(risk("delete"), RiskLevel::High);
+        assert_eq!(risk("other"), RiskLevel::Medium);
+        assert_eq!(risk("brand-new-kind"), RiskLevel::Medium);
+        // kind 缺失
+        assert_eq!(
+            classify_tool_risk(&json!({ "toolCall": {} })),
+            RiskLevel::Medium
+        );
+        assert_eq!(classify_tool_risk(&json!({})), RiskLevel::Medium);
+    }
+
+    /// 兜底审批策略：四档 × 三档风险。宿主有模式时这条路径不会被执行。
+    #[test]
+    fn auto_allow_matrix() {
+        let allow = |mode: SecurityMode, kind: &str| {
+            auto_allow_by_security(Some(mode), &json!({ "toolCall": { "kind": kind } }))
+        };
+        // 严格：一律问（Low 也要问）
+        assert!(!allow(SecurityMode::Strict, "read"));
+        assert!(!allow(SecurityMode::Strict, "edit"));
+        assert!(!allow(SecurityMode::Strict, "execute"));
+        // 标准：只放行低风险
+        assert!(allow(SecurityMode::Standard, "read"));
+        assert!(!allow(SecurityMode::Standard, "edit"));
+        assert!(!allow(SecurityMode::Standard, "execute"));
+        // 宽松：放行低/中，高危仍问
+        assert!(allow(SecurityMode::Relaxed, "read"));
+        assert!(allow(SecurityMode::Relaxed, "edit"));
+        assert!(!allow(SecurityMode::Relaxed, "execute"));
+        // 无限制：全放
+        assert!(allow(SecurityMode::Unrestricted, "execute"));
+        // 未传安全模式 → 标准
+        assert!(auto_allow_by_security(
+            None,
+            &json!({ "toolCall": { "kind": "read" } })
+        ));
+        assert!(!auto_allow_by_security(
+            None,
+            &json!({ "toolCall": { "kind": "edit" } })
+        ));
     }
 }
 
@@ -698,6 +840,14 @@ impl AgentSession for AcpSession {
         // 2b) session/request_permission：权限请求 → 审批闸门
         // 安全默认：闸门缺失、或超时未决 → **拒绝**（绝不默认放行）；
         // 且只在**真有闸门**时才发审批卡——没闸门却发卡，只会让用户点了没反应。
+        //
+        // 权限语义归属：
+        // - 宿主提供 `modes`（会话建立后才知道，故用共享标志）→ 完全交给宿主，
+        //   这里保持"有请求就问人"，不做客户端二次裁决；
+        // - 宿主不提供 `modes` → 回退到本应用的安全模式（兜底审批策略）。
+        let host_modes_available = Arc::new(AtomicBool::new(false));
+        let host_modes_perm = Arc::clone(&host_modes_available);
+        let security_perm = conn.security_mode;
         let tx_perm = evt_tx.clone();
         let sid_perm = self.session_id.clone();
         let gate_perm = conn.approvals.clone();
@@ -714,6 +864,42 @@ impl AgentSession for AcpSession {
                         .map(|d| d.as_millis())
                         .unwrap_or(0)
                 );
+
+                // 兜底策略（仅宿主未提供模式时生效）：低风险请求直接放行，不打断用户。
+                // 固定选 `allow_once`：不做 `allow_always`，避免把"本次放行"持久化进宿主会话。
+                if !host_modes_perm.load(Ordering::Relaxed)
+                    && auto_allow_by_security(security_perm, &params)
+                {
+                    match pick_option_id(&options, PermissionDecision::Allow) {
+                        Some(option_id) => {
+                            log::info!(
+                                "[acp] 按会话安全模式自动放行权限请求: kind={} session={}",
+                                params["toolCall"]["kind"].as_str().unwrap_or(""),
+                                sid_perm
+                            );
+                            let peer_auto = peer.clone();
+                            if let Some(id) = id {
+                                tokio::spawn(async move {
+                                    peer_auto
+                                        .respond(
+                                            id,
+                                            Ok(json!({
+                                                "outcome": { "outcome": "selected", "optionId": option_id }
+                                            })),
+                                        )
+                                        .await;
+                                });
+                            }
+                            return;
+                        }
+                        // 对端没给 allow 类选项：不能凭空放行，退回人工审批
+                        None => log::warn!(
+                            "[acp] 自动放行失败（对端未提供 allow 类选项），转人工审批: session={}",
+                            sid_perm
+                        ),
+                    }
+                }
+
                 let gate = gate_perm.clone();
 
                 if gate.is_some() {
@@ -909,6 +1095,62 @@ impl AgentSession for AcpSession {
                 session_id: self.session_id.clone(),
                 agent_session_id: remote,
             });
+        }
+
+        // ── 5) 会话模式（`modes` 由 `new`/`resume`/`load` 三种响应其一带回）──
+        // 模式取值由宿主自定义，本应用只原样展示，不做映射；宿主提供模式时，
+        // 权限语义完全交给它（见 2b），这里的标志位就是那条分界的开关。
+        let (available_modes, current_mode_id) = parse_session_modes(&resp);
+        let host_has_modes = !available_modes.is_empty();
+        host_modes_available.store(host_has_modes, Ordering::Relaxed);
+        // 空列表也要发：前端据此区分"宿主不提供模式（回退安全模式）"与"尚未得知"
+        self.emit(UnifiedAgentEvent::SessionModes {
+            session_id: self.session_id.clone(),
+            available_modes: available_modes.clone(),
+            current_mode_id: current_mode_id.clone(),
+        });
+        log::info!(
+            "[acp] 会话模式: session={} current={:?} available={:?}",
+            self.session_id,
+            current_mode_id,
+            available_modes.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
+        );
+
+        // 每轮显式写回用户选择的模式：进程是每轮重建的，且实测 codex-acp 的
+        // `set_mode` **不跨进程持久**，不写回就等于没选。
+        if let Some(want) = conn
+            .acp_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if !host_has_modes {
+                log::warn!(
+                    "[acp] 宿主未提供会话模式，忽略期望值 {}: session={}",
+                    want,
+                    self.session_id
+                );
+            } else if !available_modes.iter().any(|m| m.id == want) {
+                // 适配器升级后 id 可能变化：不阻断本轮，前端会按最新列表纠正选择
+                log::warn!(
+                    "[acp] 期望模式 {} 不在宿主可用列表中（当前 {:?}），本轮按宿主当前模式执行",
+                    want,
+                    current_mode_id
+                );
+            } else if let Some(remote) = self.remote_id.clone() {
+                match peer
+                    .request_with_timeout(
+                        method::SESSION_SET_MODE,
+                        json!({ "sessionId": remote, "modeId": want }),
+                        HANDSHAKE_TIMEOUT,
+                    )
+                    .await
+                {
+                    Ok(_) => log::info!("[acp] 已切换到宿主模式 {}: session={}", want, self.session_id),
+                    // 切换失败不阻断本轮：用户至少还能继续对话，日志留痕便于排查
+                    Err(e) => log::warn!("[acp] session/set_mode 失败（继续本轮）: {}", e),
+                }
+            }
         }
 
         // ACP 天生具备结构化能力（工具事件/思考/常驻会话/会话恢复）；
