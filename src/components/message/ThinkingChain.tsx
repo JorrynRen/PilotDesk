@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Wrench } from 'lucide-react';
 import type { ThinkingChainStep } from '../layout/MainPanel';
 import { collapseBlankLines } from './markdownText';
 import { ApprovalCard } from '../confirmation/ApprovalCard';
@@ -37,11 +38,11 @@ function toolKey(id: string): string {
  *   （isStreaming=false）、群聊任务完成后均自动折叠（defaultCollapsed 变化同步）。
  * - 条目档：面板内每一条消息（推理步骤 / 工具调用 / 文件变更）默认折叠为一行，
  *   点击展开该条的完整明细。工具调用行直接内嵌完成状态：
- *   `🔧 调用 edit_file ✅ 完成`（调用中无徽标，完成后 ✅/❌）——工具结果不再单独成行。
+ *   `扳手图标 调用 edit_file ✅ 完成`（调用中无徽标，完成后 ✅/❌）——工具结果不再单独成行。
  *
  * 展开规则：所有条目（推理步骤 / 工具调用 / 文件变更）默认折叠为一行，点击展开/收起明细；
  * 用户点击后以用户状态为准，无任何自动展开干扰。工具调用行内嵌完成状态：
- * `🔧 调用 edit_file ✅ 完成`（调用中无徽标，完成后 ✅/❌）。
+ * `扳手图标 调用 edit_file ✅ 完成`（调用中无徽标，完成后 ✅/❌）。
  */
 export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys, sessionId }: ThinkingChainProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -258,12 +259,17 @@ export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys, se
             const expanded = resolveExpanded(key, t.id, !t.done);
             return (
               <div key={key} className="py-0.5">
-                {/* 工具调用行：🔧 调用 xxx + 完成徽标（✅/❌，调用中无） */}
+                {/* 工具调用行：扳手图标（与设置-工具管理一致）+ 调用 xxx + 完成徽标（✅/❌，调用中无） */}
                 <button
                   className="w-full flex items-center gap-1.5 text-left cursor-pointer hover:opacity-80"
                   onClick={() => toggleItem(key)}
                 >
-                  <span className="text-[10px] shrink-0 mt-0.5">🔧</span>
+                  <Wrench
+                    size={11}
+                    className="shrink-0"
+                    style={{ color: 'var(--text-secondary)' }}
+                    aria-hidden="true"
+                  />
                   <span className="text-[11px] min-w-0 flex-1" style={{ color: 'var(--text-secondary)' }}>
                     调用 <code className="text-[10px] px-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>{t.name}</code>
                   </span>
