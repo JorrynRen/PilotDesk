@@ -1083,7 +1083,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   onChange={onSecurityModeChange}
                   dropUp={dropUp}
                   disabled={cliSecurityDisabled}
-                  disabledReason="本地 CLI 接入的权限由该 CLI 自身的启动参数决定，本应用无法逐条审批；如需调整请修改该 Agent 的启动参数"
+                  disabledReason="本地 CLI 的权限由它自己的启动参数决定，本应用无法逐条审批；预置模板默认跳过审批（全放行），如需收紧请修改该 Agent 的启动参数"
                 />
               ) : null}
 
