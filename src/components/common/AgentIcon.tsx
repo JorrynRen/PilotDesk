@@ -14,36 +14,64 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
-/** 图片图标的底板：浅色（默认）/ 深色（给浅色矢量图标用）/ 关闭 */
-export type IconPlate = 'light' | 'dark' | 'none';
+/**
+ * 图片图标的底板。
+ *
+ * - `light`（默认）：**主题色淡染**的浅底（主题色 16% + 白）。保留主题感，
+ *   同时亮度足够承托「透明底黑色矢量」；`color-mix` 不可用时自动退回纯白。
+ * - `accent`：纯主题色实底。视觉最贴合主题，但黑色矢量的对比度会掉到
+ *   3.5–6:1（取决于主题），只建议给彩色/白色图标用。
+ * - `dark`：深色底，给浅色（白色）矢量图标用。
+ * - `none`：不垫底板（外层已有底板时）。
+ */
+export type IconPlate = 'light' | 'accent' | 'dark' | 'none';
 
 interface AgentIconProps {
   icon?: string;
   size?: number;
   className?: string;
   fallback?: React.ReactNode;
-  /** 底板覆盖：默认 light；白色矢量图标传 dark，确实不需要底板时传 none */
+  /** 底板覆盖：默认 light；白色矢量图标传 dark，纯主题色实底传 accent，已有底板传 none */
   plate?: IconPlate;
 }
 
 /** 底板样式：外框固定为 `size`，图片按 78% 内缩，视觉尺寸与不加底板时接近 */
 function plateStyle(size: number, plate: IconPlate): React.CSSProperties | undefined {
   if (plate === 'none') return undefined;
-  return {
+  const base: React.CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     width: size,
     height: size,
     borderRadius: Math.max(3, Math.round(size * 0.24)),
-    backgroundColor: plate === 'light' ? 'rgba(255,255,255,0.94)' : 'rgba(17,24,39,0.88)',
-    // 1px 内描边：浅色底板在浅色主题下也能与白色背景区分开
-    boxShadow:
-      plate === 'light'
-        ? 'inset 0 0 0 1px rgba(15,23,42,0.10)'
-        : 'inset 0 0 0 1px rgba(255,255,255,0.16)',
     flex: '0 0 auto',
     verticalAlign: 'middle',
+  };
+
+  if (plate === 'dark') {
+    return {
+      ...base,
+      backgroundColor: 'rgba(17,24,39,0.88)',
+      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.16)',
+    };
+  }
+
+  if (plate === 'accent') {
+    return {
+      ...base,
+      backgroundColor: 'var(--accent)',
+      boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
+    };
+  }
+
+  // light：主题色淡染。先写 backgroundColor 作兜底，再用 background 覆盖——
+  // 浏览器不支持 color-mix 时整条 background 声明会被丢弃，底色退回白色。
+  return {
+    ...base,
+    backgroundColor: '#ffffff',
+    background: 'color-mix(in srgb, var(--accent) 16%, #ffffff)',
+    boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent)',
   };
 }
 
