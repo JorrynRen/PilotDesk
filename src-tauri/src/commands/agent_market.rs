@@ -1247,6 +1247,12 @@ async fn run_install(
     ready.installed_version = installed_version.clone();
     set_pkg_state(state, agent_type, ready)?;
 
+    // 回填环境检测缓存（detect_env 有 120s TTL）：否则更新完立刻刷新，
+    // 市场与环境检测都还会拿旧版本比较，出现"已更新但仍显示可更新/旧版本"。
+    if let Some(v) = installed_version.as_deref() {
+        crate::commands::env::remember_agent_version(agent_type, v);
+    }
+
     // ACP：把 conn 的启动命令换成解析后的运行时（有 bin 用 bin，否则 npm exec 兜底）
     {
         let conn = state.get_conn()?;
@@ -1403,6 +1409,12 @@ pub async fn agent_market_update(
     agent_type: String,
     allow_unverified: Option<bool>,
 ) -> Result<AgentConfig, AppError> {
+    // 更新前先强制刷新目录缓存：否则写回的 `agents.version` / `dist_source.registry_version`
+    // 仍是 24h 前的快照，会出现"适配器已经升级、本地清单版本号却停在旧值"的困惑。
+    // `load(true)` 拉取失败会自动回退旧缓存/内置快照，离线也不会挡住更新。
+    if let Err(e) = registry::load(true).await {
+        log::warn!("[AgentMarket] 更新前刷新目录失败，继续使用缓存: {}", e);
+    }
     let (config, transport) = {
         let conn = state.get_conn()?;
         let config = agents::get_agent_inner(&conn, &agent_type)?

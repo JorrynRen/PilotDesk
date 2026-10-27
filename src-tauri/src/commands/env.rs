@@ -460,6 +460,19 @@ pub(crate) fn cached_agent_versions() -> std::collections::HashMap<String, Strin
         .unwrap_or_default()
 }
 
+/// 安装 / 更新成功后回填环境检测缓存里的版本。
+///
+/// `detect_env` 有 120s 缓存，不回填的话更新完立刻打开两个页面仍会看到旧版本
+/// （"刚升级完却仍显示可更新"）。只改缓存，不触发新的探测。
+pub(crate) fn remember_agent_version(agent_type: &str, version: &str) {
+    if let Ok(mut guard) = LAST_DETECT.write() {
+        if let Some((_, info)) = guard.as_mut() {
+            info.agent_versions
+                .insert(agent_type.to_string(), Some(version.to_string()));
+        }
+    }
+}
+
 /// 最近一次检测得到的 Agent 健康度（按 agent_type，各自带时间戳）。
 ///
 /// 会话门禁直接读它：ACP 的可用性判定要真跑一遍握手，不能在每次建会话/发消息时重做。
