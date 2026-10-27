@@ -561,17 +561,6 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     [customCwd],
   );
 
-  /** 进入宿主视图（下拉切换 / 弹窗入口共用）：挑第一个可用宿主并加载 */
-  const enterHostView = useCallback(() => {
-    setView('host');
-    const target = hostAgent && hostAgents.includes(hostAgent) ? hostAgent : hostAgents[0];
-    if (!target) return;
-    if (target !== hostAgent) setAgentType(target);
-    if (loadedAgentRef.current === target || hostUnsupported[target]) return;
-    loadedAgentRef.current = target;
-    void loadHostSessions(target);
-  }, [hostAgent, hostAgents, hostUnsupported, setView, setAgentType, loadHostSessions]);
-
   /** 切换宿主（下拉）：换人必须重拉，否则会显示上一个宿主的会话 */
   const switchHostAgent = useCallback((agentType: string | null) => {
     setAgentType(agentType);
@@ -584,6 +573,31 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     loadedAgentRef.current = agentType;
     void loadHostSessions(agentType);
   }, [hostPreview, hostUnsupported, closePreview, setAgentType, loadHostSessions]);
+
+  /**
+   * 进入宿主视图（下拉切换 / 弹窗入口共用）。
+   *
+   * `preferred` 是调用方指定的宿主（如新建会话弹窗里用户选中的 ACP Agent）：
+   * 传了就优先用它，否则沿用上次选中的，最后才回退到第一个可用宿主。
+   */
+  const enterHostView = useCallback(
+    (preferred?: string | null) => {
+      setView('host');
+      const target =
+        (preferred && hostAgents.includes(preferred) ? preferred : null) ??
+        (hostAgent && hostAgents.includes(hostAgent) ? hostAgent : hostAgents[0]);
+      if (!target) return;
+      // 换宿主走同一套逻辑（清选择、收掉对不上的预览、重拉列表）
+      if (target !== hostAgent) {
+        switchHostAgent(target);
+        return;
+      }
+      if (loadedAgentRef.current === target || hostUnsupported[target]) return;
+      loadedAgentRef.current = target;
+      void loadHostSessions(target);
+    },
+    [hostAgent, hostAgents, hostUnsupported, setView, switchHostAgent, loadHostSessions],
+  );
 
   // 环境检测结果晚于进入宿主视图时（启动早期常见）补一次自动加载。
   // 用定时器异步触发：effect 内同步 setState 会触发级联渲染（react-hooks/set-state-in-effect）
@@ -1705,7 +1719,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                 <button
                   onClick={() => {
                     setShowNewDialog(false);
-                    enterHostView();
+                    // 带上弹窗里选中的 ACP Agent：否则会恒落到第一个可用宿主
+                    enterHostView(newSessionType);
                   }}
                   className="text-xs px-2 py-1.5 rounded-lg transition-colors hover:opacity-80"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
