@@ -168,7 +168,7 @@ export function HostModeSelector({
             className="px-3 pt-1.5 pb-1 text-[10px]"
             style={{ color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}
           >
-            模式由宿主提供 · 切换后从下一条消息生效，并对本会话持续生效
+            模式由宿主提供 · 切换后从下一条消息生效
           </div>
         </div>
       )}
