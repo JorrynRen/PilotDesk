@@ -74,6 +74,18 @@ impl Drop for PendingCleanup {
     }
 }
 
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // 兜底回收：会话对象被丢弃时（panic、future 被 cancel、应用退出），
+        // 若没人显式 `kill()`，子进程就会变成孤儿。这里同步发终止信号（Drop 里不能 await）。
+        // 读循环只持有 `Weak<Inner>`，所以最后一个 peer 句柄释放时必定走到这里。
+        if let Ok(mut child) = self.child.try_lock() {
+            let _ = child.start_kill();
+        }
+        // stdin 随 Inner 一起释放（管道关闭），对端读到 EOF 也会自行退出
+    }
+}
+
 impl JsonRpcPeer {
     /// 接管一个已 `spawn` 的子进程，并启动后台读循环。
     pub fn new(mut child: Child) -> Result<Self, String> {
@@ -92,22 +104,32 @@ impl JsonRpcPeer {
             inner: Arc::clone(&inner),
         };
 
-        // 后台读循环：解析每一行并分发（响应 → pending；请求/通知 → handler）
-        let reader = peer.clone();
+        // 后台读循环：解析每一行并分发（响应 → pending；请求/通知 → handler）。
+        //
+        // **只持 `Weak<Inner>`**：以前持强引用会让 `Arc<Inner>`（连带 Child 句柄）活到进程
+        // 自然退出为止，于是"丢弃会话对象"这条兜底路径永远不生效——ACP 每轮新建一个进程，
+        // 一旦某个收尾分支漏掉 `close()`，就会留下常驻孤儿（现场：`hermes acp` 挂了几天）。
+        // 改为弱引用后，peer 句柄一释放，`Inner::drop` 即终止子进程，读循环随之读到 EOF 退出。
+        let reader = Arc::downgrade(&inner);
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) => {
+                        let Some(inner) = reader.upgrade() else {
+                            // 最后一个 peer 句柄已释放（`Inner::drop` 已发终止信号）
+                            break;
+                        };
                         if line.trim().is_empty() {
                             continue;
                         }
                         // 任何一行入站报文都算"对端在活动"（含通知/请求/响应）
-                        if let Ok(mut t) = reader.inner.last_activity.lock() {
+                        if let Ok(mut t) = inner.last_activity.lock() {
                             *t = Instant::now();
                         }
+                        let reader_peer = JsonRpcPeer { inner };
                         match serde_json::from_str::<Value>(&line) {
-                            Ok(v) => reader.dispatch(v).await,
+                            Ok(v) => reader_peer.dispatch(v).await,
                             Err(e) => log::warn!("[jsonrpc] 丢弃不可解析的行: {}", e),
                         }
                     }
@@ -125,9 +147,11 @@ impl JsonRpcPeer {
             }
             // 读循环结束 = 对端已断开。必须把在途请求全部唤醒为错误：
             // 否则它们会一直干等到各自超时（ACP 回合表现为"对端已死却仍显示思考中"）。
-            let mut pending = reader.inner.pending.lock().await;
-            for (_id, tx) in pending.drain() {
-                let _ = tx.send(Err("对端连接已断开（进程退出或 stdout 关闭）".to_string()));
+            if let Some(inner) = reader.upgrade() {
+                let mut pending = inner.pending.lock().await;
+                for (_id, tx) in pending.drain() {
+                    let _ = tx.send(Err("对端连接已断开（进程退出或 stdout 关闭）".to_string()));
+                }
             }
         });
 

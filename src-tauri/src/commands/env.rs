@@ -289,7 +289,9 @@ async fn probe_acp_session(conn_json: &str) -> Result<(), String> {
         .current_dir(&cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        // 探测失败/提前返回也不留孤儿适配器
+        .kill_on_drop(true);
     if let Some(env) = v.get("env").and_then(|e| e.as_object()) {
         for (k, val) in env {
             if let Some(s) = val.as_str() {
@@ -300,6 +302,7 @@ async fn probe_acp_session(conn_json: &str) -> Result<(), String> {
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 ACP 进程失败: {}", e))?;
+    let child_pid = child.id();
 
     // stderr 必须看：对端把真正的失败原因（依赖缺失、登录提示）写在这里
     let stderr_text = Arc::new(StdMutex::new(String::new()));
@@ -339,7 +342,11 @@ async fn probe_acp_session(conn_json: &str) -> Result<(), String> {
     }
     .await;
 
-    // 探测完立刻结束进程：绝不留下 serving 态的孤儿适配器
+    // 探测完立刻结束进程：绝不留下 serving 态的孤儿适配器。
+    // 先按 pid 杀进程树（npx 形态会派生 node 子进程），再走句柄 kill 兜底。
+    if let Some(pid) = child_pid {
+        crate::agent::transport::acp::kill_process_tree(pid);
+    }
     peer.kill().await;
 
     result.map_err(|e| {

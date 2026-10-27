@@ -14,7 +14,7 @@
 //! 本仓库已有先例（Codex `mcp-server` 被 App Server 取代），协议会变。
 
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -425,6 +425,69 @@ mod permission_tests {
 }
 
 // ──────────────────────────────────────────────
+//  子进程回收
+// ──────────────────────────────────────────────
+
+/// 仍在运行的 ACP 子进程 pid。
+///
+/// 正常收尾（`close()` / 会话对象 Drop）会把自己摘掉；应用退出时没人有机会收尾，
+/// 由 [`kill_all_live_sessions`] 按 pid 连整棵进程树一起强杀，避免留下孤儿。
+///
+/// 为什么按 pid 而不是持有 Child：退出回调是**同步**上下文，拿不到 tokio 的锁，
+/// 也无法 await `child.kill()`；`taskkill /T /F` 还能一并带走 npx 派生的 node 子进程。
+static LIVE_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+fn register_pid(pid: u32) {
+    if let Ok(mut v) = LIVE_PIDS.lock() {
+        v.push(pid);
+    }
+}
+
+fn unregister_pid(pid: u32) {
+    if let Ok(mut v) = LIVE_PIDS.lock() {
+        v.retain(|p| *p != pid);
+    }
+}
+
+/// 强杀一棵进程树（Windows 用 `taskkill /T /F`，其余平台直接 `kill -9`）。
+///
+/// 供「一次性探测」复用：`npx` 形态下真正干活的是它派生的 node，只 kill 父进程会留残。
+pub(crate) fn kill_process_tree(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = crate::utils::process::hidden_command("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = crate::utils::process::hidden_command("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+    }
+}
+
+/// 应用退出时强杀所有仍在运行的 ACP 进程树。
+///
+/// 只处理"退出时还没收尾"的那部分：正常回合结束的进程早已被 `close()` 摘除。
+pub fn kill_all_live_sessions() {
+    let pids: Vec<u32> = LIVE_PIDS
+        .lock()
+        .map(|mut v| std::mem::take(&mut *v))
+        .unwrap_or_default();
+    if pids.is_empty() {
+        return;
+    }
+    log::info!(
+        "[acp] 应用退出：强杀 {} 个仍在运行的 ACP 进程（含其子进程树）",
+        pids.len()
+    );
+    for pid in pids {
+        kill_process_tree(pid);
+    }
+}
+
+// ──────────────────────────────────────────────
 //  AcpSession：会话面实现
 // ──────────────────────────────────────────────
 
@@ -446,6 +509,8 @@ pub struct AcpSession {
     abort: Arc<AtomicBool>,
     /// 活跃度看门狗的状态（与 `session/update` / 权限处理器共享）
     idle: Arc<IdleState>,
+    /// 子进程 pid（0 = 已收尾）。退出时按它强杀进程树，`close()` / Drop 时摘除。
+    child_pid: AtomicU32,
 }
 
 impl AcpSession {
@@ -459,6 +524,7 @@ impl AcpSession {
             text_buf: Arc::new(Mutex::new(String::new())),
             abort: Arc::new(AtomicBool::new(false)),
             idle: Arc::new(IdleState::default()),
+            child_pid: AtomicU32::new(0),
         }
     }
 
@@ -527,7 +593,9 @@ impl AgentSession for AcpSession {
             .current_dir(&conn.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // Child 句柄被丢弃时兜底终止（与 `Inner::drop` 的 start_kill 双保险）
+            .kill_on_drop(true);
 
         // 适配器要求的环境变量（官方目录 npx 条目可能带，如禁用自更新）：
         // 在 conn 里以 `env` 对象保存，启动时注入。
@@ -541,6 +609,11 @@ impl AgentSession for AcpSession {
         let mut child = cmd
             .spawn()
             .map_err(|e| AgentError::Connect(format!("启动 ACP 进程失败: {}", e)))?;
+        // 登记 pid：应用退出时（没人有机会走 close）由全局回收兜底
+        if let Some(pid) = child.id() {
+            self.child_pid.store(pid, Ordering::Relaxed);
+            register_pid(pid);
+        }
 
         // stderr **必须捕获**：ACP 对端把"依赖未安装"这类致命信息写在 stderr，
         // 若丢成 Stdio::null()，失败只会表现为 initialize 超时（30s），用户看不到真正原因。
@@ -990,10 +1063,32 @@ impl AgentSession for AcpSession {
     }
 
     async fn close(&self, _handle: &SessionHandle) -> Result<(), AgentError> {
+        // 先按 pid 强杀整棵进程树（npx 形态下真正干活的是 node 子进程，
+        // 只 kill 父进程会把它留下），再走句柄 kill 做兜底与回收。
+        let pid = self.child_pid.swap(0, Ordering::Relaxed);
+        if pid != 0 {
+            kill_process_tree(pid);
+        }
         if let Some(peer) = &self.peer {
             peer.kill().await;
         }
+        if pid != 0 {
+            unregister_pid(pid);
+        }
         Ok(())
+    }
+}
+
+impl Drop for AcpSession {
+    fn drop(&mut self) {
+        // 兜底：本轮如果没走 close（panic / future 被 cancel），这里收尾。
+        // 顺序很关键——先丢弃 peer 触发 `Inner::drop` 终止子进程，再摘除 pid 登记，
+        // 避免"进程还在、登记已摘"让退出回收漏掉它。
+        drop(self.peer.take());
+        let pid = self.child_pid.swap(0, Ordering::Relaxed);
+        if pid != 0 {
+            unregister_pid(pid);
+        }
     }
 }
 
@@ -1012,6 +1107,20 @@ mod tests {
         assert_eq!(resume_plan(true, false, true), ResumePlan::Load);
         // 两者都不支持 → 只能新建（新 id 会回传前端，后续仍可继续）
         assert_eq!(resume_plan(true, false, false), ResumePlan::New);
+    }
+
+    #[test]
+    fn pid_registry_tracks_and_releases() {
+        register_pid(4_242_424);
+        assert!(LIVE_PIDS
+            .lock()
+            .map(|v| v.contains(&4_242_424))
+            .unwrap_or(false));
+        unregister_pid(4_242_424);
+        assert!(!LIVE_PIDS
+            .lock()
+            .map(|v| v.contains(&4_242_424))
+            .unwrap_or(true));
     }
 
     #[test]

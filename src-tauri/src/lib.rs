@@ -2537,7 +2537,7 @@ pub fn run() {
         .unwrap_or(false);
     enclave_state.set_disabled(enclave_disabled);
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         // 自动更新：读取 tauri.conf.json 中 plugins.updater 配置的 endpoints/pubkey
@@ -3140,8 +3140,16 @@ pub fn run() {
             log::info!("PilotDesk initialized successfully.");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // 退出时回收 ACP 子进程：此时 tokio 任务不会再被正常 drop，
+    // 只有这条同步回调能保证「关掉 app 不留下 hermes acp / node 孤儿」。
+    app.run(|_app, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            crate::agent::transport::acp::kill_all_live_sessions();
+        }
+    });
 }
 
 #[cfg(test)]
