@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use crate::db::models::{Attachment, Message, Session};
 use crate::utils::errors::AppError;
@@ -152,9 +152,12 @@ fn build_msg_payload(
 }
 
 /// 从 `session_events` 派生会话全部消息：同 id 多事件（创建 + 编辑）取最新一条，
-/// 按原 timestamp 升序返回（编辑保留原 timestamp 以维持消息位置）。
+/// 顺序严格按事件 `seq`（= 写入顺序）；编辑事件原地替换，不动消息位置。
 /// 仅取消息类事件：summary/result（滚动摘要）与 todo/state（todo_write 状态快照，
 /// 非模型可见，跨轮任务列表改由 lib.rs 读 latest_session_todos 注入）不入消息投影。
+///
+/// 不按 `timestamp` 排序：`now()` 只有秒级精度，同一轮或批量导入的多条消息会落在
+/// 同一秒，排序键全等后顺序退化为随机 id 字典序，表现为消息乱序（宿主导入后尤其明显）。
 pub(crate) fn load_session_messages(
     conn: &Connection,
     session_id: &str,
@@ -165,13 +168,19 @@ pub(crate) fn load_session_messages(
          ORDER BY seq ASC",
     )?;
     let rows = stmt.query_map(params![session_id], |r| r.get::<_, String>(0))?;
-    let mut by_id: BTreeMap<String, Message> = BTreeMap::new();
+    let mut out: Vec<Message> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for row in rows {
         let msg = message_from_payload(&row?)?;
-        by_id.insert(msg.id.clone(), msg);
+        match index.get(&msg.id) {
+            // 同 id 的后续事件（编辑）覆盖内容，但保留首次出现时的位置
+            Some(&i) => out[i] = msg,
+            None => {
+                index.insert(msg.id.clone(), out.len());
+                out.push(msg);
+            }
+        }
     }
-    let mut out: Vec<Message> = by_id.into_values().collect();
-    out.sort_by_key(|m| m.timestamp);
     Ok(out)
 }
 
@@ -2578,5 +2587,63 @@ mod model_switch_tests {
         assert!(!looks_like_rate_limit(
             "API 请求失败: connection reset by peer"
         ));
+    }
+}
+
+#[cfg(test)]
+mod message_order_tests {
+    use super::*;
+
+    fn mem_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                model_visible INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn append(conn: &Connection, id: &str, role: &str, content: &str, ts: i64) {
+        let payload = build_msg_payload(
+            id, "s1", role, content, "native", ts, &None, &None, &None, "[]",
+        );
+        crate::eventlog::append_session_event(conn, "s1", "user/message", &payload, true).unwrap();
+    }
+
+    /// 同一秒内连续写入（宿主导入即如此）必须按写入顺序返回：
+    /// 既不能落到随机 id 的字典序，也不能被全等的 timestamp 打乱。
+    #[test]
+    fn same_timestamp_messages_keep_write_order() {
+        let conn = mem_conn();
+        // id 与写入顺序的字典序刻意相反
+        append(&conn, "aaaa", "user", "一", 100);
+        append(&conn, "cccc", "assistant", "二", 100);
+        append(&conn, "bbbb", "user", "三", 100);
+        append(&conn, "dddd", "assistant", "四", 100);
+
+        let msgs = load_session_messages(&conn, "s1").unwrap();
+        let contents: Vec<&str> = msgs.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, vec!["一", "二", "三", "四"]);
+    }
+
+    /// 编辑事件（同 id 再追加一条）：内容取最新，位置停在首次出现处。
+    #[test]
+    fn edit_keeps_original_position() {
+        let conn = mem_conn();
+        append(&conn, "m1", "user", "原始", 100);
+        append(&conn, "m2", "assistant", "回答", 100);
+        append(&conn, "m1", "user", "改过", 100);
+
+        let msgs = load_session_messages(&conn, "s1").unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].id, "m1");
+        assert_eq!(msgs[0].content, "改过");
+        assert_eq!(msgs[1].id, "m2");
     }
 }
