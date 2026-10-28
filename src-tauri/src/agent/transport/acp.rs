@@ -1096,10 +1096,34 @@ impl AgentSession for AcpSession {
         };
         let resp = resp_result.map_err(|e| with_peer_stderr(e, &stderr_text))?;
 
+        // 恢复/新建后确定对端会话 id。
+        //
+        // 规范期望响应带 `sessionId`，但有实现（实测 hermes 0.19）在 `session/resume` 时
+        // **换发一个新的会话 id，且只放在 `_meta` 的 provenance 里**：若继续拿旧 id 发
+        // `session/prompt`，对端会走"会话不存在"分支，秒回 `stopReason=refusal`、不产任何
+        // 正文——前端看到的就是"回答为空 + 未收到模型有效响应"。
+        // 因此按 顶层 `sessionId` → `_meta` provenance → 原 `resume_id` 依次兜底。
         self.remote_id = resp["sessionId"]
             .as_str()
-            .map(|s| s.to_string())
+            .map(str::to_string)
+            .or_else(|| {
+                resp["_meta"]["hermes"]["sessionProvenance"]["acpSessionId"]
+                    .as_str()
+                    .or_else(|| resp["_meta"]["sessionProvenance"]["acpSessionId"].as_str())
+                    .map(str::to_string)
+            })
             .or_else(|| conn.resume_id.clone());
+        if resp["sessionId"].as_str().is_none() {
+            if let (Some(want), Some(got)) = (conn.resume_id.as_deref(), self.remote_id.as_deref()) {
+                if want != got {
+                    log::info!(
+                        "[acp] 对端恢复后更换了会话 id：{} -> {}（以响应/_meta 为准）",
+                        want,
+                        got
+                    );
+                }
+            }
+        }
 
         // 把对端会话 id 回传前端：前端写回 `sessions.agent_session_id`，
         // 下一轮才能 resume/load 同一会话。缺了这一步，每条消息都会 `session/new`

@@ -1304,6 +1304,29 @@ pub async fn run_transport_session(
 
     match result {
         Ok(out) => {
+            // 空正文 + 对端"拒绝"：不是正常的空回答，而是宿主拒绝了本轮（典型原因是对端
+            // 不认识我们发的会话 id，例如恢复后它换了新 id）。按失败上报，避免前端只能显示
+            // 一句无从排查的"未收到模型有效响应"。
+            if out.text.trim().is_empty()
+                && matches!(
+                    out.stop_reason,
+                    crate::agent::transport::StopReason::Refusal
+                )
+            {
+                log::warn!(
+                    "[Agent/run_transport_session] 对端拒绝本轮且无正文：session={}",
+                    session_id
+                );
+                let _ = app.emit(
+                    "agent-error",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "error": "宿主拒绝执行本轮（没有返回任何内容）。常见原因是会话上下文已失效，请重新发送；若持续出现，请新建会话。",
+                    }),
+                );
+                let _ = session.close(&handle).await;
+                return Ok(());
+            }
             log::info!("[Agent/run_transport_session] 回合结束(完成)：session={}", session_id);
             // 先上报结束、再关闭对端：`agent-done` 是前端"思考中 → 完成"的唯一信号，
             // 必须排在可能阻塞的 `close()`（`child.kill()` 内部含 `wait()`）之前，
