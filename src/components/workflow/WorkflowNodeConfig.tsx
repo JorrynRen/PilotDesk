@@ -2228,15 +2228,24 @@ useEffect(() => {
             <div key={field.key} style={S.fieldGap}>
               <label style={S.label()}>{field.label}</label>
               {field.type === 'textarea' ? (
-                <TemplateField
-                  value={(params[field.key] as string) || ''}
-                  onChange={(v) => handleParamChange(field.key, v)}
-                  variables={templateVariables}
-                  placeholder={field.placeholder}
-                  multiline
-                  rows={(field as SchemaConfigField & { rows?: number }).rows ?? 4}
-                  style={S.textarea}
-                />
+                <>
+                  <TemplateField
+                    value={(params[field.key] as string) || ''}
+                    onChange={(v) => handleParamChange(field.key, v)}
+                    variables={templateVariables}
+                    placeholder={field.placeholder}
+                    multiline
+                    rows={(field as SchemaConfigField & { rows?: number }).rows ?? 4}
+                    style={S.textarea}
+                  />
+                  {/* 提示词模板支持的内建变量说明（其余 {{...}} 取本节点输入映射的字段） */}
+                  {field.key === 'prompt_template' && (
+                    <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4 }}>
+                      支持 {'{{now}}'}（本节点开始执行时的本地时间，格式 YYYY-MM-DD HH:mm:ss），
+                      以及输入映射里的变量 {'{{变量名}}'}
+                    </div>
+                  )}
+                </>
               ) : field.type === 'subflow_select' ? (
                 <div>
                   <SubflowSelector

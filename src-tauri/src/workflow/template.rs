@@ -187,6 +187,14 @@ impl TemplateEngine {
             return Ok(Self::value_to_string(val));
         }
 
+        // 引擎内建 `{{now}}`：解析到此刻的**本地时间**（`YYYY-MM-DD HH:mm:ss`）。
+        //
+        // 刻意放在"上下文精确匹配"之后：输入映射里若存在名为 `now` 的字段，用户值优先，
+        // 不会被内建变量静默顶掉。也不缓存：同一节点内多处引用同一秒内的值相同，够用且无状态。
+        if expr == "now" {
+            return Ok(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        }
+
         // `gate_output.<阶段ID>.<路径>`：阶段合并值在 context 里是**整键** `gate_output.<阶段ID>`
         // （键名含点号），表达式多出下钻路径时不能按通用的「首段 = 顶层键」拆解，否则取不到值。
         if let Some(rest) = expr.strip_prefix("gate_output.") {
@@ -448,6 +456,31 @@ mod tests {
         let resolved =
             TemplateEngine::resolve_value(&json!({ "value": "值：{{missing}}；" }), &ctx());
         assert_eq!(resolved, json!({ "value": "值：；" }));
+    }
+
+    #[test]
+    fn resolve_builtin_now_is_local_timestamp() {
+        let ctx: HashMap<String, Value> = HashMap::new();
+        let out = TemplateEngine::resolve("now={{now}}", &ctx).unwrap();
+        let stamp = out.trim_start_matches("now=");
+        // YYYY-MM-DD HH:mm:ss（本地时区）
+        assert_eq!(stamp.len(), 19, "unexpected format: {}", stamp);
+        assert_eq!(&stamp[4..5], "-");
+        assert_eq!(&stamp[7..8], "-");
+        assert_eq!(&stamp[10..11], " ");
+        assert_eq!(&stamp[13..14], ":");
+        assert_eq!(&stamp[16..17], ":");
+        assert!(stamp.chars().filter(char::is_ascii_digit).count() == 14);
+    }
+
+    #[test]
+    fn context_variable_named_now_wins_over_builtin() {
+        let mut ctx = HashMap::new();
+        ctx.insert("now".to_string(), json!("自定义时间"));
+        assert_eq!(
+            TemplateEngine::resolve("{{now}}", &ctx).unwrap(),
+            "自定义时间"
+        );
     }
 
     #[test]
