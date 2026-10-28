@@ -101,6 +101,7 @@ interface EnvAgent {
 }
 
 interface EnvSummary {
+  appType: string;
   appVersion: string;
   channel: string;
   os: string;
@@ -120,6 +121,12 @@ const OS_LABELS: Record<string, string> = {
 const CHANNEL_LABELS: Record<string, string> = {
   dev: '开发构建',
   stable: '正式构建',
+};
+/** 应用形态：Web 版 / 移动版接入同一平台时按此区分 */
+const APP_TYPE_LABELS: Record<string, string> = {
+  desktop: '桌面端',
+  web: 'Web 端',
+  mobile: '移动端',
 };
 
 const EMPTY_DRAFT: Draft = {
@@ -849,12 +856,14 @@ export function FeedbackDialog() {
                     ) : null}
 
                     <EnvOption
-                      label="应用版本与构建"
+                      label="应用类型与版本"
                       checked={draft.envItems.app}
                       onToggle={(v) => setDraft((d) => ({ ...d, envItems: { ...d.envItems, app: v } }))}
                       value={
                         env
-                          ? `v${env.appVersion} · ${CHANNEL_LABELS[env.channel] ?? env.channel}`
+                          ? `${APP_TYPE_LABELS[env.appType] ?? env.appType} · v${env.appVersion} · ${
+                              CHANNEL_LABELS[env.channel] ?? env.channel
+                            }`
                           : undefined
                       }
                     />
