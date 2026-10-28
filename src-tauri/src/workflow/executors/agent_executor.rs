@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{Emitter, Manager};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
@@ -146,6 +146,101 @@ pub struct WorkflowApprovalTarget {
     /// 节点名（审批请求里带上，界面显示「阶段名·节点名」用）
     pub node_label: String,
     pub manager: Arc<WorkflowApprovalManager>,
+}
+
+/// ACP 节点的审批闸门：与 API 节点共用同一张等待登记表与同一套前端事件。
+///
+/// API 路径的审批回调由 AgentLoop 提供（同步、自带工具信息）；ACP 由传输层以
+/// [`crate::agent::transport::ApprovalGate`] 回调，这里把两者对齐：
+/// 登记等待 → 发 `workflow:approval-required` → 写执行事件流 → 等不到按拒绝。
+struct WorkflowAcpApprovalGate {
+    target: WorkflowApprovalTarget,
+    pool: DbPool,
+    emitter: tauri::AppHandle,
+}
+
+impl WorkflowAcpApprovalGate {
+    fn record(&self, item: &PendingToolApproval, decided: Option<bool>) {
+        let kind = if decided.is_some() {
+            "approval/resolved"
+        } else {
+            "approval/requested"
+        };
+        crate::record_tool_approval_event(&self.pool, &item.execution_id, kind, item, decided);
+    }
+}
+
+#[async_trait]
+impl crate::agent::transport::ApprovalGate for WorkflowAcpApprovalGate {
+    async fn request_approval(&self, call_id: &str) -> bool {
+        self.request_approval_with_details(call_id, "工具调用", "")
+            .await
+    }
+
+    async fn request_approval_with_details(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        arguments: &str,
+    ) -> bool {
+        let item = PendingToolApproval {
+            call_id: call_id.to_string(),
+            execution_id: self.target.execution_id.clone(),
+            node_id: self.target.node_id.clone(),
+            node_label: self.target.node_label.clone(),
+            tool_name: tool_name.to_string(),
+            arguments: arguments.to_string(),
+            risk: String::new(),
+            created_at: crate::utils::now(),
+            stale: false,
+        };
+        // 先留证据再等人：进程中途退出也能从事件流看出卡在哪次审批上
+        self.record(&item, None);
+        let _ = self.emitter.emit(
+            "workflow:approval-required",
+            serde_json::json!({
+                "execution_id": &item.execution_id,
+                "node_id": &item.node_id,
+                "node_label": &item.node_label,
+                "call_id": &item.call_id,
+                "tool_name": &item.tool_name,
+                "arguments": &item.arguments,
+                "risk": &item.risk,
+            }),
+        );
+
+        // 与 API 节点同一等待上限：超时撤销登记并按拒绝（未决绝不默认放行）
+        let rx = self.target.manager.register(item.clone());
+        let (approved, timed_out) = match tokio::time::timeout(
+            std::time::Duration::from_secs(crate::agent::transport::ACP_APPROVAL_TIMEOUT_SECS),
+            rx,
+        )
+        .await
+        {
+            Ok(Ok(decided)) => (decided, false),
+            _ => {
+                self.target.manager.forget(&item.call_id);
+                (false, true)
+            }
+        };
+
+        self.record(&item, Some(approved));
+        let _ = self.emitter.emit(
+            "workflow:approval-resolved",
+            serde_json::json!({
+                "execution_id": &item.execution_id,
+                "node_id": &item.node_id,
+                "call_id": &item.call_id,
+                "approved": approved,
+                "timed_out": timed_out,
+            }),
+        );
+        approved
+    }
+
+    fn discard(&self, call_id: &str) {
+        self.target.manager.forget(call_id);
+    }
 }
 
 pub struct AgentExecutor {
@@ -323,6 +418,36 @@ impl NodeExecutorTrait for AgentExecutor {
                         .unwrap_or_default()
                 })
         };
+
+        // ── 接入方式分流：ACP 不能走 CLI 子进程 ──
+        // ACP 配置没有 `run_cmd_template`，子进程路径会退化成「运行时命令 + 提示词」；
+        // 运行时是 npm 时就变成 `npm <提示词>` → `Unknown command`，节点必然失败。
+        // 与会话模式同口径：非 subprocess 一律交给传输抽象层（ACP 就是适配器进程 + JSON-RPC）。
+        let descriptor = {
+            let conn = self
+                .pool
+                .get()
+                .map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
+            crate::agent::descriptor::AgentDescriptor::from_agents_row(&conn, agent_type)
+                .map_err(|e| AppError::Db(e.to_string()))?
+        };
+        if let Some(desc) = descriptor.as_ref().filter(|d| {
+            d.transport != crate::agent::transport::TransportKind::Subprocess
+        }) {
+            return self
+                .execute_transport(
+                    node,
+                    desc,
+                    &prompt,
+                    &workspace_dir,
+                    &temp_session_id,
+                    agent_session_id_param,
+                    execution_id,
+                    emitter,
+                )
+                .await;
+        }
+
         let (output, agent_session_id) = self
             .agent_manager
             .lock()
@@ -517,6 +642,157 @@ impl AgentExecutor {
         Ok(NodeOutput {
             output: Value::String(normalize_agent_output(&text, &node.id)),
             session_id: Some(session_id),
+            input_data: Some(prompt.to_string()),
+            artifacts_path: Some(workspace_dir.to_string()),
+        })
+    }
+
+    /// 以传输抽象层（ACP）执行节点：适配器进程 + JSON-RPC，与会话模式的 ACP 路径同源。
+    ///
+    /// 不复用 `run_transport_session`：它只把结果撒成 Tauri 事件、不返回正文，
+    /// 而工作流节点需要把正文落进 `NodeOutput`（同时仍要 `workflow:chunk` 流式回放）。
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_transport(
+        &self,
+        node: &NodeDef,
+        descriptor: &crate::agent::descriptor::AgentDescriptor,
+        prompt: &str,
+        workspace_dir: &str,
+        session_key: &str,
+        resume_id: Option<&str>,
+        execution_id: &str,
+        emitter: &tauri::AppHandle,
+    ) -> Result<NodeOutput, AppError> {
+        use crate::agent::transport::{
+            build_session, AgentConn, AgentError, PromptInput, UnifiedAgentEvent,
+        };
+
+        let Some(mut session) = build_session(descriptor.transport, None) else {
+            return Err(AppError::InvalidInput(format!(
+                "Agent 节点「{}」的接入方式暂不支持会话执行",
+                node.label
+            )));
+        };
+
+        // 正文与对端会话 id 都从统一事件里收：`prompt()` 只回正文，
+        // ACP 的 sessionId 只能从事件拿（节点的「延续会话」要用它）。
+        let collected = Arc::new(StdMutex::new(String::new()));
+        let remote_sid = Arc::new(StdMutex::new(None::<String>));
+        let exec_id = execution_id.to_string();
+        let node_id = node.id.clone();
+        let emitter_owned = emitter.clone();
+        let collected_sink = Arc::clone(&collected);
+        let sid_sink = Arc::clone(&remote_sid);
+        let sink: crate::agent::transport::EventSink = Arc::new(move |ev| match ev {
+            UnifiedAgentEvent::Chunk { content, .. } => {
+                if let Ok(mut buf) = collected_sink.lock() {
+                    buf.push_str(&content);
+                }
+                let _ = emitter_owned.emit(
+                    "workflow:chunk",
+                    serde_json::json!({
+                        "execution_id": exec_id,
+                        "node_execution_id": node_id,
+                        "content": content,
+                    }),
+                );
+            }
+            UnifiedAgentEvent::AgentSessionId {
+                agent_session_id, ..
+            } => {
+                if let Ok(mut s) = sid_sink.lock() {
+                    *s = Some(agent_session_id);
+                }
+            }
+            _ => {}
+        });
+
+        // 取消登记：`cancel_workflow` / 节点超时都以 `wf_{execution}_{node}` 置协作式取消标志
+        //（见 `WorkflowExecutor::cancel_execution_and_kill_agents`），这里登记同名运行态，
+        // 取消时该标志才能传到适配器进程的等待里（ACP 传输每轮检查 abort）。
+        let abort = crate::api_agent::session_runs::begin(session_key);
+        // 节点级「工具授权」：与 API 节点同一个下拉、同一套语义（宿主不提供模式时兜底）
+        let security = node
+            .config
+            .get("security_mode")
+            .and_then(|v| v.as_str())
+            .filter(|s| SecurityMode::from_str(s).is_some())
+            .and_then(SecurityMode::from_str);
+        // 审批闸门与 API 节点同源：命中授权的调用暂停，等用户在工作流页/通知中心裁决
+        let gate: Arc<dyn crate::agent::transport::ApprovalGate> =
+            Arc::new(WorkflowAcpApprovalGate {
+                target: WorkflowApprovalTarget {
+                    execution_id: execution_id.to_string(),
+                    node_id: node.id.clone(),
+                    node_label: node.label.clone(),
+                    manager: self.approvals.clone(),
+                },
+                pool: self.pool.clone(),
+                emitter: emitter.clone(),
+            });
+        let conn = AgentConn {
+            session_id: session_key.to_string(),
+            agent_id: descriptor.agent_id.clone(),
+            transport: descriptor.transport,
+            cwd: workspace_dir.to_string(),
+            conn: descriptor.conn.clone(),
+            secret: None,
+            resume_id: resume_id.map(str::to_string),
+            abort: Arc::clone(&abort),
+            on_pid: None,
+            approvals: Some(Arc::clone(&gate)),
+            acp_mode: None,
+            security_mode: security,
+        };
+        let handle = match session.connect(&conn, sink).await {
+            Ok(handle) => handle,
+            Err(e) => {
+                crate::api_agent::session_runs::finish(session_key, &abort);
+                return Err(AppError::External(format!("建立会话失败: {}", e)));
+            }
+        };
+        let result = session
+            .prompt(
+                &handle,
+                PromptInput {
+                    text: prompt.to_string(),
+                    images: Vec::new(),
+                },
+            )
+            .await;
+        // 不论成败都关闭对端：每轮新建进程，不关会留下孤儿适配器继续推事件
+        let _ = session.close(&handle).await;
+        crate::api_agent::session_runs::finish(session_key, &abort);
+
+        let text = match result {
+            Ok(out) => {
+                let text = out.text.trim().to_string();
+                if text.is_empty() {
+                    collected
+                        .lock()
+                        .map(|buf| buf.clone())
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string()
+                } else {
+                    text
+                }
+            }
+            Err(AgentError::Cancelled) => return Err(AppError::External("已取消".to_string())),
+            Err(AgentError::ProcessExited { exit_code, stderr }) => {
+                return Err(AppError::External(crate::agent::friendly_agent_error(
+                    &descriptor.agent_id,
+                    exit_code,
+                    &stderr,
+                )))
+            }
+            Err(e) => return Err(AppError::External(format!("{}", e))),
+        };
+
+        let agent_session_id = remote_sid.lock().ok().and_then(|s| s.clone());
+        Ok(NodeOutput {
+            output: Value::String(normalize_agent_output(&text, &node.id)),
+            session_id: agent_session_id,
             input_data: Some(prompt.to_string()),
             artifacts_path: Some(workspace_dir.to_string()),
         })

@@ -1888,9 +1888,6 @@ useEffect(() => {
               {/* 二级（API 分支）：厂商 → 三级：模型（与会话模式「新建会话」同源，见 SessionList） */}
               {configFields[0].key === 'agent_type' && (() => {
                 if (params['agent_type'] !== 'api') return null;
-                const securityMode = (params['security_mode'] as SecurityModeValue) || 'standard';
-                const securityHint = SECURITY_MODE_OPTIONS.find((m) => m.value === securityMode)?.workflowEffect
-                  ?? SECURITY_MODE_OPTIONS[1].workflowEffect;
                 const provider = apiProviders.find((p) => p.id === params['api_provider']);
                 // 「延续会话 + 模型来源=跟随会话」时，节点上的 厂商/模型 运行期不生效 → 置灰（要改就去改上面的「模型来源」）。
                 // 新会话模式、以及延续目标是节点创建的会话（固定跟随节点）时都不置灰——那时这俩就是本节点自己的配置。
@@ -1998,7 +1995,20 @@ useEffect(() => {
                         </div>
                       </div>
                     )}
-                    {/* 三级之后的「工具授权」：节点级，运行前定好；命中审批的调用会暂停等用户确认 */}
+                  </>
+                );
+              })()}
+              {/* 「工具授权」：API 与 ACP 节点共用同一个节点参数与同一套审批
+                  （同一张等待登记表、同一组 workflow:approval-* 事件）。
+                  ACP 宿主自带会话模式时以宿主为准，此处仅在其未提供模式时兜底。 */}
+              {configFields[0].key === 'agent_type'
+                && (agentKind === 'api' || getTransport(params['agent_type'] as string) === 'acp')
+                && (() => {
+                  const isAcp = getTransport(params['agent_type'] as string) === 'acp';
+                  const securityMode = (params['security_mode'] as SecurityModeValue) || 'standard';
+                  const securityHint = SECURITY_MODE_OPTIONS.find((m) => m.value === securityMode)?.workflowEffect
+                    ?? SECURITY_MODE_OPTIONS[1].workflowEffect;
+                  return (
                     <div style={{ marginTop: 10 }}>
                       <label style={S.label()}>工具授权</label>
                       <Select
@@ -2008,12 +2018,14 @@ useEffect(() => {
                         className="w-full min-w-0"
                       />
                       <div style={{ marginTop: 4, fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
-                        {securityHint}（仅 API Agent 生效）
+                        {securityHint}
+                        {isAcp
+                          ? '；该 Agent 为 ACP 接入：宿主自带会话模式时以宿主模式为准，宿主未提供模式时按此策略兜底'
+                          : '（仅 API Agent 生效）'}
                       </div>
                     </div>
-                  </>
-                );
-              })()}
+                  );
+                })()}
               </>
             ) : configFields[0].type === 'subflow_select' ? (
               <SubflowSelector

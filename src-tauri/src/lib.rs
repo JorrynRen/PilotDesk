@@ -1171,7 +1171,7 @@ const WORKFLOW_APPROVAL_TIMEOUT_SECS: u64 = 30 * 60;
 ///
 /// 事件流是可回放的证据：进程重启后等待登记表必然为空，未闭环的请求据此标为失效记录，
 /// 让用户看到"这次执行卡在哪次审批上"而不是只看到实例停在「执行中」。
-fn record_tool_approval_event(
+pub(crate) fn record_tool_approval_event(
     pool: &DbPool,
     execution_id: &str,
     kind: &str,

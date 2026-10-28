@@ -238,6 +238,17 @@ pub trait ApprovalGate: Send + Sync {
     /// 请求一次审批；`call_id` 用于把界面上的决定对应回本次请求。
     async fn request_approval(&self, call_id: &str) -> bool;
 
+    /// 带工具信息的审批请求：能拿到 `toolCall` 细节的传输层（如 ACP）走这条，
+    /// 便于审批界面直接展示"在批准什么"。默认忽略细节，等价于 `request_approval`。
+    async fn request_approval_with_details(
+        &self,
+        call_id: &str,
+        _tool_name: &str,
+        _arguments: &str,
+    ) -> bool {
+        self.request_approval(call_id).await
+    }
+
     /// 放弃一次已不再等待的请求（超时后回收注册表里的 sender，避免泄漏）。
     fn discard(&self, _call_id: &str) {}
 }

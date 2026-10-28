@@ -926,13 +926,23 @@ impl AgentSession for AcpSession {
                 let tx_resolved = tx_perm.clone();
                 let sid_resolved = sid_perm.clone();
                 let resolved_call_id = call_id.clone();
+                // 一并把工具信息交出去：工作流审批界面要显示"批准的是哪个工具、什么参数"
+                let tool_name = params["toolCall"]["title"]
+                    .as_str()
+                    .unwrap_or("工具调用")
+                    .to_string();
+                let tool_args = params["toolCall"]["rawInput"].to_string();
                 tokio::spawn(async move {
                     let (allowed, timed_out) = match gate {
                         Some(g) => match tokio::time::timeout(
                             std::time::Duration::from_secs(
                                 crate::agent::transport::ACP_APPROVAL_TIMEOUT_SECS,
                             ),
-                            g.request_approval(&call_id),
+                            g.request_approval_with_details(
+                                &call_id,
+                                &tool_name,
+                                &tool_args,
+                            ),
                         )
                         .await
                         {

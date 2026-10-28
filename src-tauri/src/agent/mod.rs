@@ -32,7 +32,7 @@ pub mod transport;
 //  统一错误映射
 // ------------------------------------------------------------------
 
-fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> String {
+pub(crate) fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> String {
     let d = stderr.to_lowercase();
     let prefix = format!("{} 进程异常退出 (exit code {})", agent_type, exit_code);
 
