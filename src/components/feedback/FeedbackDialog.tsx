@@ -27,6 +27,8 @@ import { useFeedbackStore, type FeedbackCategory, type FeedbackPreset } from '..
 
 const DRAFT_KEY = 'pilotdesk.feedback.draft';
 const MAX_LOG_LINES = 8;
+/** 问题描述上限：与后端 `MAX_CONTENT_CHARS` 保持一致，倒逼用户精简描述 */
+const MAX_CONTENT_CHARS = 500;
 
 /**
  * 环境探测类日志的 target 前缀：版本查询、启动命令探测、ACP 握手探测、安装流程。
@@ -275,7 +277,7 @@ export function FeedbackDialog() {
         ...d,
         category: preset.category ?? d.category,
         title: preset.title ? preset.title.slice(0, 80) : d.title,
-        content: preset.detail ? preset.detail.slice(0, 2000) : d.content,
+        content: preset.detail ? preset.detail.slice(0, MAX_CONTENT_CHARS) : d.content,
       }));
       setFocusTs(preset.focusTs ?? 0);
       setResult(null);
@@ -664,12 +666,17 @@ export function FeedbackDialog() {
                     问题描述
                   </label>
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {draft.content.length} / 2000
+                    {draft.content.length} / {MAX_CONTENT_CHARS}
                   </span>
                 </div>
                 <textarea
                   value={draft.content}
-                  onChange={(e) => setDraft((d) => ({ ...d, content: e.target.value.slice(0, 2000) }))}
+                  onChange={(e) =>
+                    setDraft((d) => ({
+                      ...d,
+                      content: e.target.value.slice(0, MAX_CONTENT_CHARS),
+                    }))
+                  }
                   rows={5}
                   placeholder="如何复现？期望是什么？实际发生了什么？"
                   className="w-full px-2.5 py-1.5 rounded-lg text-xs outline-none resize-none leading-relaxed"

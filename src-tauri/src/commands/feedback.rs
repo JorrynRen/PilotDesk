@@ -37,7 +37,8 @@ const MAX_LOG_LINES: usize = 8;
 /// 单条日志片段的最大字符数（超出截断）
 const MAX_LOG_CHARS: usize = 500;
 const MAX_TITLE_CHARS: usize = 80;
-const MAX_CONTENT_CHARS: usize = 2000;
+/// 问题描述上限：500 字，引导用户用精简语言描述，同时抑制灌水
+const MAX_CONTENT_CHARS: usize = 500;
 
 /// 一条日志片段（由 `read_recent_logs` 返回，前端勾选后回传）
 #[derive(Debug, Clone, Deserialize, Serialize)]
