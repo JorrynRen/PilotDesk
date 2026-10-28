@@ -133,6 +133,85 @@ fn app_channel() -> &'static str {
     }
 }
 
+/// 环境信息的分项选择（与弹窗里四个勾选框一一对应）。
+///
+/// 整块不提供时前端传 `null`，对应 `SubmitFeedbackInput::env` 的 `None`。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EnvSelection {
+    /// 应用版本与构建渠道
+    pub app: bool,
+    /// 系统与架构（含界面语言）
+    pub system: bool,
+    /// 依赖工具版本（Node / npm / Git / Python）
+    pub tools: bool,
+    /// 已启用 Agent 列表
+    pub agents: bool,
+}
+
+impl Default for EnvSelection {
+    fn default() -> Self {
+        Self {
+            app: true,
+            system: true,
+            tools: true,
+            agents: true,
+        }
+    }
+}
+
+/// 请求体里的 `client`：应用自身信息。未勾选的字段不参与序列化。
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackClientInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    os: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    arch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locale: Option<String>,
+}
+
+impl FeedbackClientInfo {
+    fn is_empty(&self) -> bool {
+        self.app_version.is_none()
+            && self.channel.is_none()
+            && self.os.is_none()
+            && self.arch.is_none()
+            && self.locale.is_none()
+    }
+}
+
+/// 请求体里的 `env`：依赖环境。未勾选的字段不参与序列化。
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackDepsInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    npm_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    python_version: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    agents: Vec<FeedbackEnvAgent>,
+}
+
+impl FeedbackDepsInfo {
+    fn is_empty(&self) -> bool {
+        self.node_version.is_none()
+            && self.npm_version.is_none()
+            && self.git_version.is_none()
+            && self.python_version.is_none()
+            && self.agents.is_empty()
+    }
+}
+
 /// 平台成功响应
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

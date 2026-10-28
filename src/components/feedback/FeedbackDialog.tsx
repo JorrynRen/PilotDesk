@@ -15,8 +15,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   Copy,
   Loader2,
   LogIn,
@@ -51,12 +49,26 @@ const CATEGORIES: Array<{ key: FeedbackCategory; label: string }> = [
   { key: 'other', label: '其他' },
 ];
 
+/** 环境信息里用户可选的分项 */
+interface EnvItems {
+  app: boolean;
+  system: boolean;
+  tools: boolean;
+  agents: boolean;
+}
+
+const DEFAULT_ENV_ITEMS: EnvItems = { app: true, system: true, tools: true, agents: true };
+
 interface Draft {
   category: FeedbackCategory;
   title: string;
   content: string;
   email: string;
   includeLogs: boolean;
+  /** 是否附带环境信息（整块开关） */
+  includeEnv: boolean;
+  /** 环境信息内逐项开关 */
+  envItems: EnvItems;
 }
 
 interface LogEntry {
@@ -116,12 +128,14 @@ const EMPTY_DRAFT: Draft = {
   content: '',
   email: '',
   includeLogs: true,
+  includeEnv: true,
+  envItems: { ...DEFAULT_ENV_ITEMS },
 };
 
 function loadDraft(): Draft {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
-    if (!raw) return { ...EMPTY_DRAFT };
+    if (!raw) return { ...EMPTY_DRAFT, envItems: { ...DEFAULT_ENV_ITEMS } };
     const parsed = JSON.parse(raw) as Partial<Draft>;
     return {
       category:
@@ -130,9 +144,16 @@ function loadDraft(): Draft {
       content: typeof parsed.content === 'string' ? parsed.content : '',
       email: typeof parsed.email === 'string' ? parsed.email : '',
       includeLogs: parsed.includeLogs !== false,
+      includeEnv: parsed.includeEnv !== false,
+      envItems: {
+        app: parsed.envItems?.app !== false,
+        system: parsed.envItems?.system !== false,
+        tools: parsed.envItems?.tools !== false,
+        agents: parsed.envItems?.agents !== false,
+      },
     };
   } catch {
-    return { ...EMPTY_DRAFT };
+    return { ...EMPTY_DRAFT, envItems: { ...DEFAULT_ENV_ITEMS } };
   }
 }
 
@@ -155,17 +176,41 @@ function shortTarget(target: string): string {
   return parts[parts.length - 1] || target;
 }
 
-/** 环境信息预览的一行：左侧分组名，右侧具体取值（长内容自动折行） */
-function EnvRow({ label, value }: { label: string; value: string }) {
+/** 环境信息的一个可勾选分项：勾选框 + 分项名 + 实际将发送的取值（可折行） */
+function EnvOption({
+  label,
+  checked,
+  onToggle,
+  value,
+}: {
+  label: string;
+  checked: boolean;
+  onToggle: (next: boolean) => void;
+  value?: string;
+}) {
   return (
-    <div className="flex items-start gap-2 text-[10px]">
-      <span className="shrink-0" style={{ color: 'var(--text-tertiary)', minWidth: 46 }}>
-        {label}
+    <label className="flex items-start gap-2 cursor-pointer select-none">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onToggle(e.target.checked)}
+        style={{ marginTop: 2 }}
+      />
+      <span className="flex-1 min-w-0 flex items-start gap-2">
+        <span
+          className="text-[10px] shrink-0"
+          style={{ color: checked ? 'var(--text-secondary)' : 'var(--text-tertiary)', width: 96 }}
+        >
+          {label}
+        </span>
+        <span
+          className="flex-1 min-w-0 break-all text-[10px]"
+          style={{ color: 'var(--text-tertiary)', opacity: checked ? 1 : 0.5 }}
+        >
+          {value ?? ''}
+        </span>
       </span>
-      <span className="flex-1 min-w-0 break-all" style={{ color: 'var(--text-secondary)' }}>
-        {value}
-      </span>
-    </div>
+    </label>
   );
 }
 
@@ -193,7 +238,6 @@ export function FeedbackDialog() {
   const [env, setEnv] = useState<EnvSummary | null>(null);
   const [envLoading, setEnvLoading] = useState(false);
   const [envError, setEnvError] = useState('');
-  const [envOpen, setEnvOpen] = useState(true);
 
   /** 幂等键：同一次填写在失败重试时复用，避免平台重复建单 */
   const requestIdRef = useRef('');
@@ -275,9 +319,10 @@ export function FeedbackDialog() {
     };
   }, [open, focusTs]);
 
-  // 打开时读取「将随反馈提交的环境信息」，让用户先看到发送内容再决定提交
+  // 打开（或重新勾选环境信息）时读取「将随反馈提交的环境信息」，
+  // 让用户先看到发送内容再决定提交哪几项
   useEffect(() => {
-    if (!open) return;
+    if (!open || !draft.includeEnv) return;
     let alive = true;
     queueMicrotask(() => {
       if (!alive) return;
@@ -300,7 +345,7 @@ export function FeedbackDialog() {
     return () => {
       alive = false;
     };
-  }, [open]);
+  }, [open, draft.includeEnv]);
 
   // 默认勾选最近 8 条
   useEffect(() => {
@@ -363,6 +408,8 @@ export function FeedbackDialog() {
                 message: e.message,
               }))
             : [],
+          // 环境信息整块不勾选时传 null，后端不采集也不发送任何环境字段
+          env: draft.includeEnv ? { ...draft.envItems } : null,
           locale: navigator.language,
         },
       });
@@ -667,7 +714,7 @@ export function FeedbackDialog() {
                 </label>
 
                 {draft.includeLogs && (
-                  <div className="mt-2">
+                  <div className="mt-2 pl-[21px]">
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                         {logsLoading
@@ -772,45 +819,60 @@ export function FeedbackDialog() {
                 className="rounded-lg p-2.5"
                 style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
               >
-                <button
-                  onClick={() => setEnvOpen((v) => !v)}
-                  className="pd-btn flex items-center gap-1.5 w-full text-left"
-                  style={{ color: 'var(--text-secondary)' }}
-                >
-                  {envOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                  <span className="text-[11px]">环境信息（随反馈一并提交）</span>
-                  <div className="flex-1" />
-                  {env && (
-                    <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                      v{env.appVersion} · {CHANNEL_LABELS[env.channel] ?? env.channel}
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={draft.includeEnv}
+                    onChange={(e) => setDraft((d) => ({ ...d, includeEnv: e.target.checked }))}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                      环境信息（帮助判断是否环境问题）
                     </span>
-                  )}
-                </button>
+                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                      仅含版本与状态，不含启动参数、连接配置与密钥；可逐项选择是否提供。
+                    </span>
+                  </span>
+                </label>
 
-                {envOpen && (
-                  <div className="mt-2 flex flex-col gap-1">
+                {draft.includeEnv && (
+                  <div className="mt-2 pl-[21px] flex flex-col gap-1">
                     {envLoading ? (
                       <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                         读取中…
                       </span>
                     ) : envError ? (
                       <span className="text-[10px]" style={{ color: '#EF4444' }}>
-                        读取失败（提交时仍会附带）：{envError}
+                        读取失败（提交时仍会附带已勾选项）：{envError}
                       </span>
-                    ) : env ? (
-                      <>
-                        <EnvRow
-                          label="应用"
-                          value={`v${env.appVersion} · ${CHANNEL_LABELS[env.channel] ?? env.channel}`}
-                        />
-                        <EnvRow
-                          label="系统"
-                          value={`${OS_LABELS[env.os] ?? env.os} ${env.arch}`}
-                        />
-                        <EnvRow
-                          label="依赖"
-                          value={
-                            [
+                    ) : null}
+
+                    <EnvOption
+                      label="应用版本与构建"
+                      checked={draft.envItems.app}
+                      onToggle={(v) => setDraft((d) => ({ ...d, envItems: { ...d.envItems, app: v } }))}
+                      value={
+                        env
+                          ? `v${env.appVersion} · ${CHANNEL_LABELS[env.channel] ?? env.channel}`
+                          : undefined
+                      }
+                    />
+                    <EnvOption
+                      label="系统与架构"
+                      checked={draft.envItems.system}
+                      onToggle={(v) =>
+                        setDraft((d) => ({ ...d, envItems: { ...d.envItems, system: v } }))
+                      }
+                      value={env ? `${OS_LABELS[env.os] ?? env.os} ${env.arch}` : undefined}
+                    />
+                    <EnvOption
+                      label="依赖工具版本"
+                      checked={draft.envItems.tools}
+                      onToggle={(v) => setDraft((d) => ({ ...d, envItems: { ...d.envItems, tools: v } }))}
+                      value={
+                        env
+                          ? [
                               env.nodeVersion && `Node ${env.nodeVersion}`,
                               env.npmVersion && `npm ${env.npmVersion}`,
                               env.gitVersion && `Git ${env.gitVersion}`,
@@ -818,34 +880,34 @@ export function FeedbackDialog() {
                             ]
                               .filter(Boolean)
                               .join(' · ') || '未检测到 Node / npm / Git / Python'
-                          }
-                        />
-                        <EnvRow
-                          label={`Agent（${env.agents.length}）`}
-                          value={
-                            env.agents.length === 0
-                              ? '未启用任何 Agent'
-                              : env.agents
-                                  .map((a) => {
-                                    const ver = a.version ? ` ${a.version}` : '';
-                                    const state =
-                                      a.available === true
-                                        ? '可用'
-                                        : a.installed === false
-                                          ? '未安装'
-                                          : a.available === false
-                                            ? '不可用'
-                                            : '';
-                                    return `${a.displayName}（${a.transport}）${ver}${state ? ` · ${state}` : ''}`;
-                                  })
-                                  .join('；')
-                          }
-                        />
-                        <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-                          以上均为版本与状态，不含启动参数、连接配置与密钥。
-                        </span>
-                      </>
-                    ) : null}
+                          : undefined
+                      }
+                    />
+                    <EnvOption
+                      label={`已启用 Agent${env ? `（${env.agents.length}）` : ''}`}
+                      checked={draft.envItems.agents}
+                      onToggle={(v) => setDraft((d) => ({ ...d, envItems: { ...d.envItems, agents: v } }))}
+                      value={
+                        env
+                          ? env.agents.length === 0
+                            ? '未启用任何 Agent'
+                            : env.agents
+                                .map((a) => {
+                                  const ver = a.version ? ` ${a.version}` : '';
+                                  const state =
+                                    a.available === true
+                                      ? '可用'
+                                      : a.installed === false
+                                        ? '未安装'
+                                        : a.available === false
+                                          ? '不可用'
+                                          : '';
+                                  return `${a.displayName}（${a.transport}）${ver}${state ? ` · ${state}` : ''}`;
+                                })
+                                .join('；')
+                          : undefined
+                      }
+                    />
                   </div>
                 )}
               </div>
