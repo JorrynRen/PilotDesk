@@ -445,7 +445,7 @@ export function AgentManager() {
               导入配置
             </SettingsButton>
             <SettingsButton
-              variant="secondary"
+              variant="primary"
               icon={<StoreIcon size={11} />}
               onClick={() => navigate('/market?tab=agents')}
             >
@@ -455,7 +455,7 @@ export function AgentManager() {
           {!showAddForm ? (
             <SettingsButton
               onClick={() => setShowAddForm(true)}
-              variant="primary"
+              variant="secondary"
               icon={<Plus size={12} />}
             >
               添加自定义 Agent
