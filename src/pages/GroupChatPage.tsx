@@ -2754,7 +2754,11 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                   与会话页一致：工具组的 flex-basis 为 0，宽度不足时工具组内部换行，发送键始终贴本行右端 */}
               <div className="pd-composer-actions">
                 <div className="pd-composer-tools">
-                  <SecurityModeSelector value={securityMode} onChange={setSecurityMode} />
+                  <SecurityModeSelector
+                    value={securityMode}
+                    onChange={setSecurityMode}
+                    hint="圆桌内各类参与者共用这一审批尺度：API 参与者按策略逐条审批；ACP 参与者映射为宿主的会话模式（映射不到时按此策略兜底），由主持人裁决；本地 CLI 参与者由它自己的启动参数决定。"
+                  />
                   <button
                     onClick={handlePickAttachments}
                     className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0"

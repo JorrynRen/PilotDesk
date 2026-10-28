@@ -626,6 +626,15 @@ impl RoomRegistry {
             .ok_or_else(|| AppError::NotFound(format!("房间不存在: {}", room_id)))?;
 
         let approval_log: Arc<Mutex<Vec<ApprovalRecord>>> = Arc::new(Mutex::new(Vec::new()));
+        // 共享主持人引用 / 审批尺度：构建与重建名册共用同一实例，参与者读到的永远是最新值。
+        let shared_director: Arc<RwLock<Option<Arc<Director>>>> = Arc::new(RwLock::new(None));
+        let security_shared: Arc<RwLock<Option<SecurityMode>>> = Arc::new(RwLock::new(None));
+        let acp_gate: Arc<DirectorApprovalGate> = Arc::new(DirectorApprovalGate::new(
+            shared_director.clone(),
+            approval_log.clone(),
+            room.topic.clone(),
+            security_shared.clone(),
+        ));
         let participant_failures: Arc<Mutex<HashMap<String, Vec<(i64, String)>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -644,6 +653,9 @@ impl RoomRegistry {
             control.abort.clone(),
             None,
             None,
+            shared_director.clone(),
+            acp_gate.clone(),
+            security_shared.clone(),
         )?;
 
         // 应用重启后懒恢复：读取 DB 真实状态与轮次，供 run() 判断是否续跑未完成任务。
@@ -695,6 +707,9 @@ impl RoomRegistry {
             mcp: None,
             // 会话安全模式：每次 Send 时注入（默认标准）。
             security_mode: None,
+            // 与 CLI/ACP 参与者共享的审批尺度单元、ACP 权限请求闸门（主持人裁决）。
+            security_shared,
+            acp_gate,
             participant_failures,
             input_refs: Vec::new(),
             output_dir,
@@ -813,6 +828,9 @@ fn build_participants(
     cancel: Arc<std::sync::atomic::AtomicBool>,
     mcp: Option<Arc<RoomMcpAssets>>,
     security_mode: Option<SecurityMode>,
+    shared_director: Arc<RwLock<Option<Arc<Director>>>>,
+    acp_gate: Arc<dyn crate::agent::transport::ApprovalGate>,
+    security_shared: Arc<RwLock<Option<SecurityMode>>>,
 ) -> Result<BuiltParticipants, AppError> {
     let rows = store::list_participants(conn, &room.id)?;
     // 群聊作用域技能禁用集（构造时读一次的快照，随后 rebuild_participants 时刷新）：
@@ -860,8 +878,11 @@ fn build_participants(
             director = Some(Arc::new(Director::new(Arc::new(llm), row.id.clone())));
         }
     }
-    // 共享主持人引用：参与者审批/续跑裁决读取它，Director 热切换（降级换人）后自动跟随。
-    let shared_director = Arc::new(RwLock::new(director.clone()));
+    // 共享主持人引用由调用方持有（构建/重建名册时保持同一实例），这里写入本次构建的主持人；
+    // 参与者审批/续跑裁决读取它，Director 热切换（降级换人）后自动跟随。
+    if let Ok(mut slot) = shared_director.write() {
+        *slot = director.clone();
+    }
 
     for row in &rows {
         match row.participant_type.as_str() {
@@ -912,6 +933,8 @@ fn build_participants(
                     Arc::new(AsyncMutex::new(AgentManager::new())),
                     pool.clone(),
                     cwd.clone(),
+                    acp_gate.clone(),
+                    security_shared.clone(),
                 ));
                 let p = super::participant::CliParticipant {
                     id: row.id.clone(),
@@ -1038,6 +1061,90 @@ struct ApprovalRecord {
     risk: String,
     allow: bool,
     reason: String,
+}
+
+/// 圆桌里 ACP 参与者的权限请求闸门：与 API 参与者同一裁决人（主持人）。
+///
+/// 房间级「安全模式」表达的是**审批尺度**，不是宿主模式 id：宿主提供 `modes` 时由传输层按语义
+/// 映射（`map_security_to_host_mode`），宿主不提供模式或映射不到时才走到这里。裁决口径与
+/// [`make_director_approval`] 一致：无限制模式直接放行（不打扰主持人），其余交主持人按任务
+/// 必要性裁决；无主持人或裁决超时按拒绝（保守）。
+struct DirectorApprovalGate {
+    director_ref: Arc<RwLock<Option<Arc<Director>>>>,
+    approval_log: Arc<Mutex<Vec<ApprovalRecord>>>,
+    topic: String,
+    /// 房间级审批尺度（与 CLI 参与者共享同一实例，随每条指令更新）。
+    security: Arc<RwLock<Option<SecurityMode>>>,
+}
+
+impl DirectorApprovalGate {
+    fn new(
+        director_ref: Arc<RwLock<Option<Arc<Director>>>>,
+        approval_log: Arc<Mutex<Vec<ApprovalRecord>>>,
+        topic: String,
+        security: Arc<RwLock<Option<SecurityMode>>>,
+    ) -> Self {
+        Self {
+            director_ref,
+            approval_log,
+            topic,
+            security,
+        }
+    }
+
+    fn current_security(&self) -> Option<SecurityMode> {
+        self.security.read().ok().and_then(|m| *m)
+    }
+
+    fn record(&self, tool_name: String, allow: bool, reason: String) {
+        if let Ok(mut log) = self.approval_log.lock() {
+            log.push(ApprovalRecord {
+                tool_name,
+                risk: "ACP 权限请求".to_string(),
+                allow,
+                reason,
+            });
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::agent::transport::ApprovalGate for DirectorApprovalGate {
+    async fn request_approval(&self, call_id: &str) -> bool {
+        self.request_approval_with_details(call_id, "工具调用", "")
+            .await
+    }
+
+    async fn request_approval_with_details(
+        &self,
+        _call_id: &str,
+        tool_name: &str,
+        arguments: &str,
+    ) -> bool {
+        // 无限制：一律放行，不打断主持人（与 API 参与者「无需审批的工具直接执行」同口径）
+        if matches!(self.current_security(), Some(SecurityMode::Unrestricted)) {
+            self.record(tool_name.to_string(), true, "无限制模式直接放行".to_string());
+            return true;
+        }
+        let Some(director) = self.director_ref.read().unwrap().clone() else {
+            return false; // 无主持人 → 默认拒绝（保守）
+        };
+        let decision = match tokio::time::timeout(
+            Duration::from_secs(DIRECTOR_CALL_TIMEOUT_SECS),
+            director.authorize_tool(&self.topic, tool_name, arguments, "ACP 工具权限请求"),
+        )
+        .await
+        {
+            Ok(d) => d,
+            Err(_) => return false, // 裁决超时 → 拒绝
+        };
+        self.record(
+            tool_name.to_string(),
+            decision.allow,
+            decision.reason.clone(),
+        );
+        decision.allow
+    }
 }
 
 /// 待落库消息（并发任务执行阶段暂存，回到 Actor 主循环后按顺序写库）。
@@ -1540,6 +1647,10 @@ struct RoomRuntime {
     mcp: Option<Arc<RoomMcpAssets>>,
     /// 会话安全模式（本波次有效，Send 命令注入；None 默认标准）。
     security_mode: Option<SecurityMode>,
+    /// 审批尺度的共享单元：CLI/ACP 参与者按它映射 ACP 宿主模式（与 `security_mode` 同源）。
+    security_shared: Arc<RwLock<Option<SecurityMode>>>,
+    /// ACP 参与者的权限请求闸门（主持人裁决，与 API 参与者的审批同一口径）。
+    acp_gate: Arc<DirectorApprovalGate>,
     /// 参与者失败记录（participant_id → (时间戳, 原因)，保留最近 5 条）；
     /// 供 Director 感知反复失败、避免反复指派其执行任务。
     participant_failures: Arc<Mutex<HashMap<String, Vec<(i64, String)>>>>,
@@ -1554,6 +1665,14 @@ struct RoomRuntime {
 impl RoomRuntime {
     fn emit(&self, event: GroupChatEvent) {
         let _ = self.app.emit("groupchat-event", &event);
+    }
+
+    /// 注入本波次的审批尺度：同时写回共享单元，使 CLI/ACP 参与者的 ACP 宿主模式映射生效。
+    fn set_security_mode(&mut self, mode: Option<SecurityMode>) {
+        self.security_mode = mode;
+        if let Ok(mut shared) = self.security_shared.write() {
+            *shared = mode;
+        }
     }
 
     fn conn(
@@ -1605,7 +1724,7 @@ impl RoomRuntime {
                         self.control.abort.store(false, Ordering::SeqCst);
                     }
                     // 会话安全模式：本波次有效，注入运行时（None 默认标准）
-                    self.security_mode = security_mode;
+                    self.set_security_mode(security_mode);
                     self.control.wait_if_paused().await;
                     self.handle_send(
                         &sender,
@@ -1695,6 +1814,9 @@ impl RoomRuntime {
             self.control.abort.clone(),
             self.mcp.clone(),
             self.security_mode,
+            self.shared_director.clone(),
+            self.acp_gate.clone(),
+            self.security_shared.clone(),
         ) else {
             return;
         };
@@ -4046,7 +4168,7 @@ impl RoomRuntime {
                 security_mode,
             }) = self.drain_pending_commands().await
             {
-                self.security_mode = security_mode;
+                self.set_security_mode(security_mode);
                 self.process_user_directive(
                     &sender,
                     &content,
@@ -4281,7 +4403,7 @@ impl RoomRuntime {
                     cmd = self.cmd_rx.recv() => {
                         match cmd {
                             Some(RoomCommand::Send { sender, content, recipients, reply_to, mention, attachments, security_mode }) => {
-                                self.security_mode = security_mode;
+                                self.set_security_mode(security_mode);
                                 // 讨论中插队：立即预显示用户消息 + 等待提示，编排留待当前发言结束后。
                                 let msg = self.persist_user_directive(&sender, &content, &recipients, reply_to.as_deref(), mention.as_deref(), &attachments).await;
                                 if staged_directive.is_none() {
@@ -4858,7 +4980,7 @@ impl RoomRuntime {
                 security_mode,
             }) = self.drain_pending_commands().await
             {
-                self.security_mode = security_mode;
+                self.set_security_mode(security_mode);
                 self.process_user_directive(
                     &sender,
                     &content,
@@ -5035,7 +5157,7 @@ impl RoomRuntime {
                         cmd = self.cmd_rx.recv() => {
                             match cmd {
                                 Some(RoomCommand::Send { sender, content, recipients, reply_to, mention, attachments, security_mode }) => {
-                                    self.security_mode = security_mode;
+                                    self.set_security_mode(security_mode);
                                     // 立即预显示用户消息；编排（after_user_directive）延迟到波次结束后，
                                     // 取最近一条（多条插队时后者覆盖前者）。
                                     let msg = self.persist_user_directive(&sender, &content, &recipients, reply_to.as_deref(), mention.as_deref(), &attachments).await;
@@ -5528,7 +5650,7 @@ impl RoomRuntime {
                     security_mode,
                 }) => {
                     // 确认等待期间的开放文本回复：同步更新本波次模式
-                    self.security_mode = security_mode;
+                    self.set_security_mode(security_mode);
                     return Some(ConfirmationReply::Open {
                         sender,
                         content,
@@ -6086,12 +6208,25 @@ impl RoomRuntime {
                                                     // cli 参与者：本地 CLI Agent 执行器（与 build_participants 一致，每参与者独立 AgentManager）。
                                                     let agent_type =
                                                         agent_type_from_config(&row.agent_config);
+                                                    // 动态补员同样接主持人裁决闸门：ACP 接入的权限请求不会自动放行。
+                                                    let security_shared =
+                                                        Arc::new(RwLock::new(security_mode));
+                                                    let gate: Arc<
+                                                        dyn crate::agent::transport::ApprovalGate,
+                                                    > = Arc::new(DirectorApprovalGate::new(
+                                                        shared_director.clone(),
+                                                        approval_log.clone(),
+                                                        topic.clone(),
+                                                        security_shared.clone(),
+                                                    ));
                                                     let runner = Arc::new(PilotDeskCliRunner::new(
                                                         Arc::new(AsyncMutex::new(
                                                             AgentManager::new(),
                                                         )),
                                                         pool.clone(),
                                                         cwd.clone(),
+                                                        gate,
+                                                        security_shared,
                                                     ));
                                                     let p = CliParticipant {
                                                         id: new_id.clone(),

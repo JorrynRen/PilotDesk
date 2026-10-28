@@ -18,6 +18,7 @@ export function SecurityModeSelector({
   dropUp = true,
   disabled = false,
   disabledReason,
+  hint,
 }: {
   value: SecurityModeValue;
   onChange: (v: SecurityModeValue) => void;
@@ -35,6 +36,11 @@ export function SecurityModeSelector({
   disabled?: boolean;
   /** 置灰原因（悬停提示） */
   disabledReason?: string;
+  /**
+   * 附加作用范围说明（悬停提示第二行）：多 Agent 场景（群聊圆桌）用来说明
+   * 该尺度对不同接入方式的 Agent 分别如何生效。
+   */
+  hint?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -68,7 +74,13 @@ export function SecurityModeSelector({
           fontWeight: current.danger && !disabled ? 600 : 400,
           height: '24px',
         }}
-        title={disabled ? disabledReason || current.desc : current.desc}
+        title={
+          disabled
+            ? disabledReason || current.desc
+            : hint
+              ? `${current.desc}\n${hint}`
+              : current.desc
+        }
       >
         <current.icon size={11} style={{ flexShrink: 0, color: current.color }} />
         <span>{current.name}</span>

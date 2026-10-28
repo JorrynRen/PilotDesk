@@ -9,10 +9,11 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::agent::{AgentManager, AsyncCallbacks, AsyncOptions};
+use crate::api_agent::agent_loop::SecurityMode;
 use crate::db::init::DbPool;
 use crate::utils::process::TimeoutPolicy;
 
@@ -24,33 +25,27 @@ pub struct PilotDeskCliRunner {
     cwd: String,
     /// agent_type -> agent_session_id（跨轮 `--resume` 持续会话）。
     sessions: Mutex<HashMap<String, String>>,
-}
-
-/// 圆桌参与者的审批闸门：本地 CLI 参与者本就由自身启动参数决定权限（预置默认跳过审批），
-/// ACP 参与者沿用同一口径——不放行则宿主每轮工具调用都会被拒，参与者直接干不了活。
-///
-/// 逐条审批（主持人裁决 / 前端审批卡）尚未接进圆桌，这里先自动放行并留日志，
-/// 让"ACP 参与者能否跑起来"与"审批策略如何统一"分开处理。
-struct ParticipantAllowAllGate;
-
-#[async_trait::async_trait]
-impl crate::agent::transport::ApprovalGate for ParticipantAllowAllGate {
-    async fn request_approval(&self, call_id: &str) -> bool {
-        log::warn!(
-            "[groupchat/cli] ACP 权限请求自动放行（圆桌未接入逐条审批）: call={}",
-            call_id
-        );
-        true
-    }
+    /// 参与者审批闸门（主持人裁决；ACP 权限请求走这条，与会话/工作流同一契约）。
+    approvals: Arc<dyn crate::agent::transport::ApprovalGate>,
+    /// 房间级审批尺度（随每条指令更新）：ACP 按它映射宿主模式，宿主未提供时作兜底。
+    security: Arc<RwLock<Option<SecurityMode>>>,
 }
 
 impl PilotDeskCliRunner {
-    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, pool: DbPool, cwd: String) -> Self {
+    pub fn new(
+        agent_manager: Arc<AsyncMutex<AgentManager>>,
+        pool: DbPool,
+        cwd: String,
+        approvals: Arc<dyn crate::agent::transport::ApprovalGate>,
+        security: Arc<RwLock<Option<SecurityMode>>>,
+    ) -> Self {
         Self {
             agent_manager,
             pool,
             cwd,
             sessions: Mutex::new(HashMap::new()),
+            approvals,
+            security,
         }
     }
 
@@ -100,6 +95,8 @@ impl PilotDeskCliRunner {
 
         // 圆桌未把房间级取消标志接进 CLI 参与者，这里用独立令牌（口径与既有实现一致）
         let abort = Arc::new(AtomicBool::new(false));
+        // 房间级审批尺度：ACP 宿主提供模式时按它映射（见 `derive_acp_mode`），否则作兜底
+        let security = self.security.read().ok().and_then(|m| *m);
         let conn = AgentConn {
             session_id: format!("groupchat:{}", descriptor.agent_id),
             agent_id: descriptor.agent_id.clone(),
@@ -110,10 +107,11 @@ impl PilotDeskCliRunner {
             resume_id: resume_session_id.clone(),
             abort,
             on_pid: None,
-            approvals: Some(Arc::new(ParticipantAllowAllGate)
-                as Arc<dyn crate::agent::transport::ApprovalGate>),
+            approvals: Some(Arc::clone(&self.approvals)),
             acp_mode: None,
-            security_mode: None,
+            security_mode: security,
+            // 圆桌只表达审批尺度、不选宿主 mode id：由传输层按语义映射
+            derive_acp_mode: true,
         };
         let handle = session
             .connect(&conn, sink)

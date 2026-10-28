@@ -1128,12 +1128,26 @@ impl AgentSession for AcpSession {
 
         // 每轮显式写回用户选择的模式：进程是每轮重建的，且实测 codex-acp 的
         // `set_mode` **不跨进程持久**，不写回就等于没选。
-        if let Some(want) = conn
+        //
+        // 期望模式有两个来源：
+        // 1. `acp_mode`：用户直接选定的宿主模式（会话模式路径）；
+        // 2. `security_mode` + `derive_acp_mode`：调用方只表达审批尺度（圆桌参与者），
+        //    这里按语义映射到宿主模式；宿主没提供模式/映射不到时保持原样，
+        //    由 2b 的兜底策略决定权限请求怎么处理。
+        let want_mode: Option<String> = conn
             .acp_mode
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-        {
+            .map(str::to_string)
+            .or_else(|| {
+                if !conn.derive_acp_mode {
+                    return None;
+                }
+                conn.security_mode
+                    .and_then(|m| super::map_security_to_host_mode(&available_modes, m))
+            });
+        if let Some(want) = want_mode {
             if !host_has_modes {
                 log::warn!(
                     "[acp] 宿主未提供会话模式，忽略期望值 {}: session={}",
