@@ -6,7 +6,10 @@
  * 只有宿主完全不提供模式时，才回退到本应用的安全模式（兜底审批策略）。
  *
  * 数据分两类：
- * - 模式列表与当前值：每轮建/恢复会话时由后端回传（`agent-session-modes`），纯运行时数据；
+ * - 模式列表与当前值：每轮建/恢复会话时由后端回传（`agent-session-modes`）。本身是运行时
+ *   数据，但**按 Agent 再存一份展示缓存**：重启后没人回传，输入栏与工作流节点面板会退回
+ *   "从没连过宿主"的置灰态，逼用户再开一次会话。缓存只用于渲染候选，id 合法性仍由后端在
+ *   `session/set_mode` 时校验（失效只告警并回落跟随宿主），因此缓存过期不会造成错配；
  * - 用户选择（pin）：必须持久化——实测 codex-acp 的 `set_mode` 不跨进程持久，
  *   而 ACP 进程是每轮重建的，不记住用户选择就等于每轮都回到宿主默认。
  */
@@ -44,6 +47,47 @@ function savePins(pins: Record<string, string>): void {
   }
 }
 
+const SNAPSHOT_STORAGE_KEY = 'pilotdesk.acp-mode.snapshots';
+
+/**
+ * 读取按 Agent 缓存的宿主模式集（展示用）。
+ *
+ * 解析必须是防御式的：这份数据可能被旧版本、手工改动或半写入破坏，
+ * 坏数据只能导致"回落成未得知"，绝不能让整个 store 初始化抛错。
+ * 空数组是**有效**缓存（= 已确认该宿主不提供模式），与"未得知"区分开。
+ */
+function loadAgentSnapshots(): Record<string, AcpModeSnapshot> {
+  try {
+    const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: Record<string, AcpModeSnapshot> = {};
+    for (const [agentType, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const snap = value as { modes?: unknown; currentModeId?: unknown } | null;
+      if (!snap || !Array.isArray(snap.modes)) continue;
+      const modes = snap.modes
+        .filter((m): m is AcpModeOption => !!m && typeof (m as AcpModeOption).id === 'string')
+        .map((m) => ({ id: m.id, name: m.name || m.id, description: m.description ?? null }));
+      out[agentType] = {
+        modes,
+        currentModeId: typeof snap.currentModeId === 'string' ? snap.currentModeId : null,
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveAgentSnapshots(byAgent: Record<string, AcpModeSnapshot>): void {
+  try {
+    localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(byAgent));
+  } catch {
+    /* 配额/隐私模式失败可忽略：仅影响下次启动的首屏候选 */
+  }
+}
+
 /** 会话级 key（用户在某条会话里选过） */
 function sessionKey(sessionId: string): string {
   return `session:${sessionId}`;
@@ -57,7 +101,7 @@ function agentKey(agentType: string): string {
 interface AcpModeState {
   /** 会话 → 最近一次宿主返回的模式集与当前值 */
   bySession: Record<string, AcpModeSnapshot>;
-  /** Agent → 最近见过的模式集（供新建会话首轮前渲染选择器） */
+  /** Agent → 最近见过的模式集（供新建会话首轮前渲染选择器；落一份展示缓存，重启后仍可渲染） */
   byAgent: Record<string, AcpModeSnapshot>;
   /** 用户固定的模式 id（`session:<id>` / `agent:<type>`）；不存在 = 跟随宿主 */
   pins: Record<string, string>;
@@ -74,20 +118,19 @@ interface AcpModeState {
 
 export const useAcpModeStore = create<AcpModeState>((set, get) => ({
   bySession: {},
-  byAgent: {},
+  byAgent: loadAgentSnapshots(),
   pins: loadPins(),
 
   record: (sessionId, agentType, modes, currentModeId) => {
     const snapshot: AcpModeSnapshot = { modes, currentModeId };
-    set((state) => {
-      const next: Partial<AcpModeState> = {
-        bySession: sessionId ? { ...state.bySession, [sessionId]: snapshot } : state.bySession,
-      };
-      // 同步一份到 Agent 级：新建会话首轮前没有会话 id，只能靠它渲染列表
-      if (agentType) {
-        next.byAgent = { ...state.byAgent, [agentType]: snapshot };
-      }
-      return next;
+    const state = get();
+    // 同步一份到 Agent 级：新建会话首轮前没有会话 id，只能靠它渲染列表；
+    // 同时落展示缓存，使重启后无需再开一次会话就能看到宿主模式。
+    const nextByAgent = agentType ? { ...state.byAgent, [agentType]: snapshot } : state.byAgent;
+    if (agentType) saveAgentSnapshots(nextByAgent);
+    set({
+      bySession: sessionId ? { ...state.bySession, [sessionId]: snapshot } : state.bySession,
+      byAgent: nextByAgent,
     });
     // 用户固定的 id 若已不在最新列表里（适配器升级导致改名），自动退回"跟随宿主"，
     // 否则每轮都会打一条"模式不存在"的告警，且 UI 会显示一个不存在的选项。

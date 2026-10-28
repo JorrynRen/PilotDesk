@@ -1440,13 +1440,23 @@ useEffect(() => {
   };
 
   /**
+   * 切换具体 Agent 类型（含 API ↔ CLI）：宿主模式 id 只对原宿主有意义，换类型必须一并清掉
+   * 节点上的 `acp_mode`——否则切到的宿主恰好有同名档位时会"意外命中"，实际行为就不再是
+   * 「跟随宿主」。
+   */
+  const applyAgentTypeChange = (nextAgentType: string) => {
+    handleParamChange('agent_type', nextAgentType);
+    if (params.acp_mode) handleParamChange('acp_mode', '');
+  };
+
+  /**
    * 切换一级菜单（CLI Agent / API Agent）：换类就换 `agent_type`（二级的具体选择落在它上面），
    * 并清掉延续会话引用 —— CLI 的 resume 值是 CLI 的 agent session id、API 的是应用会话 id，
    * 混用会静默传错（换类后原来的引用一定不再成立）。
    */
   const applyAgentKindChange = (kind: string) => {
     const nextAgentType = kind === 'api' ? 'api' : (cliAgentTypes[0] || 'claude');
-    if (nextAgentType !== params.agent_type) handleParamChange('agent_type', nextAgentType);
+    if (nextAgentType !== params.agent_type) applyAgentTypeChange(nextAgentType);
     if (params.resume_session_ref) handleParamChange('resume_session_ref', '');
   };
 
@@ -1880,7 +1890,7 @@ useEffect(() => {
                   <label style={S.label()}>CLI 类型</label>
                   <Select
                     value={(params['agent_type'] as string) || ''}
-                    onChange={(v) => handleParamChange('agent_type', v)}
+                    onChange={(v) => applyAgentTypeChange(v)}
                     options={[
                       /* 存的 CLI 类型当前不可用（未安装/被禁用）时仍显示原值，否则下拉会落到第一项，
                           看起来像"节点配置与 JSON 不一致" */
@@ -2015,10 +2025,17 @@ useEffect(() => {
                   const isAcp = getTransport(params['agent_type'] as string) === 'acp';
                   if (isAcp) {
                     const modes = acpHostSnapshot?.modes ?? [];
+                    // `undefined` = 尚未得知；快照存在但列表为空 = 已确认该宿主不提供模式
+                    const unknown = !acpHostSnapshot;
                     const known = modes.length > 0;
                     const saved = (params['acp_mode'] as string) || '';
                     // 宿主升级可能改名：已存 id 不在最新列表里就退回「跟随宿主」，避免显示幽灵档位
                     const value = known && modes.some((m) => m.id === saved) ? saved : '';
+                    const hint = known
+                      ? '工具授权审批策略由宿主模式决定，不受本应用策略控制。'
+                      : unknown
+                        ? '需要任意与宿主完成一次对话，才能拿到宿主安全模式数据。'
+                        : '该宿主不提供会话模式：权限按标准审批策略兜底（低风险直接放行，高风险逐条审批）。';
                     return (
                       <div style={{ marginTop: 10 }}>
                         <label style={S.label()}>工具授权</label>
@@ -2033,9 +2050,7 @@ useEffect(() => {
                           className="w-full min-w-0"
                         />
                         <div style={{ marginTop: 4, fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
-                          {known
-                            ? '工具授权审批策略由宿主模式决定，不受本应用策略控制。'
-                            : '需要任意与宿主完成一次对话，才能拿到宿主安全模式数据。'}
+                          {hint}
                         </div>
                       </div>
                     );
