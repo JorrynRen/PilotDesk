@@ -391,6 +391,31 @@ export function FeedbackDialog() {
           </button>
         </div>
 
+        {/* 提示横幅：固定在顶部行。
+            放在表单滚动区内时，内容一长（日志列表撑高）就会被滚到可视区外，
+            而提交失败恰恰是用户最需要看到提示的时刻。 */}
+        {!result && error && (
+          <div className="px-5 pt-3 shrink-0">
+            <div
+              className="flex items-center gap-2 text-[11px] px-2.5 py-1.5 rounded-lg"
+              style={{ backgroundColor: 'rgba(239,68,68,0.08)', color: '#EF4444' }}
+            >
+              <span className="flex-1 min-w-0 break-words">{error}</span>
+              {loginHint && (
+                <button
+                  onClick={() => void startLogin()}
+                  disabled={loggingIn}
+                  className="pd-btn shrink-0 flex items-center gap-1 text-[11px] px-2 py-1 rounded transition-colors disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                >
+                  {loggingIn ? <Loader2 size={11} className="animate-spin" /> : <LogIn size={11} />}
+                  {loggingIn ? '登录中…' : '登录并继续'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {result ? (
           /* 成功回执 */
           <div className="px-5 py-10 flex flex-col items-center gap-3">
@@ -655,33 +680,24 @@ export function FeedbackDialog() {
                   </div>
                 )}
               </div>
-
-              {error && (
-                <div
-                  className="flex items-center gap-2 text-[11px] px-2.5 py-1.5 rounded-lg"
-                  style={{ backgroundColor: 'rgba(239,68,68,0.08)', color: '#EF4444' }}
-                >
-                  <span className="flex-1 min-w-0 break-words">{error}</span>
-                  {loginHint && (
-                    <button
-                      onClick={() => void startLogin()}
-                      disabled={loggingIn}
-                      className="pd-btn shrink-0 flex items-center gap-1 text-[11px] px-2 py-1 rounded transition-colors disabled:opacity-50"
-                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                    >
-                      {loggingIn ? <Loader2 size={11} className="animate-spin" /> : <LogIn size={11} />}
-                      {loggingIn ? '登录中…' : '登录并继续'}
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* 底部动作 */}
             <div
-              className="flex items-center justify-end gap-2 px-5 py-3 shrink-0"
+              className="flex items-center gap-2 px-5 py-3 shrink-0"
               style={{ borderTop: '1px solid var(--border)' }}
             >
+              <span
+                className="text-[10px] truncate"
+                style={{ color: 'var(--text-tertiary)' }}
+                title={
+                  '随反馈一并提交：应用版本与渠道、系统与架构、Node / npm / Git / Python 版本、' +
+                  '已启用 Agent 的接入方式与版本状态（不含启动参数与密钥）。'
+                }
+              >
+                附带应用版本与环境摘要
+              </span>
+              <div className="flex-1" />
               <button
                 onClick={() => {
                   if (!submitting) close();

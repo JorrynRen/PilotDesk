@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::State;
 
+use crate::agent::AgentManager;
+use crate::commands::agents;
+use crate::commands::env::{cached_agent_health, cached_agent_versions, clean_version_string};
 use crate::commands::org_common::{map_platform_error, require_token};
 use crate::utils::platform;
 
@@ -70,6 +73,50 @@ pub struct SubmitFeedbackResult {
     pub status: String,
 }
 
+/// 依赖工具版本探测的超时上限（秒）。
+///
+/// 只是 `--version`，正常在几百毫秒内返回；给 5s 是为了不把提交卡在
+/// 「环境检测」上——超时就按未知（`null`）上报，不阻塞反馈本身。
+const PROBE_TIMEOUT_SECS: u64 = 5;
+/// 环境摘要里最多带上多少个已启用 Agent（防止配置很多时撑大请求体）
+const MAX_ENV_AGENTS: usize = 12;
+
+/// 一个已启用 Agent 的环境摘要。
+///
+/// 只放定位问题必需的三件事：接入方式、版本、是否安装/可用。
+/// **不带**启动参数与连接配置——那里面有密钥和本机路径。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackEnvAgent {
+    agent_type: String,
+    display_name: String,
+    /// `subprocess`（本地 CLI）/ `acp`
+    transport: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    available: Option<bool>,
+}
+
+/// 运行环境摘要（随反馈提交，帮助平台侧判断是环境问题还是产品缺陷）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackEnv {
+    os: String,
+    arch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    npm_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    python_version: Option<String>,
+    agents: Vec<FeedbackEnvAgent>,
+}
+
 /// 平台成功响应
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +153,109 @@ fn map_feedback_error(err: platform::PlatformError) -> String {
     map_platform_error(err)
 }
 
+/// 依赖工具版本（探测结果，拿不到就是 `None`）。
+struct ToolVersions {
+    node: Option<String>,
+    npm: Option<String>,
+    git: Option<String>,
+    python: Option<String>,
+}
+
+/// 现场探测依赖工具版本。
+///
+/// Node / npm / Git / Python 的版本几乎决定「Agent 装不上 / 起不来」类问题的归因，
+/// 且各自只是一次 `--version`，并行跑、5s 上限，拿不到就按未知上报，不阻塞提交。
+///
+/// **只拿 `&AgentManager`，不碰数据库连接**：`rusqlite::Connection` 不是 `Sync`，
+/// 带着它跨 await 会让命令 future 不满足 Tauri 要求的 `Send`。
+async fn probe_tools(agent_mgr: &AgentManager) -> ToolVersions {
+    let (node, npm, git, py) = tokio::join!(
+        agent_mgr.execute_command_output_async(
+            "node --version",
+            "",
+            PROBE_TIMEOUT_SECS,
+            "反馈环境摘要 node"
+        ),
+        agent_mgr.execute_command_output_async(
+            "npm --version",
+            "",
+            PROBE_TIMEOUT_SECS,
+            "反馈环境摘要 npm"
+        ),
+        agent_mgr.execute_command_output_async(
+            "git --version",
+            "",
+            PROBE_TIMEOUT_SECS,
+            "反馈环境摘要 git"
+        ),
+        async {
+            for cmd in ["python --version", "python3 --version", "py --version"] {
+                if let Ok(v) = agent_mgr
+                    .execute_command_output_async(
+                        cmd,
+                        "",
+                        PROBE_TIMEOUT_SECS,
+                        "反馈环境摘要 python",
+                    )
+                    .await
+                {
+                    return Some(clean_version_string(&v));
+                }
+            }
+            None
+        },
+    );
+
+    ToolVersions {
+        node: node.ok().map(|v| clean_version_string(&v)),
+        npm: npm.ok().map(|v| clean_version_string(&v)),
+        git: git.ok().map(|v| clean_version_string(&v)),
+        python: py,
+    }
+}
+
+/// 已启用 Agent 的版本与安装/可用状态。
+///
+/// 版本与状态取环境检测的既有缓存（120s 内有效），没有缓存就留空——
+/// **不在这里触发批量探测**，否则提交反馈会先卡十几秒。
+fn collect_agents(conn: &rusqlite::Connection) -> Vec<FeedbackEnvAgent> {
+    let transports: std::collections::HashMap<String, String> =
+        agents::list_agent_transports_inner(conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.agent_type, r.transport))
+            .collect();
+    let cached_versions = cached_agent_versions();
+
+    let mut rows = Vec::new();
+    for agent in agents::list_agents_inner(conn).unwrap_or_default() {
+        if !agent.is_enabled {
+            continue;
+        }
+        let health = cached_agent_health(&agent.agent_type);
+        rows.push(FeedbackEnvAgent {
+            transport: transports
+                .get(&agent.agent_type)
+                .cloned()
+                .unwrap_or_else(|| "subprocess".to_string()),
+            version: cached_versions.get(&agent.agent_type).cloned().or_else(|| {
+                agent
+                    .pkg_state
+                    .as_ref()
+                    .and_then(|s| s.installed_version.clone())
+            }),
+            installed: health.as_ref().map(|h| h.installed),
+            available: health.as_ref().map(|h| h.available),
+            display_name: agent.display_name,
+            agent_type: agent.agent_type,
+        });
+        if rows.len() >= MAX_ENV_AGENTS {
+            break;
+        }
+    }
+    rows
+}
+
 /// 提交意见反馈。
 ///
 /// 前置：必须已登录平台账号（未登录返回明确中文提示，前端据此引导登录后重试）。
@@ -114,6 +264,7 @@ fn map_feedback_error(err: platform::PlatformError) -> String {
 pub async fn submit_feedback(
     input: SubmitFeedbackInput,
     state: State<'_, crate::DbState>,
+    agent_mgr: State<'_, crate::AsyncMutex<AgentManager>>,
 ) -> Result<SubmitFeedbackResult, String> {
     let token = require_token(state.inner()).await?;
 
@@ -154,6 +305,26 @@ pub async fn submit_feedback(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
+    // 环境摘要：工具版本现场探测；Agent 版本/状态读环境检测缓存。
+    // 探测先做（需锁 AgentManager），随后同步读库，避免连接跨 await。
+    let tools = {
+        let mgr = agent_mgr.lock().await;
+        probe_tools(&mgr).await
+    };
+    let agent_rows = {
+        let conn = state.get_conn()?;
+        collect_agents(&conn)
+    };
+    let env = FeedbackEnv {
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        node_version: tools.node,
+        npm_version: tools.npm,
+        git_version: tools.git,
+        python_version: tools.python,
+        agents: agent_rows,
+    };
+
     let body = json!({
         "project": PROJECT,
         "category": category,
@@ -169,6 +340,7 @@ pub async fn submit_feedback(
             "os": input.os.unwrap_or_else(|| std::env::consts::OS.to_string()),
             "locale": input.locale.unwrap_or_else(|| "zh-CN".to_string()),
         },
+        "env": env,
     });
 
     let resp: PlatformFeedbackResp =

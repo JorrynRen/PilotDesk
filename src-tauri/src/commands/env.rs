@@ -20,7 +20,7 @@ macro_rules! log_env {
 // ──────────────────────────────────────────────
 
 /// Clean version string: keep only the semver part
-fn clean_version_string(raw: &str) -> String {
+pub(crate) fn clean_version_string(raw: &str) -> String {
     let trimmed = raw.trim();
     let segments: Vec<&str> = trimmed.split(|c: char| c == ' ' || c == '(').collect();
 
