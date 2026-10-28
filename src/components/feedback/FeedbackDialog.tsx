@@ -201,7 +201,8 @@ function EnvOption({
         type="checkbox"
         checked={checked}
         onChange={(e) => onToggle(e.target.checked)}
-        style={{ marginTop: 2 }}
+        className="shrink-0"
+        style={{ width: 13, height: 13, marginTop: 1 }}
       />
       <span className="flex-1 min-w-0 flex items-start gap-2">
         <span
@@ -703,20 +704,24 @@ export function FeedbackDialog() {
                 className="rounded-lg p-2.5"
                 style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
               >
-                <label className="flex items-start gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={draft.includeLogs}
-                    onChange={(e) => setDraft((d) => ({ ...d, includeLogs: e.target.checked }))}
-                    style={{ marginTop: 2 }}
-                  />
-                  <span className="flex-1 min-w-0">
+                <label className="block cursor-pointer select-none">
+                  <span className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={draft.includeLogs}
+                      onChange={(e) => setDraft((d) => ({ ...d, includeLogs: e.target.checked }))}
+                      className="shrink-0"
+                      style={{ width: 13, height: 13, margin: 0 }}
+                    />
                     <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                       附加最近的错误日志（帮助定位问题）
                     </span>
-                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-                      仅包含后端错误/警告，已排除环境探测日志并脱敏；提交前可逐条查看。
-                    </span>
+                  </span>
+                  <span
+                    className="block text-[10px] mt-0.5 pl-[21px]"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    仅包含后端错误/警告，已排除环境探测日志并脱敏；提交前可逐条查看。
                   </span>
                 </label>
 
@@ -776,7 +781,8 @@ export function FeedbackDialog() {
                                 checked={checked}
                                 onChange={() => toggleLog(key)}
                                 disabled={!checked && selectedCount >= MAX_LOG_LINES}
-                                style={{ marginTop: 2 }}
+                                className="shrink-0"
+                                style={{ width: 13, height: 13, marginTop: 1 }}
                               />
                               <span className="flex-1 min-w-0">
                                 <span className="flex items-center gap-1.5">
@@ -826,20 +832,24 @@ export function FeedbackDialog() {
                 className="rounded-lg p-2.5"
                 style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
               >
-                <label className="flex items-start gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={draft.includeEnv}
-                    onChange={(e) => setDraft((d) => ({ ...d, includeEnv: e.target.checked }))}
-                    style={{ marginTop: 2 }}
-                  />
-                  <span className="flex-1 min-w-0">
+                <label className="block cursor-pointer select-none">
+                  <span className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={draft.includeEnv}
+                      onChange={(e) => setDraft((d) => ({ ...d, includeEnv: e.target.checked }))}
+                      className="shrink-0"
+                      style={{ width: 13, height: 13, margin: 0 }}
+                    />
                     <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                       环境信息（帮助判断是否环境问题）
                     </span>
-                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-                      仅含版本与状态，不含启动参数、连接配置与密钥；可逐项选择是否提供。
-                    </span>
+                  </span>
+                  <span
+                    className="block text-[10px] mt-0.5 pl-[21px]"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    仅含版本与状态，不含启动参数、连接配置与密钥；可逐项选择是否提供。
                   </span>
                 </label>
 
