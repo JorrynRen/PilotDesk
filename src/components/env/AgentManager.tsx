@@ -36,7 +36,7 @@ import { CSS } from '@dnd-kit/utilities';
 
 export function AgentManager() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { agents, loading, fetchAgents } = useAgentRegistry();
   // 安装/更新/卸载会改变本机版本：同步刷新全局环境信息，
   // 否则「设置 › 运行与策略」仍显示更新前的版本（跨页面共用同一份 envInfo）。
@@ -219,6 +219,17 @@ export function AgentManager() {
       setEditForm({ ...target });
     }
   }
+
+  // 深链消费后从 URL 移除参数：否则切到别的设置页再切回来（组件重新挂载、`deepOpened`
+  // 归零）会再命中同一个 `agent` 参数，把刚关掉的编辑表单又默认展开。
+  // 放在 effect 里而不是渲染期，避免渲染中触发路由更新。
+  useEffect(() => {
+    if (!deepAgent || deepOpened !== deepAgent) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('agent');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepAgent, deepOpened]);
 
   const handleSave = async () => {
     if (!editForm || !editingType) return;
