@@ -711,13 +711,16 @@ impl AgentExecutor {
         //（见 `WorkflowExecutor::cancel_execution_and_kill_agents`），这里登记同名运行态，
         // 取消时该标志才能传到适配器进程的等待里（ACP 传输每轮检查 abort）。
         let abort = crate::api_agent::session_runs::begin(session_key);
-        // 节点级「工具授权」：与 API 节点同一个下拉、同一套语义（宿主不提供模式时兜底）
-        let security = node
+        // 节点级的宿主会话模式（`acp_mode`）：ACP 的权限档位由宿主定义，节点面板只能从
+        // 宿主回传的 `modes` 里挑一个；拿不到宿主模式数据时前端置灰「跟随宿主」，
+        // 这里即为 `None`（不调用 `session/set_mode`）。不再用本应用的安全模式顶替宿主档位。
+        let acp_mode = node
             .config
-            .get("security_mode")
+            .get("acp_mode")
             .and_then(|v| v.as_str())
-            .filter(|s| SecurityMode::from_str(s).is_some())
-            .and_then(SecurityMode::from_str);
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         // 审批闸门与 API 节点同源：命中授权的调用暂停，等用户在工作流页/通知中心裁决
         let gate: Arc<dyn crate::agent::transport::ApprovalGate> =
             Arc::new(WorkflowAcpApprovalGate {
@@ -741,9 +744,10 @@ impl AgentExecutor {
             abort: Arc::clone(&abort),
             on_pid: None,
             approvals: Some(Arc::clone(&gate)),
-            acp_mode: None,
-            security_mode: security,
-            // 工作流节点：宿主自带会话模式时以宿主为准，本配置只在宿主不提供模式时兜底
+            acp_mode,
+            // ACP 的权限语义归宿主：宿主没提供模式时由传输层按默认兜底策略处理，
+            // 不再把节点上的安全模式当作宿主的审批档位。
+            security_mode: None,
             enforce_security_matrix: false,
         };
         let handle = match session.connect(&conn, sink).await {

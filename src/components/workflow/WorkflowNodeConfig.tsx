@@ -15,6 +15,7 @@ import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { usePluginStore, pluginCommands, findPluginCommand, commandParamKeys, pluginSupportsWorkflow, applyCommandParamDefaults } from '../../stores/pluginStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
+import { useAcpModeStore } from '../../stores/acpModeStore';
 import { isWorkflowSession } from '../../utils/sessionType';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
 import { SchemaParamForm } from '../plugin/SchemaParamForm';
@@ -1176,6 +1177,13 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   });
   /** Agent 节点一级菜单的取值：agent_type 是唯一事实源，api 单独一类 */
   const agentKind: 'cli' | 'api' = params.agent_type === 'api' ? 'api' : 'cli';
+  /**
+   * ACP 宿主的会话模式（`modes`）：只在真与宿主聊过一轮后才会回传，
+   * 因此节点面板拿不到时只能显示「跟随宿主」并置灰，不能拿本应用的安全模式顶替。
+   */
+  const acpHostSnapshot = useAcpModeStore((s) =>
+    typeof params.agent_type === 'string' ? s.byAgent[params.agent_type as string] : undefined,
+  );
   const { definitions, loadDefinitions } = useWorkflowStore();
   const { sessions: appSessions, refreshSessions } = useSessionStore();
   const pluginStore = usePluginStore();
@@ -1998,13 +2006,40 @@ useEffect(() => {
                   </>
                 );
               })()}
-              {/* 「工具授权」：API 与 ACP 节点共用同一个节点参数与同一套审批
-                  （同一张等待登记表、同一组 workflow:approval-* 事件）。
-                  ACP 宿主自带会话模式时以宿主为准，此处仅在其未提供模式时兜底。 */}
+              {/* 「工具授权」：API 节点按本应用的审批策略（`security_mode`）；
+                  ACP 节点的审批档位由**宿主**定义，这里只让用户挑宿主模式（`acp_mode`），
+                  拿不到宿主模式数据时置灰「跟随宿主」——绝不拿本应用策略顶替宿主档位。 */}
               {configFields[0].key === 'agent_type'
                 && (agentKind === 'api' || getTransport(params['agent_type'] as string) === 'acp')
                 && (() => {
                   const isAcp = getTransport(params['agent_type'] as string) === 'acp';
+                  if (isAcp) {
+                    const modes = acpHostSnapshot?.modes ?? [];
+                    const known = modes.length > 0;
+                    const saved = (params['acp_mode'] as string) || '';
+                    // 宿主升级可能改名：已存 id 不在最新列表里就退回「跟随宿主」，避免显示幽灵档位
+                    const value = known && modes.some((m) => m.id === saved) ? saved : '';
+                    return (
+                      <div style={{ marginTop: 10 }}>
+                        <label style={S.label()}>工具授权</label>
+                        <Select
+                          value={value}
+                          onChange={(v) => handleParamChange('acp_mode', v)}
+                          disabled={!known}
+                          options={[
+                            { value: '', label: '跟随宿主' },
+                            ...modes.map((m) => ({ value: m.id, label: m.name || m.id })),
+                          ]}
+                          className="w-full min-w-0"
+                        />
+                        <div style={{ marginTop: 4, fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
+                          {known
+                            ? '工具授权审批策略由宿主模式决定，不受本应用策略控制。'
+                            : '需要任意与宿主完成一次对话，才能拿到宿主安全模式数据。'}
+                        </div>
+                      </div>
+                    );
+                  }
                   const securityMode = (params['security_mode'] as SecurityModeValue) || 'standard';
                   const securityHint = SECURITY_MODE_OPTIONS.find((m) => m.value === securityMode)?.workflowEffect
                     ?? SECURITY_MODE_OPTIONS[1].workflowEffect;
@@ -2018,10 +2053,7 @@ useEffect(() => {
                         className="w-full min-w-0"
                       />
                       <div style={{ marginTop: 4, fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
-                        {securityHint}
-                        {isAcp
-                          ? '；该 Agent 为 ACP 接入：宿主自带会话模式时以宿主模式为准，宿主未提供模式时按此策略兜底'
-                          : '（仅 API Agent 生效）'}
+                        {securityHint}（仅 API Agent 生效）
                       </div>
                     </div>
                   );
