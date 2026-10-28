@@ -32,6 +32,7 @@ import { TerminalProvider } from './TerminalProvider';
 import { useTerminal } from './TerminalManager';
 import { ImagePreview } from './components/message/ImagePreview';
 import { ConfirmDialog } from './components/common/ConfirmDialog';
+import { FeedbackDialog } from './components/feedback/FeedbackDialog';
 import './styles/ui.css';
 
 function MainLayout() {
@@ -294,6 +295,8 @@ function App() {
       <ImagePreview />
       {/* 全局确认弹窗（替代 window.confirm：Tauri WebView 下后者常不触发） */}
       <ConfirmDialog />
+      {/* 全局意见反馈弹窗（通知中心 / 设置›关于 共用同一实现） */}
+      <FeedbackDialog />
       {/* 全局通知中心（顶栏铃铛触发；App 级挂载，所有模式/页面都能打开） */}
       <NotificationCenter />
       {/* 全局指挥中心模态（工作流页「待处理」触发；会话默认页另有一份内嵌内容） */}

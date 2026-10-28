@@ -10,6 +10,7 @@ import { Bell, X, CheckCheck, Trash2, AlertCircle, AlertTriangle, CheckCircle2, 
 import { useTerminal } from '../../TerminalManager';
 import { useSessionStore } from '../../stores/sessionStore';
 import { reconcileWorkflowPending } from '../../stores/notificationEvents';
+import { useFeedbackStore } from '../../stores/feedbackStore';
 import {
   useNotificationStore,
   countUnread,
@@ -48,6 +49,7 @@ export function NotificationCenter() {
   const clearAll = useNotificationStore((s) => s.clearAll);
   const dismiss = useNotificationStore((s) => s.dismiss);
   const { setMode } = useTerminal();
+  const openFeedback = useFeedbackStore((s) => s.openFeedback);
   const [filter, setFilter] = useState<FilterKey>('all');
 
   const shown = useMemo(() => {
@@ -221,6 +223,26 @@ export function NotificationCenter() {
                       )}
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{formatTs(item.ts)}</span>
+                        {/* 错误/警告通知就近提供反馈入口：用户正在看这条错误，顺手就能提交，
+                            且标题/明细/时间点会带进弹窗（日志自动聚焦到那一刻） */}
+                        {(item.level === 'error' || item.level === 'warning') && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openFeedback({
+                                category: 'bug',
+                                title: item.title,
+                                detail: item.detail ?? '',
+                                focusTs: item.ts,
+                              });
+                              setOpen(false);
+                            }}
+                            className="text-[10px] transition-colors hover:opacity-80"
+                            style={{ color: 'var(--accent)' }}
+                          >
+                            反馈
+                          </button>
+                        )}
                         {item.target && (
                           <button
                             onClick={(e) => { e.stopPropagation(); jump(item); }}

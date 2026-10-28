@@ -241,6 +241,12 @@ pub fn create_session(
         max_tokens,
         None,
     )
+    // 会话创建失败会直接呈现给用户（新建会话/宿主导入都走这里）：
+    // 落一条带 `[failure:` 前缀的日志，反馈弹窗才检索得到现场。
+    .map_err(|e| {
+        crate::utils::errors::log_failure("session.create", &e);
+        e
+    })
 }
 
 /// 会话行写入（`create_session` 命令与工作流 Agent 节点共用）。

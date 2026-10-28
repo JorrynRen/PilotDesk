@@ -137,7 +137,10 @@ pub async fn acp_list_sessions(
         let conn = state.get_conn()?;
         prepare(&conn, &agent_type, cwd.as_deref())?
     };
-    ensure_ready(&*agent_mgr, &prepared).await?;
+    ensure_ready(&*agent_mgr, &prepared).await.map_err(|e| {
+        crate::utils::errors::log_failure("host.session", &e);
+        e
+    })?;
     let cfg = prepared.cfg;
 
     // 用户明确选了目录就按该目录过滤；没选则列出全部宿主会话
@@ -169,7 +172,10 @@ pub async fn acp_import_host_session(
         let conn = state.get_conn()?;
         prepare(&conn, &agent_type, cwd.as_deref())?
     };
-    ensure_ready(&*agent_mgr, &prepared).await?;
+    ensure_ready(&*agent_mgr, &prepared).await.map_err(|e| {
+        crate::utils::errors::log_failure("host.session", &e);
+        e
+    })?;
     let cfg = prepared.cfg;
 
     let messages = load_messages(
@@ -181,7 +187,11 @@ pub async fn acp_import_host_session(
         &host_session_id,
     )
     .await
-    .map_err(AppError::External)?;
+    .map_err(|e| {
+        let err = AppError::External(e);
+        crate::utils::errors::log_failure("host.import", &err);
+        err
+    })?;
 
     // 协议交互期间不长期占用连接池：落库前重新取连接
     let conn = state.get_conn()?;
@@ -227,7 +237,10 @@ pub async fn acp_load_host_session(
         let conn = state.get_conn()?;
         prepare(&conn, &agent_type, cwd.as_deref())?
     };
-    ensure_ready(&*agent_mgr, &prepared).await?;
+    ensure_ready(&*agent_mgr, &prepared).await.map_err(|e| {
+        crate::utils::errors::log_failure("host.session", &e);
+        e
+    })?;
     let cfg = prepared.cfg;
 
     load_messages(

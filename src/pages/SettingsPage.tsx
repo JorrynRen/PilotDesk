@@ -4,7 +4,7 @@ import {
   Settings, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw, Shapes, Rainbow,
+  Loader2, Zap, GripVertical, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw, Shapes, Rainbow, MessageSquare,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
@@ -40,6 +40,7 @@ import { SearchSettings } from '../components/settings/SearchSettings';
 import { FileHistorySettings } from '../components/settings/FileHistorySettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { useAccountStore } from '../stores/accountStore';
+import { useFeedbackStore } from '../stores/feedbackStore';
 import { sendApiRequest } from '../utils/apiClient';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 
@@ -1747,6 +1748,7 @@ const ABOUT_LINKS: Array<{ label: string; url: string }> = [
  */
 function AboutSection() {
   const u = useUpdater();
+  const openFeedback = useFeedbackStore((s) => s.openFeedback);
 
   /**
    * 打开对外链接：交给**系统默认浏览器**，不在门户标签里内嵌。
@@ -1823,6 +1825,24 @@ function AboutSection() {
 
       <SettingsSection title="相关链接">
         <div className="flex flex-col gap-1">
+          {/* 意见反馈：走应用内弹窗（与通知中心的「反馈」共用同一实现），不是外链 */}
+          <button
+            onClick={() => openFeedback()}
+            className="pd-btn flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-colors"
+            style={{
+              backgroundColor: 'var(--bg-field)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+            }}
+            title="遇到问题或有建议？告诉我们（可附上最近的错误日志）"
+          >
+            <MessageSquare size={12} style={{ color: 'var(--text-tertiary)' }} />
+            <span style={{ color: 'var(--text-primary)' }}>意见反馈</span>
+            <span className="ml-auto text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              应用内填写
+            </span>
+          </button>
           {ABOUT_LINKS.map(({ label, url }) => (
             <button
               key={label}

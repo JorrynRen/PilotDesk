@@ -131,6 +131,18 @@ impl From<AppError> for String {
     }
 }
 
+/// 记录一条「用户可见失败」到后端日志，供意见反馈弹窗的日志筛选检索。
+///
+/// 统一带 `[failure:<module>]` 前缀，弹窗据此识别"这是可反馈的失败"，
+/// 不必按模块名逐个猜。**只记错误正文，不记入参**：入参里可能有文件路径、
+/// 会话正文、密钥，一旦落进日志就会随反馈上传。
+///
+/// 只在命令入口等"失败会直接呈现给用户"的位置调用；内部可自愈的失败
+/// （缓存写失败、回退分支）继续用各自的 `log::warn!`，避免噪音。
+pub fn log_failure(module: &str, err: &AppError) {
+    log::warn!("[failure:{}] {}", module, err.message());
+}
+
 impl From<rusqlite::Error> for AppError {
     fn from(err: rusqlite::Error) -> Self {
         AppError::Db(err.to_string())
