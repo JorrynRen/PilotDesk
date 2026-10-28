@@ -27,7 +27,7 @@ pub struct PilotDeskCliRunner {
     sessions: Mutex<HashMap<String, String>>,
     /// 参与者审批闸门（主持人裁决；ACP 权限请求走这条，与会话/工作流同一契约）。
     approvals: Arc<dyn crate::agent::transport::ApprovalGate>,
-    /// 房间级审批尺度（随每条指令更新）：ACP 按它映射宿主模式，宿主未提供时作兜底。
+    /// 房间级审批尺度（随每条指令更新）：ACP 按它的风险矩阵过滤权限请求，超阈值的交主持人裁决。
     security: Arc<RwLock<Option<SecurityMode>>>,
 }
 
@@ -111,6 +111,8 @@ impl PilotDeskCliRunner {
             approvals: Some(Arc::clone(&self.approvals)),
             acp_mode: None,
             security_mode: security,
+            // 圆桌：安全模式是房间内唯一的审批尺度，必须对宿主模式同样生效（矩阵口径）
+            enforce_security_matrix: true,
         };
         let handle = session
             .connect(&conn, sink)

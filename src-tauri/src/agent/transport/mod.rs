@@ -288,9 +288,17 @@ pub struct AgentConn {
     pub acp_mode: Option<String>,
     /// 会话安全模式（`None` = 标准）。
     ///
-    /// **仅作兜底**：ACP 宿主提供了 `modes` 时权限完全交给宿主，本值不参与判定；
+    /// **默认仅作兜底**：ACP 宿主提供了 `modes` 时权限完全交给宿主，本值不参与判定；
     /// 宿主不提供模式时才按它决定"权限请求要不要打断用户"。
+    /// 例外见 [`Self::enforce_security_matrix`]。
     pub security_mode: Option<crate::api_agent::agent_loop::SecurityMode>,
+    /// 是否**无视宿主是否提供 `modes`**，一律按 `security_mode` 的风险矩阵裁决权限请求。
+    ///
+    /// 用于"一个容器内混用多种接入方式的 Agent、且只有一档统一审批尺度"的场景（圆桌）：
+    /// 矩阵口径与兜底审批策略完全一致（[`crate::agent::transport::acp::auto_allow_by_security`]，
+    /// 四档尺度 × 风险类型），低于阈值直接放行，达到/超过阈值再交审批闸门（圆桌为主持人）。
+    /// 会话模式路径保持 `false`，宿主提供模式时不越权替宿主裁决。
+    pub enforce_security_matrix: bool,
 }
 
 /// 进程启动回调（`Fn` 而非 `FnMut`：可能被多线程共享）。

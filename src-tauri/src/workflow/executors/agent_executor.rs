@@ -743,6 +743,8 @@ impl AgentExecutor {
             approvals: Some(Arc::clone(&gate)),
             acp_mode: None,
             security_mode: security,
+            // 工作流节点：宿主自带会话模式时以宿主为准，本配置只在宿主不提供模式时兜底
+            enforce_security_matrix: false,
         };
         let handle = match session.connect(&conn, sink).await {
             Ok(handle) => handle,

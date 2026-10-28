@@ -568,6 +568,7 @@ impl AgentManager {
             // 本地 CLI 兼容路径不接 ACP 模式/审批策略（其权限由启动参数模板决定）
             acp_mode: None,
             security_mode: None,
+            enforce_security_matrix: false,
         };
 
         let mut session =
@@ -1265,6 +1266,8 @@ pub async fn run_transport_session(
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         security_mode,
+        // 会话模式路径：宿主提供模式时权限归宿主，安全模式只作兜底，不替宿主裁决
+        enforce_security_matrix: false,
     };
 
     let handle = session

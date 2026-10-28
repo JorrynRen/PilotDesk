@@ -842,12 +842,15 @@ impl AgentSession for AcpSession {
         // 且只在**真有闸门**时才发审批卡——没闸门却发卡，只会让用户点了没反应。
         //
         // 权限语义归属：
-        // - 宿主提供 `modes`（会话建立后才知道，故用共享标志）→ 完全交给宿主，
+        // - 默认：宿主提供 `modes`（会话建立后才知道，故用共享标志）→ 完全交给宿主，
         //   这里保持"有请求就问人"，不做客户端二次裁决；
-        // - 宿主不提供 `modes` → 回退到本应用的安全模式（兜底审批策略）。
+        // - 默认：宿主不提供 `modes` → 回退到本应用的安全模式（兜底审批策略）；
+        // - 例外：`enforce_security_matrix`（圆桌）→ 不看宿主有没有模式，一律按安全模式的
+        //   风险矩阵过滤，高于阈值的才交审批闸门（主持人），使一个房间内各类接入方式同一尺度。
         let host_modes_available = Arc::new(AtomicBool::new(false));
         let host_modes_perm = Arc::clone(&host_modes_available);
         let security_perm = conn.security_mode;
+        let enforce_matrix = conn.enforce_security_matrix;
         let tx_perm = evt_tx.clone();
         let sid_perm = self.session_id.clone();
         let gate_perm = conn.approvals.clone();
@@ -865,9 +868,10 @@ impl AgentSession for AcpSession {
                         .unwrap_or(0)
                 );
 
-                // 兜底策略（仅宿主未提供模式时生效）：低风险请求直接放行，不打断用户。
+                // 兜底策略：低风险请求直接放行，不打断用户（`enforce_matrix` 时无视宿主模式，
+                // 宿主提供了模式也按同一矩阵过滤，口径见 `enforce_security_matrix` 文档）。
                 // 固定选 `allow_once`：不做 `allow_always`，避免把"本次放行"持久化进宿主会话。
-                if !host_modes_perm.load(Ordering::Relaxed)
+                if (enforce_matrix || !host_modes_perm.load(Ordering::Relaxed))
                     && auto_allow_by_security(security_perm, &params)
                 {
                     match pick_option_id(&options, PermissionDecision::Allow) {

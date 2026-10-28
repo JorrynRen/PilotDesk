@@ -633,7 +633,6 @@ impl RoomRegistry {
             shared_director.clone(),
             approval_log.clone(),
             room.topic.clone(),
-            security_shared.clone(),
         ));
         let participant_failures: Arc<Mutex<HashMap<String, Vec<(i64, String)>>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -1065,17 +1064,14 @@ struct ApprovalRecord {
 
 /// 圆桌里 ACP 参与者的权限请求闸门：与 API 参与者同一裁决人（主持人）。
 ///
-/// 与会话模式同口径：宿主提供 `modes` 时权限语义由宿主决定（本应用不映射、不改写宿主模式），
-/// 宿主问过来的权限请求在这里交主持人裁决；宿主不提供模式时，房间级安全模式作为兜底审批
-/// 策略（`auto_allow_by_security`）先行过滤，剩下的仍走这里。裁决口径与
-/// [`make_director_approval`] 一致：无限制模式直接放行（不打扰主持人），其余交主持人按任务
-/// 必要性裁决；无主持人或裁决超时按拒绝（保守）。
+/// 圆桌的安全模式对 ACP 采用与会话兜底**同一套风险矩阵**（`auto_allow_by_security`：
+/// 四档尺度 × 风险类型）：低于阈值的请求由传输层直接放行（`allow_once`），达到/超过阈值的
+/// 才走到这里交主持人按任务必要性裁决——与 API 参与者的审批口径一致，不因宿主是否提供
+/// `modes` 而变成另一套语义。无主持人或裁决超时按拒绝（保守）。
 struct DirectorApprovalGate {
     director_ref: Arc<RwLock<Option<Arc<Director>>>>,
     approval_log: Arc<Mutex<Vec<ApprovalRecord>>>,
     topic: String,
-    /// 房间级审批尺度（与 CLI 参与者共享同一实例，随每条指令更新）。
-    security: Arc<RwLock<Option<SecurityMode>>>,
 }
 
 impl DirectorApprovalGate {
@@ -1083,18 +1079,12 @@ impl DirectorApprovalGate {
         director_ref: Arc<RwLock<Option<Arc<Director>>>>,
         approval_log: Arc<Mutex<Vec<ApprovalRecord>>>,
         topic: String,
-        security: Arc<RwLock<Option<SecurityMode>>>,
     ) -> Self {
         Self {
             director_ref,
             approval_log,
             topic,
-            security,
         }
-    }
-
-    fn current_security(&self) -> Option<SecurityMode> {
-        self.security.read().ok().and_then(|m| *m)
     }
 
     fn record(&self, tool_name: String, allow: bool, reason: String) {
@@ -1122,11 +1112,6 @@ impl crate::agent::transport::ApprovalGate for DirectorApprovalGate {
         tool_name: &str,
         arguments: &str,
     ) -> bool {
-        // 无限制：一律放行，不打断主持人（与 API 参与者「无需审批的工具直接执行」同口径）
-        if matches!(self.current_security(), Some(SecurityMode::Unrestricted)) {
-            self.record(tool_name.to_string(), true, "无限制模式直接放行".to_string());
-            return true;
-        }
         let Some(director) = self.director_ref.read().unwrap().clone() else {
             return false; // 无主持人 → 默认拒绝（保守）
         };
@@ -1648,7 +1633,7 @@ struct RoomRuntime {
     mcp: Option<Arc<RoomMcpAssets>>,
     /// 会话安全模式（本波次有效，Send 命令注入；None 默认标准）。
     security_mode: Option<SecurityMode>,
-    /// 审批尺度的共享单元：CLI/ACP 参与者的兜底审批策略读它（与 `security_mode` 同源）。
+    /// 审批尺度的共享单元：CLI/ACP 参与者按它过滤权限请求（与 `security_mode` 同源）。
     security_shared: Arc<RwLock<Option<SecurityMode>>>,
     /// ACP 参与者的权限请求闸门（主持人裁决，与 API 参与者的审批同一口径）。
     acp_gate: Arc<DirectorApprovalGate>,
@@ -1668,7 +1653,7 @@ impl RoomRuntime {
         let _ = self.app.emit("groupchat-event", &event);
     }
 
-    /// 注入本波次的审批尺度：同时写回共享单元，使 CLI/ACP 参与者的兜底审批策略与主持人裁决生效。
+    /// 注入本波次的审批尺度：同时写回共享单元，使 CLI/ACP 参与者按同一矩阵进行权限过滤。
     fn set_security_mode(&mut self, mode: Option<SecurityMode>) {
         self.security_mode = mode;
         if let Ok(mut shared) = self.security_shared.write() {
@@ -6209,7 +6194,7 @@ impl RoomRuntime {
                                                     // cli 参与者：本地 CLI Agent 执行器（与 build_participants 一致，每参与者独立 AgentManager）。
                                                     let agent_type =
                                                         agent_type_from_config(&row.agent_config);
-                                                    // 动态补员同样接主持人裁决闸门：ACP 接入的权限请求不会自动放行。
+                                                    // 动态补员同样接主持人裁决闸门：ACP 接入的权限请求按同一矩阵裁决。
                                                     let security_shared =
                                                         Arc::new(RwLock::new(security_mode));
                                                     let gate: Arc<
@@ -6218,7 +6203,6 @@ impl RoomRuntime {
                                                         shared_director.clone(),
                                                         approval_log.clone(),
                                                         topic.clone(),
-                                                        security_shared.clone(),
                                                     ));
                                                     let runner = Arc::new(PilotDeskCliRunner::new(
                                                         Arc::new(AsyncMutex::new(
