@@ -725,13 +725,9 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   // Placeholder based on context：无会话时是"快捷开始"。
   // 占位文案必须**一行放得下**：文本域只有一行高，超出的部分会被直接裁掉
   //（此前把 4-5 条快捷键 + 整句拦截原因全塞进来 → "提示显示不全"）。
-  // 因此占位只留最短必要信息；完整快捷键在各按钮的悬浮提示里，
-  // 拦截原因与全部快捷键挂在 textarea 的 title 上，悬停即可看全。
+  // 因此占位只留最短必要信息；完整快捷键在各按钮的悬浮提示里。
   const agentLabel = session ? getDisplayName(session.agentType) : '';
   const shortcutHint = 'Enter 发送 · Shift+Enter 换行';
-  const fullHint = !session
-    ? `${blockReason || '输入消息开始新会话'}（${shortcutHint} · Ctrl+I 灵感 · Ctrl+K 技能）`
-    : `向 ${agentLabel} 发送消息（${shortcutHint} · Ctrl+I 灵感 · Ctrl+K 技能 · Ctrl+N 新会话）`;
   const placeholder = !session
     ? blockHint || `输入消息开始新会话…（${shortcutHint}）`
     : `向 ${agentLabel} 发送消息...（${shortcutHint}）`;
@@ -869,7 +865,6 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={placeholder}
-              title={fullHint}
               rows={2}
               className="pd-composer-input"
             />
