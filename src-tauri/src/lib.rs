@@ -2460,7 +2460,24 @@ fn compute_diff(old: &str, new: &str) -> String {
 pub fn init_logging() {
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
-    builder.format_timestamp_millis();
+
+    // 时间戳必须用**本机时区**：env_logger 自带的 `format_timestamp_*` 走 humantime，
+    // 输出恒为 UTC（`...Z`），与用户在系统时钟里看到的时间差一个时区偏移 ——
+    // 排查问题按时间线对照时会整体错位（落盘文件与终端输出同源，两者一起修）。
+    // 这里自定义格式 `[本地时间(含偏移) 级别 模块] 消息`，等级配色仍复用默认样式。
+    builder.format(|buf, record| {
+        use std::io::Write as _;
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z");
+        let style = buf.default_level_style(record.level());
+        writeln!(
+            buf,
+            "[{} {style}{:<5}{style:#} {}] {}",
+            ts,
+            record.level(),
+            record.module_path().unwrap_or_else(|| record.target()),
+            record.args()
+        )
+    });
 
     let mut log_path = None;
     if let Some((path, file)) = open_log_file() {
