@@ -461,6 +461,11 @@ async fn agent_send_message_with_config(
         .await;
     }
 
+    // ── CLI / ACP 会话：本轮输入同样前置真实时钟锚点 ──
+    // 与 API 路径共用 `with_clock_anchor`（同一个实现、同一种格式）：时钟只进本轮送入
+    // 模型的内容，不写库、不回放历史，因此不区分接入方式、也不区分 Agent 身份。
+    let message = crate::utils::with_clock_anchor(&message);
+
     // ── CLI Agent 路径（原有逻辑）──
     let conn = state
         .get_conn()
@@ -1727,11 +1732,8 @@ async fn run_api_agent_body(
     if !file_note.is_empty() {
         user_body.push_str(&file_note);
     }
-    let user_content = format!(
-        "{}\n\n<user_request>\n{}\n</user_request>",
-        crate::utils::current_clock_cn(),
-        user_body,
-    );
+    // 统一走 `with_clock_anchor`：时钟锚点与 `<user_request>` 边界的唯一实现
+    let user_content = crate::utils::with_clock_anchor(&user_body);
     messages.push(ChatMessage::user_with_images(&user_content, images));
 
     // 5.1 滑动窗口兜底（跳过 system/summary，仅处理超长单条消息）

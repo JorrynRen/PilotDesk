@@ -59,6 +59,21 @@ pub fn current_clock_cn() -> String {
         utc_str,
     )
 }
+
+/// 给**本轮用户输入**前置真实时钟锚点，并标出本轮指令边界。
+///
+/// 全仓唯一的注入实现：API 会话、CLI 会话、ACP 会话都走这里，因此任何接入方式看到的
+/// “现在”都来自同一处、同一格式，不再按场景各拼一份。
+///
+/// 只用于送入模型的本轮输入，**不得写库、也不得回放历史**：历史里带实时时钟会让同一条
+/// 逻辑消息随秒漂移、破坏前缀缓存（群聊记忆层已因同一原因撤掉渲染期注入）。
+pub fn with_clock_anchor(body: &str) -> String {
+    format!(
+        "{}\n\n<user_request>\n{}\n</user_request>",
+        current_clock_cn(),
+        body
+    )
+}
 pub mod market;
 pub mod process;
 pub mod platform;

@@ -235,6 +235,12 @@ pub struct TurnView {
     /// 空串表示未约定，不注入位置约束。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub output_dir: String,
+    /// 本轮真实时钟锚点（房间级、每轮只在用户指令到达时取一次）。
+    ///
+    /// 同一轮内主持人、所有参与者、包括并发派发的执行者共用同一个字符串，因此不存在
+    /// “各自取时导致不一致”的问题；锚点只进本轮送入模型的内容，不落库、不回放历史。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub clock: String,
 }
 
 /// 一次发言的输出（`content` 落库为 `groupchat_messages.content`）。
@@ -672,7 +678,7 @@ fn build_participant_prompt(
     discipline: &str,
 ) -> String {
     let s = build_participant_sections(view);
-    super::prompts::render(
+    let mut prompt = super::prompts::render(
         super::prompts::blocks::PARTICIPANT.body,
         &super::prompts::PromptCtx::new()
             .var(
@@ -693,7 +699,16 @@ fn build_participant_prompt(
             .section("product_norm", s.product_norm)
             .section("output_dir", s.output_dir)
             .variant(discipline),
-    )
+    );
+    // 时钟锚点追加在**末尾**（不是固定前缀）：同一轮内所有成员看到同一个值，跨轮只改尾部，
+    // 前面的内容仍可作为稳定前缀被缓存 —— 与记忆层撤掉渲染期时钟的取舍一致。
+    if !view.clock.trim().is_empty() {
+        prompt.push_str(&format!(
+            "\n\n{}（本房间本轮统一时间锚点，判断“今天/最近N天”等相对时间以此为准）",
+            view.clock
+        ));
+    }
+    prompt
 }
 
 /// 从 LLM 输出中提取 JSON 对象：优先整段解析，失败则截取确认 JSON（`{"askUser"` 到末 `}`）子串再解析。

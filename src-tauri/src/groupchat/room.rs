@@ -702,6 +702,7 @@ impl RoomRegistry {
             pending_mention: None,
             last_kickoff_added: 0,
             last_user_directive: String::new(),
+            round_clock: String::new(),
             // MCP 资产在 run() 启动时异步构建（spawn 为同步入口，无法 await）。
             mcp: None,
             // 会话安全模式：每次 Send 时注入（默认标准）。
@@ -1629,6 +1630,9 @@ struct RoomRuntime {
     last_kickoff_added: usize,
     /// 用户最近一条指令原文（供 Director 选人/审阅时优先服务用户最新要求）。
     last_user_directive: String,
+    /// 本轮统一时钟锚点：用户指令到达时取一次，主持人/参与者/执行者共用同一个值。
+    /// 只进本轮送入模型的内容，不落库、不回放历史（历史带实时时钟会破坏前缀缓存）。
+    round_clock: String,
     /// 房间级 MCP 资产（连接池 + 已枚举工具；run() 启动时异步构建一次，参与者共享）。
     mcp: Option<Arc<RoomMcpAssets>>,
     /// 会话安全模式（本波次有效，Send 命令注入；None 默认标准）。
@@ -2244,7 +2248,10 @@ impl RoomRuntime {
         self.pending_mention = mention.filter(|m| !m.is_empty()).map(|m| m.to_string());
         // 记录用户最新指令（v3.4ap：拼接当前真实时钟锚点），供 Director 选人/审阅时优先服务
         // 用户最新要求，并正确处理相对时间表达。仅作用于 LLM 上下文，不影响落库原文与展示。
-        self.last_user_directive = format!("{}\n\n{}", crate::utils::current_clock_cn(), content);
+        // 本轮统一时钟锚点：只在这里取一次，主持人、参与者、执行者此后共用同一个值，
+        // 从根上消除"各自取时导致的时间不一致"。
+        self.round_clock = crate::utils::current_clock_cn();
+        self.last_user_directive = format!("{}\n\n{}", self.round_clock, content);
         user_msg
     }
 
@@ -2283,7 +2290,11 @@ impl RoomRuntime {
 
         // 用户消息拼接当前真实时钟锚点（v3.4ap）：Director 编排（意图分类/kickoff/replan）
         // 处理"今天/最近N天"等相对时间时以真实时钟为准。仅作用于编排链路，不影响落库与展示。
-        let content_llm = format!("{}\n\n{}", crate::utils::current_clock_cn(), content);
+        // 兜底：极端情况下（指令未经 `persist_user_directive` 进入）仍取一次，保证不缺锚点
+        if self.round_clock.is_empty() {
+            self.round_clock = crate::utils::current_clock_cn();
+        }
+        let content_llm = format!("{}\n\n{}", self.round_clock, content);
         let content: &str = &content_llm;
 
         // 意图判定：首轮/目标变更 → 全量编排；refine → 对账式重排（可删减/重分配/新增）。
@@ -3136,6 +3147,8 @@ impl RoomRuntime {
             roster: Vec::new(),
             user_language: String::new(),
             output_dir: self.output_dir.clone(),
+            // 与房间内其他成员共用本轮锚点（侦查也是本轮的一部分）
+            clock: self.round_clock.clone(),
         };
         match tokio::time::timeout(
             Duration::from_secs(SCOUT_TIMEOUT_SECS),
@@ -4351,6 +4364,8 @@ impl RoomRuntime {
             view.output_dir = self.output_dir.clone();
             // 注入参与者名册（id、显示名、角色），供 LLM 刻画 id ↔ 语义角色映射。
             view.roster = self.participant_roster();
+            // 本轮统一时钟锚点：与主持人、其他参与者、执行者完全一致（房间级，每轮一个值）
+            view.clock = self.round_clock.clone();
 
             let app = self.app.clone();
             let room_id = self.room_id.clone();
@@ -5036,6 +5051,8 @@ impl RoomRuntime {
                 let user_language = self.memory.detect_user_language(&self.user_id);
                 let input_refs = self.input_refs.clone();
                 let output_dir = self.output_dir.clone();
+                // 本轮统一时钟锚点：执行者与讨论发言、主持人共用同一个值
+                let round_clock = self.round_clock.clone();
 
                 // 该任务的进展心跳通道（AgentLoop 实质产出 → try_send；汇聚端重置停滞秒表）。
                 let (progress_tx, progress_rx) = tokio::sync::mpsc::channel::<()>(32);
@@ -5102,6 +5119,7 @@ impl RoomRuntime {
                         prior_results,
                         input_refs,
                         output_dir,
+                        round_clock,
                         progress_tx,
                     )
                     .await
@@ -5484,7 +5502,9 @@ impl RoomRuntime {
             // 重置收敛计数，避免确认后过早收敛。
             self.rules.reset();
         } else {
-            let content_llm = format!("{}\n\n{}", crate::utils::current_clock_cn(), reply_content);
+            // 确认回复同样开启新一轮：刷新锚点，后续主持人/参与者共用
+            self.round_clock = crate::utils::current_clock_cn();
+            let content_llm = format!("{}\n\n{}", self.round_clock, reply_content);
             self.last_user_directive = content_llm.clone();
             self.after_user_directive(&content_llm, &resp_msg).await;
         }
@@ -5792,6 +5812,8 @@ impl RoomRuntime {
         prior_results: Vec<PriorResult>,
         input_refs: Vec<ResolvedRef>,
         output_dir: String,
+        // 本轮统一时钟锚点（房间级，与主持人/讨论发言共用）
+        round_clock: String,
         progress_tx: tokio::sync::mpsc::Sender<()>,
     ) -> TaskOutcome {
         let mut messages: Vec<PendingMessage> = Vec::new();
@@ -5869,6 +5891,7 @@ impl RoomRuntime {
                 prior_results.clone(),
                 input_refs.clone(),
                 output_dir.clone(),
+                round_clock.clone(),
                 progress_tx.clone(),
             )
             .await;
@@ -6427,6 +6450,8 @@ impl RoomRuntime {
         prior_results: Vec<PriorResult>,
         input_refs: Vec<ResolvedRef>,
         output_dir: String,
+        // 本轮统一时钟锚点（房间级，与主持人/讨论发言共用）
+        round_clock: String,
         progress_tx: tokio::sync::mpsc::Sender<()>,
     ) -> TurnResult {
         let mut prompt = format!("请完成以下任务并给出结果：{}", task_desc);
@@ -6488,6 +6513,7 @@ impl RoomRuntime {
             roster: Vec::new(),
             user_language,
             output_dir,
+            clock: round_clock,
         };
         // delta_fn move 闭包捕获 speaker_id 后不可再借用。
         let delta_fn = move |delta: &str| {
