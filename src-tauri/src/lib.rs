@@ -2611,6 +2611,7 @@ pub fn run() {
             commands::install_log::list_logs,
             commands::install_log::clear_logs,
             commands::feedback::submit_feedback,
+            commands::feedback::read_feedback_env,
             commands::logs::read_recent_logs,
             commands::update::check_pilotdesk_update,
             commands::update::check_agent_update,

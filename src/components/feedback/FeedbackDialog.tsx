@@ -13,7 +13,16 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { CheckCircle2, Copy, Loader2, LogIn, MessageSquare, X } from 'lucide-react';
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Loader2,
+  LogIn,
+  MessageSquare,
+  X,
+} from 'lucide-react';
 
 import { useAccountStore } from '../../stores/accountStore';
 import { useFeedbackStore, type FeedbackCategory, type FeedbackPreset } from '../../stores/feedbackStore';
@@ -69,6 +78,38 @@ interface SubmitResult {
   status: string;
 }
 
+/** 随反馈提交的环境信息（与后端 `read_feedback_env` 同构，用于向用户预览） */
+interface EnvAgent {
+  agentType: string;
+  displayName: string;
+  transport: string;
+  version?: string;
+  installed?: boolean;
+  available?: boolean;
+}
+
+interface EnvSummary {
+  appVersion: string;
+  channel: string;
+  os: string;
+  arch: string;
+  nodeVersion?: string;
+  npmVersion?: string;
+  gitVersion?: string;
+  pythonVersion?: string;
+  agents: EnvAgent[];
+}
+
+const OS_LABELS: Record<string, string> = {
+  windows: 'Windows',
+  macos: 'macOS',
+  linux: 'Linux',
+};
+const CHANNEL_LABELS: Record<string, string> = {
+  dev: '开发构建',
+  stable: '正式构建',
+};
+
 const EMPTY_DRAFT: Draft = {
   category: 'bug',
   title: '',
@@ -114,6 +155,20 @@ function shortTarget(target: string): string {
   return parts[parts.length - 1] || target;
 }
 
+/** 环境信息预览的一行：左侧分组名，右侧具体取值（长内容自动折行） */
+function EnvRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start gap-2 text-[10px]">
+      <span className="shrink-0" style={{ color: 'var(--text-tertiary)', minWidth: 46 }}>
+        {label}
+      </span>
+      <span className="flex-1 min-w-0 break-all" style={{ color: 'var(--text-secondary)' }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
 export function FeedbackDialog() {
   const open = useFeedbackStore((s) => s.open);
   const preset = useFeedbackStore((s) => s.preset);
@@ -135,6 +190,10 @@ export function FeedbackDialog() {
   const [result, setResult] = useState<SubmitResult | null>(null);
   const [copied, setCopied] = useState(false);
   const [loginHint, setLoginHint] = useState(false);
+  const [env, setEnv] = useState<EnvSummary | null>(null);
+  const [envLoading, setEnvLoading] = useState(false);
+  const [envError, setEnvError] = useState('');
+  const [envOpen, setEnvOpen] = useState(true);
 
   /** 幂等键：同一次填写在失败重试时复用，避免平台重复建单 */
   const requestIdRef = useRef('');
@@ -215,6 +274,33 @@ export function FeedbackDialog() {
       alive = false;
     };
   }, [open, focusTs]);
+
+  // 打开时读取「将随反馈提交的环境信息」，让用户先看到发送内容再决定提交
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    queueMicrotask(() => {
+      if (!alive) return;
+      setEnvLoading(true);
+      setEnvError('');
+    });
+    void invoke<EnvSummary>('read_feedback_env')
+      .then((summary) => {
+        if (!alive) return;
+        setEnv(summary);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setEnv(null);
+        setEnvError(String(e));
+      })
+      .finally(() => {
+        if (alive) setEnvLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
 
   // 默认勾选最近 8 条
   useEffect(() => {
@@ -680,24 +766,96 @@ export function FeedbackDialog() {
                   </div>
                 )}
               </div>
+
+              {/* 环境信息预览：把实际会随反馈发送的内容摊开给用户看 */}
+              <div
+                className="rounded-lg p-2.5"
+                style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+              >
+                <button
+                  onClick={() => setEnvOpen((v) => !v)}
+                  className="pd-btn flex items-center gap-1.5 w-full text-left"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  {envOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                  <span className="text-[11px]">环境信息（随反馈一并提交）</span>
+                  <div className="flex-1" />
+                  {env && (
+                    <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                      v{env.appVersion} · {CHANNEL_LABELS[env.channel] ?? env.channel}
+                    </span>
+                  )}
+                </button>
+
+                {envOpen && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    {envLoading ? (
+                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        读取中…
+                      </span>
+                    ) : envError ? (
+                      <span className="text-[10px]" style={{ color: '#EF4444' }}>
+                        读取失败（提交时仍会附带）：{envError}
+                      </span>
+                    ) : env ? (
+                      <>
+                        <EnvRow
+                          label="应用"
+                          value={`v${env.appVersion} · ${CHANNEL_LABELS[env.channel] ?? env.channel}`}
+                        />
+                        <EnvRow
+                          label="系统"
+                          value={`${OS_LABELS[env.os] ?? env.os} ${env.arch}`}
+                        />
+                        <EnvRow
+                          label="依赖"
+                          value={
+                            [
+                              env.nodeVersion && `Node ${env.nodeVersion}`,
+                              env.npmVersion && `npm ${env.npmVersion}`,
+                              env.gitVersion && `Git ${env.gitVersion}`,
+                              env.pythonVersion && `Python ${env.pythonVersion}`,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ') || '未检测到 Node / npm / Git / Python'
+                          }
+                        />
+                        <EnvRow
+                          label={`Agent（${env.agents.length}）`}
+                          value={
+                            env.agents.length === 0
+                              ? '未启用任何 Agent'
+                              : env.agents
+                                  .map((a) => {
+                                    const ver = a.version ? ` ${a.version}` : '';
+                                    const state =
+                                      a.available === true
+                                        ? '可用'
+                                        : a.installed === false
+                                          ? '未安装'
+                                          : a.available === false
+                                            ? '不可用'
+                                            : '';
+                                    return `${a.displayName}（${a.transport}）${ver}${state ? ` · ${state}` : ''}`;
+                                  })
+                                  .join('；')
+                          }
+                        />
+                        <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                          以上均为版本与状态，不含启动参数、连接配置与密钥。
+                        </span>
+                      </>
+                    ) : null}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* 底部动作 */}
             <div
-              className="flex items-center gap-2 px-5 py-3 shrink-0"
+              className="flex items-center justify-end gap-2 px-5 py-3 shrink-0"
               style={{ borderTop: '1px solid var(--border)' }}
             >
-              <span
-                className="text-[10px] truncate"
-                style={{ color: 'var(--text-tertiary)' }}
-                title={
-                  '随反馈一并提交：应用版本与渠道、系统与架构、Node / npm / Git / Python 版本、' +
-                  '已启用 Agent 的接入方式与版本状态（不含启动参数与密钥）。'
-                }
-              >
-                附带应用版本与环境摘要
-              </span>
-              <div className="flex-1" />
               <button
                 onClick={() => {
                   if (!submitting) close();

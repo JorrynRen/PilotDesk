@@ -87,34 +87,50 @@ const MAX_ENV_AGENTS: usize = 12;
 /// **不带**启动参数与连接配置——那里面有密钥和本机路径。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FeedbackEnvAgent {
-    agent_type: String,
-    display_name: String,
+pub struct FeedbackEnvAgent {
+    pub agent_type: String,
+    pub display_name: String,
     /// `subprocess`（本地 CLI）/ `acp`
-    transport: String,
+    pub transport: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<String>,
+    pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    installed: Option<bool>,
+    pub installed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    available: Option<bool>,
+    pub available: Option<bool>,
 }
 
-/// 运行环境摘要（随反馈提交，帮助平台侧判断是环境问题还是产品缺陷）。
+/// 随反馈提交的环境信息（**预览与提交共用同一份采集结果**）。
+///
+/// 弹窗用 [`read_feedback_env`] 拿到它向用户预览「将提交什么」，提交时后端再用
+/// 同一入口采集一次——预览值与实际发送值口径一致，不会出现"看到的不等于发送的"。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FeedbackEnv {
-    os: String,
-    arch: String,
+pub struct FeedbackEnvSummary {
+    /// 应用版本（编译期注入，即当前实际运行的版本）
+    pub app_version: String,
+    /// 构建渠道：`dev`（debug 构建）/ `stable`
+    pub channel: String,
+    pub os: String,
+    pub arch: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    node_version: Option<String>,
+    pub node_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    npm_version: Option<String>,
+    pub npm_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    git_version: Option<String>,
+    pub git_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    python_version: Option<String>,
-    agents: Vec<FeedbackEnvAgent>,
+    pub python_version: Option<String>,
+    pub agents: Vec<FeedbackEnvAgent>,
+}
+
+/// 构建渠道：debug 构建视为 dev，其余按正式包。
+fn app_channel() -> &'static str {
+    if cfg!(debug_assertions) {
+        "dev"
+    } else {
+        "stable"
+    }
 }
 
 /// 平台成功响应
@@ -256,6 +272,48 @@ fn collect_agents(conn: &rusqlite::Connection) -> Vec<FeedbackEnvAgent> {
     rows
 }
 
+/// 采集环境信息（预览与提交共用的唯一入口）。
+///
+/// 工具版本现场探测（需锁 AgentManager），随后同步读库取 Agent 状态——
+/// 顺序不能反：`rusqlite::Connection` 不是 `Sync`，带着它跨 await 会让
+/// 命令 future 不满足 Tauri 要求的 `Send`。
+async fn build_env(
+    agent_mgr: &crate::AsyncMutex<AgentManager>,
+    db: &crate::DbState,
+) -> FeedbackEnvSummary {
+    let tools = {
+        let mgr = agent_mgr.lock().await;
+        probe_tools(&mgr).await
+    };
+    let agents = db
+        .get_conn()
+        .map(|conn| collect_agents(&conn))
+        .unwrap_or_default();
+
+    FeedbackEnvSummary {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        channel: app_channel().to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        node_version: tools.node,
+        npm_version: tools.npm,
+        git_version: tools.git,
+        python_version: tools.python,
+        agents,
+    }
+}
+
+/// 读取「将随反馈提交的环境信息」，供弹窗向用户预览。
+///
+/// 与提交时走同一个 [`build_env`]，保证用户看到的就是实际发送的。
+#[tauri::command]
+pub async fn read_feedback_env(
+    state: State<'_, crate::DbState>,
+    agent_mgr: State<'_, crate::AsyncMutex<AgentManager>>,
+) -> Result<FeedbackEnvSummary, String> {
+    Ok(build_env(agent_mgr.inner(), state.inner()).await)
+}
+
 /// 提交意见反馈。
 ///
 /// 前置：必须已登录平台账号（未登录返回明确中文提示，前端据此引导登录后重试）。
@@ -305,25 +363,18 @@ pub async fn submit_feedback(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    // 环境摘要：工具版本现场探测；Agent 版本/状态读环境检测缓存。
-    // 探测先做（需锁 AgentManager），随后同步读库，避免连接跨 await。
-    let tools = {
-        let mgr = agent_mgr.lock().await;
-        probe_tools(&mgr).await
-    };
-    let agent_rows = {
-        let conn = state.get_conn()?;
-        collect_agents(&conn)
-    };
-    let env = FeedbackEnv {
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        node_version: tools.node,
-        npm_version: tools.npm,
-        git_version: tools.git,
-        python_version: tools.python,
-        agents: agent_rows,
-    };
+    let env = build_env(agent_mgr.inner(), state.inner()).await;
+    let FeedbackEnvSummary {
+        app_version,
+        channel,
+        os,
+        arch,
+        node_version,
+        npm_version,
+        git_version,
+        python_version,
+        agents,
+    } = env;
 
     let body = json!({
         "project": PROJECT,
@@ -333,14 +384,22 @@ pub async fn submit_feedback(
         "contactEmail": contact_email,
         "clientRequestId": client_request_id,
         "logs": logs,
+        // 应用自身：版本 + 构建类型 + 平台/架构 + 界面语言
         "client": {
-            "appVersion": env!("CARGO_PKG_VERSION"),
-            // 渠道：debug 构建视为 dev，其余按正式包
-            "channel": if cfg!(debug_assertions) { "dev" } else { "stable" },
-            "os": input.os.unwrap_or_else(|| std::env::consts::OS.to_string()),
+            "appVersion": app_version,
+            "channel": channel,
+            "os": input.os.unwrap_or(os),
+            "arch": arch,
             "locale": input.locale.unwrap_or_else(|| "zh-CN".to_string()),
         },
-        "env": env,
+        // 依赖环境：运行时工具版本 + 已启用 Agent 的接入方式/版本/状态
+        "env": {
+            "nodeVersion": node_version,
+            "npmVersion": npm_version,
+            "gitVersion": git_version,
+            "pythonVersion": python_version,
+            "agents": agents,
+        },
     });
 
     let resp: PlatformFeedbackResp =
