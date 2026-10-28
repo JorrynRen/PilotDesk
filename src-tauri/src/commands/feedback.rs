@@ -25,6 +25,13 @@ const PROJECT: &str = "pilotdesk";
 /// 平台反馈接口路径（同属 `/api/v1/me/*`，用户中心可见）
 const FEEDBACK_PATH: &str = "/api/v1/me/feedback";
 
+/// 应用形态：本构建即桌面端。
+///
+/// 与版本号一起上报，便于平台侧在同名反馈里区分「桌面端 / Web 版 / 移动版」——
+/// 同一平台未来接入 Web 版、移动版时，版本号相同但问题形态可能完全不同。
+/// 同样是编译期常量，不接受前端传入。
+const APP_TYPE: &str = "desktop";
+
 /// 一次提交最多附带多少条日志片段
 const MAX_LOG_LINES: usize = 8;
 /// 单条日志片段的最大字符数（超出截断）
@@ -62,6 +69,9 @@ pub struct SubmitFeedbackInput {
     /// 界面语言（缺省 `zh-CN`）
     #[serde(default)]
     pub locale: Option<String>,
+    /// 环境信息分项选择：`None` 表示用户整块不提供，后端完全不采集
+    #[serde(default)]
+    pub env: Option<EnvSelection>,
 }
 
 /// 提交结果：平台回执编号
@@ -107,6 +117,8 @@ pub struct FeedbackEnvAgent {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedbackEnvSummary {
+    /// 应用形态：`desktop` / `web` / `mobile`
+    pub app_type: String,
     /// 应用版本（编译期注入，即当前实际运行的版本）
     pub app_version: String,
     /// 构建渠道：`dev`（debug 构建）/ `stable`
@@ -165,6 +177,8 @@ impl Default for EnvSelection {
 #[serde(rename_all = "camelCase")]
 struct FeedbackClientInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
+    app_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     app_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
@@ -178,7 +192,8 @@ struct FeedbackClientInfo {
 
 impl FeedbackClientInfo {
     fn is_empty(&self) -> bool {
-        self.app_version.is_none()
+        self.app_type.is_none()
+            && self.app_version.is_none()
             && self.channel.is_none()
             && self.os.is_none()
             && self.arch.is_none()
@@ -370,6 +385,7 @@ async fn build_env(
         .unwrap_or_default();
 
     FeedbackEnvSummary {
+        app_type: APP_TYPE.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         channel: app_channel().to_string(),
         os: std::env::consts::OS.to_string(),
@@ -442,20 +458,36 @@ pub async fn submit_feedback(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let env = build_env(agent_mgr.inner(), state.inner()).await;
-    let FeedbackEnvSummary {
-        app_version,
-        channel,
-        os,
-        arch,
-        node_version,
-        npm_version,
-        git_version,
-        python_version,
-        agents,
-    } = env;
+    // 环境信息按用户勾选逐项采集：整块不勾就是 null，连探测都不做；
+    // 只勾了某几项时，其余字段完全不进请求体（而不是发空值）。
+    let mut client = FeedbackClientInfo::default();
+    let mut deps = FeedbackDepsInfo::default();
+    if let Some(selection) = input.env {
+        if selection.app || selection.system || selection.tools || selection.agents {
+            let summary = build_env(agent_mgr.inner(), state.inner()).await;
+            if selection.app {
+                client.app_type = Some(summary.app_type);
+                client.app_version = Some(summary.app_version);
+                client.channel = Some(summary.channel);
+            }
+            if selection.system {
+                client.os = Some(input.os.unwrap_or(summary.os));
+                client.arch = Some(summary.arch);
+                client.locale = Some(input.locale.unwrap_or_else(|| "zh-CN".to_string()));
+            }
+            if selection.tools {
+                deps.node_version = summary.node_version;
+                deps.npm_version = summary.npm_version;
+                deps.git_version = summary.git_version;
+                deps.python_version = summary.python_version;
+            }
+            if selection.agents {
+                deps.agents = summary.agents;
+            }
+        }
+    }
 
-    let body = json!({
+    let mut body = json!({
         "project": PROJECT,
         "category": category,
         "title": title,
@@ -463,23 +495,15 @@ pub async fn submit_feedback(
         "contactEmail": contact_email,
         "clientRequestId": client_request_id,
         "logs": logs,
-        // 应用自身：版本 + 构建类型 + 平台/架构 + 界面语言
-        "client": {
-            "appVersion": app_version,
-            "channel": channel,
-            "os": input.os.unwrap_or(os),
-            "arch": arch,
-            "locale": input.locale.unwrap_or_else(|| "zh-CN".to_string()),
-        },
-        // 依赖环境：运行时工具版本 + 已启用 Agent 的接入方式/版本/状态
-        "env": {
-            "nodeVersion": node_version,
-            "npmVersion": npm_version,
-            "gitVersion": git_version,
-            "pythonVersion": python_version,
-            "agents": agents,
-        },
     });
+    // 应用自身：形态 + 版本 + 构建类型 + 平台/架构 + 界面语言
+    if !client.is_empty() {
+        body["client"] = serde_json::to_value(&client).map_err(|e| e.to_string())?;
+    }
+    // 依赖环境：运行时工具版本 + 已启用 Agent 的接入方式/版本/状态
+    if !deps.is_empty() {
+        body["env"] = serde_json::to_value(&deps).map_err(|e| e.to_string())?;
+    }
 
     let resp: PlatformFeedbackResp =
         platform::post_json_with_status(FEEDBACK_PATH, &body, Some(&token))
