@@ -240,8 +240,20 @@ interface AgentStreamStore {
 }
 
 export const useAgentStreamStore = create<AgentStreamStore>((set, get) => {
+  /**
+   * 已收尾的会话：终态事件**重复到达**时不得再走一次收尾。
+   *
+   * 真实发生过：监听被注册两遍（热替换未退订）时，`agent-done` 被处理两次——第一遍已把
+   * 正文落库并清空流式态，第二遍看到空态，于是对一轮成功的回答补了一条
+   * 「未收到模型有效响应」，用户看到的就是"回答 + 一条假失败"。新一轮以任一分片到达为界
+   * 重新布防（见 `patch`），因此不会吞掉下一轮的真实收尾。
+   */
+  const finished = new Set<string>();
+
   /** 就地更新某会话的流式态（无记录时以空态起底）。 */
   const patch = (sessionId: string, fn: (prev: SessionStreamState) => SessionStreamState) => {
+    // 有新分片 = 新一轮开始，解除上一轮的收尾保护
+    finished.delete(sessionId);
     set((state) => {
       const prev = state.streams[sessionId] ?? EMPTY_STREAM;
       return { streams: { ...state.streams, [sessionId]: fn(prev) } };
@@ -281,6 +293,9 @@ export const useAgentStreamStore = create<AgentStreamStore>((set, get) => {
       patch(sessionId, (p) => ({ ...p, steps: resolveIterationLimitStep(p.steps, decision, timedOut) })),
 
     finishRun: (sessionId, fallbackContent, notifyEmpty = true) => {
+      // 终态重复到达（监听重复注册、对端重发）：本轮已收尾，直接忽略
+      if (finished.has(sessionId)) return;
+      finished.add(sessionId);
       const stream = get().streams[sessionId] ?? EMPTY_STREAM;
       const toolCalls = serializeChain(stream.steps);
       // 事件携带的正文是 Rust 端 content_buffer 的完整克隆，比前端分块累积更可靠（可能漏 chunk）；

@@ -56,7 +56,26 @@ export interface AgentBusHandlers {
 type Subscriber = () => AgentBusHandlers | undefined;
 
 const subscribers = new Set<Subscriber>();
-let started = false;
+
+/**
+ * 监听注册状态放在 `globalThis` 上，而不是模块变量。
+ *
+ * 模块级 `let started` 在 Vite 热替换后会重置：旧模块的 `listen()` 仍在生效（Tauri 侧没有
+ * 退订），新模块又注册一遍 —— 同一事件被两套监听各处理一次。现象是**正文整段重复**
+ * （每个分片收到两次），且 `agent-done` 被处理两遍：第一遍已把流式态落库并清空，
+ * 第二遍看到空态，于是对一轮成功的回答补了一条「未收到模型有效响应」。
+ */
+const BUS_STATE_KEY = '__pilotdeskAgentEventBusState';
+
+interface BusState {
+  started: boolean;
+  unlisteners: Array<Promise<UnlistenFn>>;
+}
+
+function busState(): BusState {
+  const g = globalThis as unknown as Record<string, BusState | undefined>;
+  return (g[BUS_STATE_KEY] ??= { started: false, unlisteners: [] });
+}
 
 /** 终态事件：记录它们会让已结束的会话留下"刚有活动"的痕迹，故不打活动时间戳。 */
 const TERMINAL_METHODS: ReadonlySet<string> = new Set(['onDone', 'onCancelled', 'onError', 'onIdleAborted']);
@@ -88,8 +107,9 @@ function dispatch(method: keyof AgentBusHandlers, ...args: unknown[]): void {
 
 /** 惰性注册全部 agent-* 监听（仅一次；进程生命周期内常驻）。 */
 function ensureStarted(): void {
-  if (started) return;
-  started = true;
+  const bus = busState();
+  if (bus.started) return;
+  bus.started = true;
 
   const registrations: Array<Promise<UnlistenFn>> = [
     listen<{ sessionId: string; content: string }>('agent-chunk', (event) => {
@@ -263,7 +283,8 @@ function ensureStarted(): void {
     }),
   ];
 
-  // 进程生命周期内常驻，无需退订：注册失败不致命，仅吞掉 rejection。
+  // 进程生命周期内常驻；热替换时由下方 dispose 统一退订，避免同一事件被处理两次。
+  bus.unlisteners.push(...registrations);
   void Promise.allSettled(registrations);
 }
 
@@ -274,6 +295,23 @@ export function subscribeAgentBus(get: Subscriber): () => void {
   return () => {
     subscribers.delete(get);
   };
+}
+
+// ── 热替换清理 ──
+// 本模块被重新求值时，旧实例注册的 Tauri 监听不会自动消失，必须显式退订后
+// 再让新实例重新注册；否则事件被处理两遍（正文重复、终态重复收尾）。
+// 用 `as unknown` 取 `hot`，避免依赖 `vite/client` 的类型声明。
+const hot = (import.meta as unknown as { hot?: { dispose: (cb: () => void) => void } }).hot;
+if (hot) {
+  hot.dispose(() => {
+    const bus = busState();
+    for (const p of bus.unlisteners) {
+      void p.then((un) => un()).catch(() => {});
+    }
+    bus.unlisteners.length = 0;
+    bus.started = false;
+    subscribers.clear();
+  });
 }
 
 export default subscribeAgentBus;
