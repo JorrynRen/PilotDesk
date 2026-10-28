@@ -95,7 +95,8 @@ impl PilotDeskCliRunner {
 
         // 圆桌未把房间级取消标志接进 CLI 参与者，这里用独立令牌（口径与既有实现一致）
         let abort = Arc::new(AtomicBool::new(false));
-        // 房间级审批尺度：ACP 宿主提供模式时按它映射（见 `derive_acp_mode`），否则作兜底
+        // 房间级审批尺度只作**兜底**（与会话模式同口径）：宿主提供 modes 时权限归宿主，
+        // 宿主的权限请求交主持人裁决；宿主不提供模式时按这个尺度决定要不要问人。
         let security = self.security.read().ok().and_then(|m| *m);
         let conn = AgentConn {
             session_id: format!("groupchat:{}", descriptor.agent_id),
@@ -110,8 +111,6 @@ impl PilotDeskCliRunner {
             approvals: Some(Arc::clone(&self.approvals)),
             acp_mode: None,
             security_mode: security,
-            // 圆桌只表达审批尺度、不选宿主 mode id：由传输层按语义映射
-            derive_acp_mode: true,
         };
         let handle = session
             .connect(&conn, sink)

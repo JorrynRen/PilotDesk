@@ -743,9 +743,6 @@ impl AgentExecutor {
             approvals: Some(Arc::clone(&gate)),
             acp_mode: None,
             security_mode: security,
-            // 节点面板只让用户选审批尺度（工具授权），不暴露宿主 mode id：
-            // 宿主提供模式时按语义映射，宿主未提供时沿用安全模式兜底。
-            derive_acp_mode: true,
         };
         let handle = match session.connect(&conn, sink).await {
             Ok(handle) => handle,

@@ -1065,8 +1065,9 @@ struct ApprovalRecord {
 
 /// 圆桌里 ACP 参与者的权限请求闸门：与 API 参与者同一裁决人（主持人）。
 ///
-/// 房间级「安全模式」表达的是**审批尺度**，不是宿主模式 id：宿主提供 `modes` 时由传输层按语义
-/// 映射（`map_security_to_host_mode`），宿主不提供模式或映射不到时才走到这里。裁决口径与
+/// 与会话模式同口径：宿主提供 `modes` 时权限语义由宿主决定（本应用不映射、不改写宿主模式），
+/// 宿主问过来的权限请求在这里交主持人裁决；宿主不提供模式时，房间级安全模式作为兜底审批
+/// 策略（`auto_allow_by_security`）先行过滤，剩下的仍走这里。裁决口径与
 /// [`make_director_approval`] 一致：无限制模式直接放行（不打扰主持人），其余交主持人按任务
 /// 必要性裁决；无主持人或裁决超时按拒绝（保守）。
 struct DirectorApprovalGate {
@@ -1647,7 +1648,7 @@ struct RoomRuntime {
     mcp: Option<Arc<RoomMcpAssets>>,
     /// 会话安全模式（本波次有效，Send 命令注入；None 默认标准）。
     security_mode: Option<SecurityMode>,
-    /// 审批尺度的共享单元：CLI/ACP 参与者按它映射 ACP 宿主模式（与 `security_mode` 同源）。
+    /// 审批尺度的共享单元：CLI/ACP 参与者的兜底审批策略读它（与 `security_mode` 同源）。
     security_shared: Arc<RwLock<Option<SecurityMode>>>,
     /// ACP 参与者的权限请求闸门（主持人裁决，与 API 参与者的审批同一口径）。
     acp_gate: Arc<DirectorApprovalGate>,
@@ -1667,7 +1668,7 @@ impl RoomRuntime {
         let _ = self.app.emit("groupchat-event", &event);
     }
 
-    /// 注入本波次的审批尺度：同时写回共享单元，使 CLI/ACP 参与者的 ACP 宿主模式映射生效。
+    /// 注入本波次的审批尺度：同时写回共享单元，使 CLI/ACP 参与者的兜底审批策略与主持人裁决生效。
     fn set_security_mode(&mut self, mode: Option<SecurityMode>) {
         self.security_mode = mode;
         if let Ok(mut shared) = self.security_shared.write() {

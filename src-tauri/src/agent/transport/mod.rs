@@ -288,59 +288,9 @@ pub struct AgentConn {
     pub acp_mode: Option<String>,
     /// 会话安全模式（`None` = 标准）。
     ///
-    /// **默认仅作兜底**：ACP 宿主提供了 `modes` 时权限完全交给宿主，本值不参与判定；
+    /// **仅作兜底**：ACP 宿主提供了 `modes` 时权限完全交给宿主，本值不参与判定；
     /// 宿主不提供模式时才按它决定"权限请求要不要打断用户"。
-    /// 例外见 [`Self::derive_acp_mode`]。
     pub security_mode: Option<crate::api_agent::agent_loop::SecurityMode>,
-    /// 是否把 `security_mode` **映射成宿主会话模式**（`acp_mode` 为空时才生效）。
-    ///
-    /// 用于"调用方只表达审批尺度、不关心宿主 mode id"的场景（如圆桌参与者）：
-    /// 宿主提供模式时按语义就近映射（见 [`map_security_to_host_mode`]），
-    /// 宿主不提供模式时保持原兜底语义。会话模式路径保持 `false`，
-    /// 以免覆盖用户"跟随宿主"的选择。
-    pub derive_acp_mode: bool,
-}
-
-/// 把本应用的审批尺度映射到宿主自带的会话模式 id（按语义就近匹配）。
-///
-/// 宿主 mode 的取值/命名由宿主自定义（claude 的 `default`/`bypassPermissions`、
-/// codex 的 `read-only`/`agent-full-access`…），这里只按常见的命名习惯做**候选排序**，
-/// 命中即用；一个都匹配不到就返回 `None`（保持宿主当前模式，由兜底审批策略接手）。
-/// 宁可保守（映射不到就不改），也不猜一个语义不符的模式。
-pub fn map_security_to_host_mode(
-    modes: &[AcpMode],
-    mode: crate::api_agent::agent_loop::SecurityMode,
-) -> Option<String> {
-    use crate::api_agent::agent_loop::SecurityMode;
-    // 模式 id 归一化：小写、去掉分隔符，便于匹配 read-only / readOnly / read_only
-    let norm = |s: &str| -> String {
-        s.chars()
-            .filter(|c| !matches!(c, '-' | '_' | ' '))
-            .collect::<String>()
-            .to_lowercase()
-    };
-    // 每种审批尺度偏好的候选关键词（越靠前越优先）
-    let wanted: &[&str] = match mode {
-        SecurityMode::Strict => &["readonly", "plan", "default"],
-        SecurityMode::Standard => &["default", "ask", "readonly"],
-        SecurityMode::Relaxed => &["acceptedits", "accept", "auto", "default"],
-        SecurityMode::Unrestricted => {
-            &["bypasspermissions", "bypass", "yolo", "fullaccess", "danger"]
-        }
-    };
-    for want in wanted {
-        if let Some(m) = modes.iter().find(|m| norm(&m.id) == *want || norm(&m.name) == *want) {
-            return Some(m.id.clone());
-        }
-        // 退一步：子串包含（如 `agent-full-access` 含 `fullaccess`）
-        if let Some(m) = modes
-            .iter()
-            .find(|m| norm(&m.id).contains(want) || norm(&m.name).contains(want))
-        {
-            return Some(m.id.clone());
-        }
-    }
-    None
 }
 
 /// 进程启动回调（`Fn` 而非 `FnMut`：可能被多线程共享）。

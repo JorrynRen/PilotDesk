@@ -2757,7 +2757,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                   <SecurityModeSelector
                     value={securityMode}
                     onChange={setSecurityMode}
-                    hint="圆桌内各类参与者共用这一审批尺度：API 参与者按策略逐条审批；ACP 参与者映射为宿主的会话模式（映射不到时按此策略兜底），由主持人裁决；本地 CLI 参与者由它自己的启动参数决定。"
+                    hint="圆桌内各类参与者共用这一审批尺度：API 参与者按策略逐条审批；ACP 参与者以宿主会话模式为准（本应用不改写），需要裁决的请求交主持人；宿主不提供模式时按此尺度兜底。本地 CLI 参与者由它自己的启动参数决定。"
                   />
                   <button
                     onClick={handlePickAttachments}
