@@ -40,7 +40,7 @@ export function AgentManager() {
   const { agents, loading, fetchAgents } = useAgentRegistry();
   // 安装/更新/卸载会改变本机版本：同步刷新全局环境信息，
   // 否则「设置 › 运行与策略」仍显示更新前的版本（跨页面共用同一份 envInfo）。
-  const { refresh: refreshEnv } = useEnvInfo();
+  const { envInfo, refresh: refreshEnv } = useEnvInfo();
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<AgentConfig> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -195,11 +195,19 @@ export function AgentManager() {
   const transportOf = (agentType: string) => transportMap[agentType] ?? 'subprocess';
   // 分组只影响**渲染顺序与标题**：兼容模式在前、ACP 在后，组内保持原序。
   // 拖拽仍走同一个 SortableContext，故排序语义不变（组内拖动落在同一索引区间）。
-  const groupedAgents = [...agents].sort(
-    (a, b) =>
-      (transportOf(a.agentType) === 'acp' ? 1 : 0) -
-      (transportOf(b.agentType) === 'acp' ? 1 : 0)
-  );
+  // 本机版本以环境检测的**实时探测**为准：`pkgState.installedVersion` 是安装当时的记录，
+  // 手工升级或历史脏值（把构建日期当版本）都会让这里显示过期/错误的版本号。
+  const groupedAgents = [...agents]
+    .map((a) => {
+      const live = envInfo?.agentVersions?.[a.agentType];
+      if (!live || !a.pkgState || a.pkgState.installedVersion === live) return a;
+      return { ...a, pkgState: { ...a.pkgState, installedVersion: live } };
+    })
+    .sort(
+      (a, b) =>
+        (transportOf(a.agentType) === 'acp' ? 1 : 0) -
+        (transportOf(b.agentType) === 'acp' ? 1 : 0)
+    );
 
   const handleEdit = (agent: AgentConfig) => {
     setEditingType(agent.agentType);
@@ -1084,8 +1092,10 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
     : failed || detectedAvailable === false
       ? 'var(--danger, #dc2626)'
       : 'var(--warning, #d97706)';
+  // 与列表同口径：优先用实时探测到的版本（安装记录可能过期或含历史脏值）
+  const shownVersion = detectedVersion || pkgState?.installedVersion;
   const statusText = ready
-    ? `已就绪${pkgState?.installedVersion ? ` v${pkgState.installedVersion}` : ''}`
+    ? `已就绪${shownVersion ? ` v${shownVersion}` : ''}`
     : failed
       ? '安装失败'
       : status === 'pending_install'

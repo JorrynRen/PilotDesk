@@ -486,7 +486,17 @@ pub fn extract_semver(text: &str) -> Option<String> {
         .ok()?
         .replace_all(text, " ")
         .to_string();
-    let re = regex::Regex::new(r"[vV]?(\d+\.\d+\.\d+[\w.\-]*)").ok()?;
+    // 优先取**带 `v` 前缀**的版本号：命令输出常把构建日期/更新时间排在前面
+    // （如 `built 2026.9.24` + `Hermes Agent v0.19.0`），裸 semver 匹配会把日期当版本。
+    if let Some(c) = regex::Regex::new(r"[vV](\d+\.\d+\.\d+[\w.\-]*)")
+        .ok()?
+        .captures(&stripped)
+    {
+        if let Some(m) = c.get(1) {
+            return Some(m.as_str().to_string());
+        }
+    }
+    let re = regex::Regex::new(r"(\d+\.\d+\.\d+[\w.\-]*)").ok()?;
     re.captures(&stripped)
         .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
 }
@@ -721,5 +731,10 @@ mod tests {
         );
         // 版本本身不可知时不能把日期当版本
         assert!(extract_semver("Hermes Agent vunknown (2026.9.24)").is_none());
+        // 构建日期不带括号且排在版本前面时，仍要取带 v 前缀的真实版本
+        assert_eq!(
+            extract_semver("built 2026.9.24\nHermes Agent v0.19.0").as_deref(),
+            Some("0.19.0")
+        );
     }
 }
