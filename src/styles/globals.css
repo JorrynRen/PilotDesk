@@ -1157,6 +1157,38 @@ button:disabled:hover {
   }
 }
 
+/* 宿主会话回放：新露出的一条从下方淡入，配合"当前回放条目"高亮，
+   让用户看得出正在往回放，而不是以为界面卡住了。 */
+@keyframes pd-replay-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pd-replay-item {
+  animation: pd-replay-in 220ms ease-out both;
+}
+
+/* 正在回放的那一条：左侧强调色竖条 + 极淡底色；回放结束后由宿主移除该类 */
+.pd-replay-current {
+  margin-left: -10px;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent-light);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pd-replay-item {
+    animation: none;
+  }
+}
+
 .pd-animate-spin {
   animation: pd-spin 1s linear infinite;
 }

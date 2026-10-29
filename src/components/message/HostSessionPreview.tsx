@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ArrowLeft, Download, Loader2, Info } from 'lucide-react';
 
@@ -27,6 +27,39 @@ export function HostSessionPreview() {
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const { getDisplayName } = useAgentRegistry();
   const [importing, setImporting] = useState(false);
+
+  /**
+   * 回放露出进度：`session/load` 的响应把整段历史**一次性**返回，若直接整屏铺开，
+   * 用户既看不出"正在回放"，也容易以为界面卡住。这里按消息条数逐条露出（末条高亮 +
+   * 渐变淡入 + 顶部进度），回放结束即停止，不额外向后端要数据。
+   */
+  const total = preview?.messages.length ?? 0;
+  const [revealed, setRevealed] = useState(0);
+  const replaying = revealed < total;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!preview) return;
+    if (total === 0) {
+      setRevealed(0);
+      return;
+    }
+    setRevealed(1);
+    // 长会话按条数加速，避免几十条时回放拖太久
+    const stepMs = total > 24 ? 60 : 120;
+    const timer = window.setInterval(() => {
+      setRevealed((n) => (n >= total ? n : n + 1));
+    }, stepMs);
+    return () => window.clearInterval(timer);
+  }, [preview?.hostSessionId, total]);
+
+  // 跟着回放往下走：新的一条露出后滚到它，避免用户还要手动追
+  useEffect(() => {
+    if (revealed === 0) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: replaying ? 'smooth' : 'auto' });
+  }, [revealed, replaying]);
 
   /** 导入为本地会话并切换过去：这是"继续对话"的唯一入口 */
   const handleImport = useCallback(async () => {
@@ -112,20 +145,58 @@ export function HostSessionPreview() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-4">
-        {messages.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
-            该会话没有可回放的消息正文
+      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-4">
+        {replaying && total > 0 && (
+          <div
+            className="sticky top-0 z-10 -mx-4 -mt-3 mb-1 px-4 py-1 flex items-center gap-2 text-[10px]"
+            style={{ backgroundColor: 'var(--bg-content)', color: 'var(--text-tertiary)' }}
+          >
+            <Loader2 size={11} className="animate-spin shrink-0" />
+            <span className="shrink-0">正在回放：{revealed}/{total}</span>
+            <div
+              className="flex-1 h-[2px] rounded-full overflow-hidden"
+              style={{ backgroundColor: 'var(--bg-tertiary)' }}
+            >
+              <div
+                className="h-full transition-all duration-150"
+                style={{
+                  width: `${(revealed / total) * 100}%`,
+                  backgroundColor: 'var(--accent)',
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {total === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center gap-2 text-center px-6">
+            <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+              宿主没有返回任何历史内容
+            </span>
+            <span
+              className="text-[10px] leading-relaxed"
+              style={{ color: 'var(--text-tertiary)', opacity: 0.8 }}
+            >
+              常见原因是宿主适配器未能恢复这条会话（例如模型 Provider 未配置好）。
+              可在宿主应用里确认该会话能正常打开后再试。
+            </span>
           </div>
         ) : (
-          messages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              agentType={preview.agentType}
-              hideTimestamp
-            />
-          ))
+          messages.slice(0, revealed).map((m, i) => {
+            // 末条 = 此刻"正在回放"的那一条：高亮 + 淡入，回放结束即恢复正常
+            const isCurrent = replaying && i === revealed - 1;
+            return (
+              <div
+                key={m.id}
+                className={isCurrent ? 'pd-replay-item pd-replay-current' : 'pd-replay-item'}
+              >
+                <MessageBubble
+                  message={m}
+                  agentType={preview.agentType}
+                  hideTimestamp
+                />
+              </div>
+            );
+          })
         )}
       </div>
 
