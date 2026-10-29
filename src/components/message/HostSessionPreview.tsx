@@ -29,29 +29,24 @@ export function HostSessionPreview() {
   const [importing, setImporting] = useState(false);
 
   /**
-   * 回放露出进度：`session/load` 的响应把整段历史**一次性**返回，若直接整屏铺开，
-   * 用户既看不出"正在回放"，也容易以为界面卡住。这里按消息条数逐条露出（末条高亮 +
-   * 渐变淡入 + 顶部进度），回放结束即停止，不额外向后端要数据。
+   * 逐条回放：`session/load` 一次性把整段历史返回，若直接整屏铺开，用户看不出在回放、
+   * 容易以为卡住。进度存在 store 里（左侧列表要同步显示"回放中"），这里只负责推进。
    */
+  const replay = useHostPreviewStore((s) => s.replay);
+  const advanceReplay = useHostPreviewStore((s) => s.advanceReplay);
   const total = preview?.messages.length ?? 0;
-  const [revealed, setRevealed] = useState(0);
-  const replaying = revealed < total;
+  const revealed = replay ? replay.revealed : total;
+  const replaying = replay !== null;
+  const percent = total > 0 ? Math.min(100, (revealed / total) * 100) : 0;
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!preview) return;
-    if (total === 0) {
-      setRevealed(0);
-      return;
-    }
-    setRevealed(1);
+    if (!replaying) return;
     // 长会话按条数加速，避免几十条时回放拖太久
     const stepMs = total > 24 ? 60 : 120;
-    const timer = window.setInterval(() => {
-      setRevealed((n) => (n >= total ? n : n + 1));
-    }, stepMs);
+    const timer = window.setInterval(() => advanceReplay(), stepMs);
     return () => window.clearInterval(timer);
-  }, [preview?.hostSessionId, total]);
+  }, [replaying, total, advanceReplay]);
 
   // 跟着回放往下走：新的一条露出后滚到它，避免用户还要手动追
   useEffect(() => {
@@ -110,9 +105,9 @@ export function HostSessionPreview() {
       className="flex-1 flex flex-col overflow-hidden relative rounded-lg"
       style={{ backgroundColor: 'var(--bg-content)' }}
     >
-      {/* 头部：来源 + 只读标识 + 返回 */}
+      {/* 头部：来源 + 只读标识 + 回放进度 + 返回 */}
       <div
-        className="shrink-0 px-4 flex items-center gap-2 border-b"
+        className="shrink-0 px-4 flex items-center gap-2 border-b relative"
         style={{ height: '36px', borderColor: 'var(--border)', backgroundColor: 'var(--bg-content)' }}
       >
         <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
@@ -125,6 +120,16 @@ export function HostSessionPreview() {
           只读预览 · {getDisplayName(preview.agentType)}
         </span>
         <div className="flex-1" />
+        {/* 回放进度紧贴标题栏：不占消息区高度，播完即消失，避免消息区整体位移造成"抖动" */}
+        {replaying && (
+          <span
+            className="flex items-center gap-1 text-[10px] shrink-0"
+            style={{ color: 'var(--text-tertiary)' }}
+          >
+            <Loader2 size={10} className="animate-spin" />
+            {revealed}/{total}
+          </span>
+        )}
         <button
           onClick={closePreview}
           className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0"
@@ -133,6 +138,13 @@ export function HostSessionPreview() {
           <ArrowLeft size={11} />
           返回
         </button>
+        {/* 2px 进度线压在标题栏下边框上，属于头部的一部分，不参与消息区布局 */}
+        {replaying && (
+          <div
+            className="absolute left-0 bottom-0 h-[2px] transition-all duration-150"
+            style={{ width: `${percent}%`, backgroundColor: 'var(--accent)' }}
+          />
+        )}
       </div>
 
       {preview.cwd && (
@@ -146,27 +158,6 @@ export function HostSessionPreview() {
       )}
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-4">
-        {replaying && total > 0 && (
-          <div
-            className="sticky top-0 z-10 -mx-4 -mt-3 mb-1 px-4 py-1 flex items-center gap-2 text-[10px]"
-            style={{ backgroundColor: 'var(--bg-content)', color: 'var(--text-tertiary)' }}
-          >
-            <Loader2 size={11} className="animate-spin shrink-0" />
-            <span className="shrink-0">正在回放：{revealed}/{total}</span>
-            <div
-              className="flex-1 h-[2px] rounded-full overflow-hidden"
-              style={{ backgroundColor: 'var(--bg-tertiary)' }}
-            >
-              <div
-                className="h-full transition-all duration-150"
-                style={{
-                  width: `${(revealed / total) * 100}%`,
-                  backgroundColor: 'var(--accent)',
-                }}
-              />
-            </div>
-          </div>
-        )}
         {total === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-center px-6">
             <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>

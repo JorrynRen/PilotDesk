@@ -104,6 +104,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     view,
     agentType: hostAgent,
     preview: hostPreview,
+    replay: hostReplay,
     setView,
     setAgentType,
     openPreview,
@@ -1253,6 +1254,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                 const busyImport = importingHostId === row.sessionId;
                 const deleting = deletingHostIds.has(row.sessionId);
                 const isPreviewing = hostPreview?.hostSessionId === row.sessionId;
+                // 逐条露出阶段：列表也要转圈，否则右侧在动、左侧像没反应
+                const replayingRow = isPreviewing && hostReplay !== null;
                 const selected = selectedHostIds.has(row.sessionId);
                 const updatedLabel = formatHostTime(row.updatedAt);
                 return (
@@ -1305,11 +1308,16 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1">
                           <span className="text-xs truncate">
-                            {deleting
-                              ? '删除中…'
-                              : busyPreview
-                                ? t('sessionList.host.loading', '回放中…')
-                                : row.title || '（无标题）'}
+                            {deleting ? (
+                              '删除中…'
+                            ) : busyPreview || replayingRow ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Loader2 size={10} className="animate-spin shrink-0" />
+                                {t('sessionList.host.loading', '回放中…')}
+                              </span>
+                            ) : (
+                              row.title || '（无标题）'
+                            )}
                           </span>
                           {updatedLabel && !deleting && (
                             <span
