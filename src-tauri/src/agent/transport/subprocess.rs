@@ -19,7 +19,7 @@ use crate::agent::config::AgentConfig;
 use crate::agent::handler::{ProcessHandler, StdioHandler, StreamEvent};
 use crate::agent::transport::{
     AgentConn, AgentError, AgentSession, Capabilities, EventSink, PidCallback, PromptInput,
-    PromptOutput, SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
+    PromptOutput, SessionHandle, StopReason, TransportKind, TurnUsage, UnifiedAgentEvent,
 };
 use crate::utils::process::{
     check_process_state, make_still_alive_error, TimeoutError, TimeoutPolicy,
@@ -129,6 +129,10 @@ impl AgentSession for SubprocessSession {
 
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let mut full_output = String::new();
+        // 本轮用量累加：json-stream 解析器按「每次 API 调用」上报（claude 逐个 assistant
+        // 消息、codex 一次 turn.completed 累计值），这里加总成一整轮的用量
+        let mut turn_usage: Option<TurnUsage> = None;
+        let mut turn_model: Option<String> = None;
         // 对端自报的失败信息（优先于 exit code）
         let mut failed: Option<String> = None;
         let poll_start = Instant::now();
@@ -212,12 +216,26 @@ impl AgentSession for SubprocessSession {
                                 prompt,
                                 completion,
                                 total,
-                            } => self.emit(UnifiedAgentEvent::Usage {
-                                session_id: self.session_id.clone(),
-                                prompt,
-                                completion,
-                                total,
-                            }),
+                                cache_read,
+                                cache_write,
+                                model,
+                            } => {
+                                let acc = turn_usage.get_or_insert_with(TurnUsage::default);
+                                acc.prompt += prompt;
+                                acc.completion += completion;
+                                acc.total += total;
+                                acc.cache_read += cache_read;
+                                acc.cache_write += cache_write;
+                                if turn_model.is_none() {
+                                    turn_model = model.clone();
+                                }
+                                self.emit(UnifiedAgentEvent::Usage {
+                                    session_id: self.session_id.clone(),
+                                    prompt,
+                                    completion,
+                                    total,
+                                })
+                            }
                             StreamEvent::ToolStart { tool_id, name, args } => {
                                 self.emit(UnifiedAgentEvent::ToolStart {
                                     session_id: self.session_id.clone(),
@@ -285,9 +303,10 @@ impl AgentSession for SubprocessSession {
         Ok(PromptOutput {
             stop_reason: StopReason::EndTurn,
             text: full_output,
-            // CLI 的用量在流式过程中已作为 `Usage` 事件下发；这里不重复携带
-            usage: None,
-            model: None,
+            // 本轮用量（json-stream 解析器上报；ansi-text / raw-text 无结构则 None）
+            usage: turn_usage.filter(|u| !u.is_empty()),
+            // 对端自报模型（claude 提供；codex 的 JSON 流不提供）
+            model: turn_model,
         })
     }
 

@@ -448,7 +448,7 @@ impl NodeExecutorTrait for AgentExecutor {
                 .await;
         }
 
-        let (output, agent_session_id) = self
+        let once = self
             .agent_manager
             .lock()
             .await
@@ -472,12 +472,21 @@ impl NodeExecutorTrait for AgentExecutor {
             )
             .await?;
 
+        // 用量落库：本地 CLI 通道（归因沿用 `wf_{execution}_{node}`，与 ACP 节点同口径）
+        crate::agent::record_cli_usage(
+            &self.pool,
+            &temp_session_id,
+            agent_type,
+            once.usage,
+            once.model.as_deref(),
+        );
+
         // output 只存 agent 原始返回文本，session_id 放 NodeOutput.session_id 字段
         // input_data 存最终提示词（覆盖 running 时写入的输入映射）
         // artifacts_path 存工作区路径（agent 运行时生成工件的位置）
         Ok(NodeOutput {
-            output: Value::String(normalize_agent_output(&output, &node.id)),
-            session_id: agent_session_id,
+            output: Value::String(normalize_agent_output(&once.text, &node.id)),
+            session_id: once.agent_session_id,
             input_data: Some(prompt.clone()),
             artifacts_path: Some(workspace_dir),
         })

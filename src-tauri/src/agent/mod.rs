@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::decode_windows_output;
 pub mod async_process;
@@ -79,6 +79,41 @@ pub(crate) fn split_model_label(label: Option<&str>) -> (&str, &str) {
     }
 }
 
+/// 本地 CLI 接入的用量落库：`channel = cli:<agent_type>`，归因 scope 由调用方给定
+/// （会话 = session_id，圆桌席位 = `groupchat:{room}:{participant}`，工作流节点 = `wf_...`）。
+///
+/// provider/model 取对端自报值（claude 给 `message.model`，codex 不给 → 留空）；
+/// 用量缺失或全 0 一律不写行，避免污染调用次数与命中率。返回是否写库成功。
+pub(crate) fn record_cli_usage(
+    pool: &crate::db::init::DbPool,
+    scope: &str,
+    agent_type: &str,
+    usage: Option<crate::agent::transport::TurnUsage>,
+    model: Option<&str>,
+) -> bool {
+    let Some(u) = usage.filter(|u| !u.is_empty()) else {
+        return false;
+    };
+    let Ok(conn) = pool.get() else {
+        return false;
+    };
+    let (provider, model_name) = split_model_label(model);
+    crate::api_agent::agent_loop::record_usage_row(
+        &conn,
+        scope,
+        provider,
+        model_name,
+        "Cli",
+        u.prompt,
+        u.completion,
+        u.total,
+        u.cache_read,
+        u.cache_write,
+        &format!("cli:{}", agent_type),
+    )
+    .is_ok()
+}
+
 // ------------------------------------------------------------------
 //  P0-v2 开关
 // ------------------------------------------------------------------
@@ -106,6 +141,21 @@ pub struct ExecuteResult {
     pub exit_code: i32,
     /// 标准错误
     pub stderr: String,
+    /// 本轮用量（仅传输层 v2 + `json-stream` 解析器可得；legacy 路径与纯文本 CLI 为 None）
+    pub usage: Option<crate::agent::transport::TurnUsage>,
+    /// 对端自报模型标签（claude 提供；codex 的 JSON 流不提供）
+    pub model: Option<String>,
+}
+
+/// `execute_once` 的结果：正文 + 对端会话 id + 本轮用量（CLI 的 `json-stream` 解析器可得）。
+///
+/// 用量由调用方按自己的归因 scope 落库（`agent::record_cli_usage`），
+/// `AgentManager` 自身不持有连接池。
+pub struct OnceOutput {
+    pub text: String,
+    pub agent_session_id: Option<String>,
+    pub usage: Option<crate::agent::transport::TurnUsage>,
+    pub model: Option<String>,
 }
 
 /// 异步会话执行参数（会话模式）
@@ -484,6 +534,9 @@ impl AgentManager {
             stdout: full_output.trim().to_string(),
             exit_code,
             stderr: stderr_text,
+            // legacy 路径不解析结构化事件 → 无用量可报
+            usage: None,
+            model: None,
         })
     }
 
@@ -611,12 +664,16 @@ impl AgentManager {
                 stdout: out.text.trim().to_string(),
                 exit_code: 0,
                 stderr: String::new(),
+                usage: out.usage,
+                model: out.model,
             }),
             // 非 0 退出：与 legacy 一致地返回 Ok + 非 0 退出码，交由上层做友好错误映射
             Err(AgentError::ProcessExited { exit_code, stderr }) => Ok(ExecuteResult {
                 stdout: String::new(),
                 exit_code,
                 stderr,
+                usage: None,
+                model: None,
             }),
             Err(AgentError::Cancelled) => Err("已取消".to_string()),
             Err(e) => Err(format!("{}", e)),
@@ -823,6 +880,22 @@ impl AgentManager {
 
         match result {
             Ok(exec_result) => {
+                // 用量落库：CLI 的 token 由 json-stream 解析器从对端输出里读（缺失则不写行）。
+                // 与 API/ACP 路径同一脏标记事件，会话用量条与统计面板据此刷新。
+                if let Some(state) = app_for_result.try_state::<crate::DbState>() {
+                    if record_cli_usage(
+                        &state.pool,
+                        &sid_for_result,
+                        &source_type_for_error,
+                        exec_result.usage,
+                        exec_result.model.as_deref(),
+                    ) {
+                        let _ = app_for_result.emit(
+                            "usage-recorded",
+                            serde_json::json!({ "sessionId": sid_for_result }),
+                        );
+                    }
+                }
                 if exec_result.exit_code != 0 {
                     failed = true;
                     // 某些 CLI 工具（如 Codex、Claude）将错误写入 stdout（JSON 流）
@@ -895,7 +968,7 @@ impl AgentManager {
         _temp_session_id: &str,
         on_chunk: impl Fn(String) + Send + 'static,
         agent_session_id: Option<&str>,
-    ) -> Result<(String, Option<String>), AppError> {
+    ) -> Result<OnceOutput, AppError> {
         let source_type = config.agent_type.clone();
         let async_opts = AsyncOptions {
             cwd: cwd.to_string(),
@@ -981,7 +1054,12 @@ impl AgentManager {
         }
 
         let agent_sid = sid_result.lock().unwrap().clone();
-        Ok((result.stdout, agent_sid))
+        Ok(OnceOutput {
+            text: result.stdout,
+            agent_session_id: agent_sid,
+            usage: result.usage,
+            model: result.model,
+        })
     }
 
     // ------------------------------------------------------------------

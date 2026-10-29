@@ -285,6 +285,15 @@ impl CliRunner for PilotDeskCliRunner {
             ));
         }
 
+        // 用量落库：本地 CLI 通道（归因按房间席位 scope，与会话/工作流同口径）
+        crate::agent::record_cli_usage(
+            &self.pool,
+            &self.usage_scope,
+            agent_type,
+            result.usage,
+            result.model.as_deref(),
+        );
+
         Ok(CliOutput {
             stdout: result.stdout,
             session_id: resume_session_id,

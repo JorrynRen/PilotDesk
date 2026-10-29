@@ -24,6 +24,12 @@ pub enum StreamEvent {
         prompt: u32,
         completion: u32,
         total: u32,
+        /// 缓存命中读取（claude `cache_read_input_tokens` / codex `cached_input_tokens`）
+        cache_read: u32,
+        /// 缓存写入（claude `cache_creation_input_tokens` / codex `cache_write_input_tokens`）
+        cache_write: u32,
+        /// 对端自报模型标签（claude `message.model` 有值；codex 的 JSON 流不提供）
+        model: Option<String>,
     },
     /// 工具调用开始
     ToolStart {
@@ -228,6 +234,13 @@ fn parse_json_stream_events(line: &str) -> Vec<StreamEvent> {
                         prompt,
                         completion,
                         total: prompt + completion + cache_read + cache_write,
+                        cache_read,
+                        cache_write,
+                        model: event["message"]["model"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
                     });
                 }
             }
@@ -272,6 +285,32 @@ fn parse_json_stream_events(line: &str) -> Vec<StreamEvent> {
                         .unwrap_or("Agent 自报失败")
                         .to_string(),
                 });
+            }
+        }
+        // codex `exec --json`：回合结束给一次**累计**用量（实测样本：
+        // `{"type":"turn.completed","usage":{"input_tokens":8915,"cached_input_tokens":0,
+        //  "cache_write_input_tokens":0,"output_tokens":3,"reasoning_output_tokens":0}}`）。
+        // OpenAI 口径 `input_tokens` 含缓存命中部分，故未命中输入 = input - cached。
+        "turn.completed" => {
+            let usage = &event["usage"];
+            if usage.is_object() {
+                let input = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
+                let cache_read = usage["cached_input_tokens"].as_u64().unwrap_or(0) as u32;
+                let cache_write = usage["cache_write_input_tokens"].as_u64().unwrap_or(0) as u32;
+                let completion = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
+                let prompt = input.saturating_sub(cache_read);
+                let total = prompt + cache_read + cache_write + completion;
+                if total > 0 {
+                    out.push(StreamEvent::Usage {
+                        prompt,
+                        completion,
+                        total,
+                        cache_read,
+                        cache_write,
+                        // codex 的 JSON 流不带模型名
+                        model: None,
+                    });
+                }
             }
         }
         _ => {}
@@ -496,13 +535,33 @@ mod stream_event_tests {
     /// assistant 消息：文本块 + 用量（Anthropic 口径，total = 四桶之和）
     #[test]
     fn parses_assistant_usage() {
-        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}],"usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}},"session_id":"s1"}"#;
+        let line = r#"{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"pong"}],"usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}},"session_id":"s1"}"#;
         assert_eq!(
             parse_json_stream_events(line),
             vec![StreamEvent::Usage {
                 prompt: 10,
                 completion: 2,
                 total: 19,
+                cache_read: 3,
+                cache_write: 4,
+                model: Some("claude-sonnet-4-5".into()),
+            }]
+        );
+    }
+
+    /// codex `turn.completed`：OpenAI 口径 `input_tokens` 含缓存，未命中 = input - cached
+    #[test]
+    fn parses_codex_turn_completed_usage() {
+        let line = r#"{"type":"turn.completed","usage":{"input_tokens":8915,"cached_input_tokens":900,"cache_write_input_tokens":0,"output_tokens":3,"reasoning_output_tokens":0}}"#;
+        assert_eq!(
+            parse_json_stream_events(line),
+            vec![StreamEvent::Usage {
+                prompt: 8015,
+                completion: 3,
+                total: 8918,
+                cache_read: 900,
+                cache_write: 0,
+                model: None,
             }]
         );
     }
