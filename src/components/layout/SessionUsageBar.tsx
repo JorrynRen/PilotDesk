@@ -32,7 +32,10 @@ function fmt(n: number): string {
  *
  * 数据源：只读 `get_session_usage`（api_usage_log 聚合，缓存读写本来就是两列），
  * 每次落库（`usage-recorded`）后按会话重新拉取——粒度与逐次累加一致，但口径不会错。
- * CLI/子进程会话（claude/codex/hermes 等）无 token 用量体系，不显示，避免误导性 0。
+ *
+ * 三种接入共用同一张表：内置 API Agent（`channel='api'`）、ACP 与本地 CLI
+ * （对端自报 token 才有行）。后两者在宿主不报用量时一条记录都没有，
+ * 故**没有记录就整行不渲染**，避免显示误导性的 0。
  */
 export function SessionUsageBar({
   sessionId,
@@ -44,7 +47,6 @@ export function SessionUsageBar({
   const [acc, setAcc] = useState<Acc>({ prompt: 0, completion: 0, cacheRead: 0, cacheWrite: 0, callCount: 0 });
 
   const isApi = agentType === 'api';
-
   // 会话/Agent 变化时清空累计值。用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮
   // 级联渲染（`react-hooks/set-state-in-effect`），两者行为一致。
   const accKey = `${sessionId}|${agentType}`;
@@ -55,7 +57,7 @@ export function SessionUsageBar({
   }
 
   useEffect(() => {
-    if (!sessionId || agentType !== 'api') return;
+    if (!sessionId) return;
     let disposed = false;
     let un: UnlistenFn | null = null;
 
@@ -94,9 +96,11 @@ export function SessionUsageBar({
       disposed = true;
       if (un) un();
     };
-  }, [sessionId, agentType]);
+  }, [sessionId]);
 
-  if (!sessionId || !isApi) return null;
+  if (!sessionId) return null;
+  // 非 API 接入（ACP / 本地 CLI）宿主不报用量时没有任何记录：不渲染，而不是显示一排 0
+  if (!isApi && acc.callCount === 0) return null;
 
   const denom = acc.prompt + acc.cacheRead + acc.cacheWrite;
   const rate = denom > 0 ? acc.cacheRead / denom : 0;

@@ -937,6 +937,7 @@ fn build_participants(
                     security_shared.clone(),
                     // 与 API 参与者同一 scope 约定（见 build_llm_client 注释）
                     format!("groupchat:{}:{}", room.id, row.id),
+                    app.clone(),
                 ));
                 let p = super::participant::CliParticipant {
                     id: row.id.clone(),
@@ -6242,6 +6243,7 @@ impl RoomRuntime {
                                                             "groupchat:{}:{}",
                                                             room_id, new_id
                                                         ),
+                                                        app.clone(),
                                                     ));
                                                     let p = CliParticipant {
                                                         id: new_id.clone(),

@@ -79,15 +79,16 @@ pub(crate) fn split_model_label(label: Option<&str>) -> (&str, &str) {
     }
 }
 
-/// 本地 CLI 接入的用量落库：`channel = cli:<agent_type>`，归因 scope 由调用方给定
-/// （会话 = session_id，圆桌席位 = `groupchat:{room}:{participant}`，工作流节点 = `wf_...`）。
+/// 传输层用量落库（会话 / 圆桌 / 工作流共用）。
 ///
-/// provider/model 取对端自报值（claude 给 `message.model`，codex 不给 → 留空）；
+/// `channel` 是统计维度（`acp:<agent_type>` / `cli:<agent_type>`），`scope` 是归因键；
+/// provider/model 取对端自报值（`custom:agnes-2.5-flash` 按首个冒号拆分）；
 /// 用量缺失或全 0 一律不写行，避免污染调用次数与命中率。返回是否写库成功。
-pub(crate) fn record_cli_usage(
+pub(crate) fn record_transport_usage(
     pool: &crate::db::init::DbPool,
     scope: &str,
-    agent_type: &str,
+    channel: &str,
+    api_format: &str,
     usage: Option<crate::agent::transport::TurnUsage>,
     model: Option<&str>,
 ) -> bool {
@@ -103,15 +104,34 @@ pub(crate) fn record_cli_usage(
         scope,
         provider,
         model_name,
-        "Cli",
+        api_format,
         u.prompt,
         u.completion,
         u.total,
         u.cache_read,
         u.cache_write,
-        &format!("cli:{}", agent_type),
+        channel,
     )
     .is_ok()
+}
+
+/// 本地 CLI 接入的用量落库：`channel = cli:<agent_type>`，归因 scope 由调用方给定
+/// （会话 = session_id，圆桌席位 = `groupchat:{room}:{participant}`，工作流节点 = `wf_...`）。
+pub(crate) fn record_cli_usage(
+    pool: &crate::db::init::DbPool,
+    scope: &str,
+    agent_type: &str,
+    usage: Option<crate::agent::transport::TurnUsage>,
+    model: Option<&str>,
+) -> bool {
+    record_transport_usage(
+        pool,
+        scope,
+        &format!("cli:{}", agent_type),
+        "Cli",
+        usage,
+        model,
+    )
 }
 
 // ------------------------------------------------------------------

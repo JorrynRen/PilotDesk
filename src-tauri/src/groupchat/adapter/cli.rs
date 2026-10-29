@@ -31,6 +31,8 @@ pub struct PilotDeskCliRunner {
     security: Arc<RwLock<Option<SecurityMode>>>,
     /// 用量归因 scope（`groupchat:{room}:{participantId}`）：宿主上报用量时按它落库。
     usage_scope: String,
+    /// 房间 emitter：用量落库后广播 `usage-recorded`，房间用量条据此刷新。
+    app: tauri::AppHandle,
 }
 
 impl PilotDeskCliRunner {
@@ -41,6 +43,7 @@ impl PilotDeskCliRunner {
         approvals: Arc<dyn crate::agent::transport::ApprovalGate>,
         security: Arc<RwLock<Option<SecurityMode>>>,
         usage_scope: String,
+        app: tauri::AppHandle,
     ) -> Self {
         Self {
             agent_manager,
@@ -50,7 +53,14 @@ impl PilotDeskCliRunner {
             approvals,
             security,
             usage_scope,
+            app,
         }
+    }
+
+    /// 用量落库后广播脏标记（与 API/会话路径同一事件）：房间用量条按它整量刷新。
+    fn emit_usage_dirty(&self) {
+        use tauri::Emitter;
+        let _ = self.app.emit("usage-recorded", serde_json::json!({}));
     }
 
     /// 非 `subprocess` 接入（ACP）的一轮执行：适配器进程 + JSON-RPC，返回本轮正文。
@@ -137,24 +147,15 @@ impl PilotDeskCliRunner {
         match result {
             Ok(out) => {
                 // 宿主上报用量才落库：通道 `acp:<agent_type>`，归因按房间席位 scope
-                if let Some(u) = out.usage {
-                    if let Ok(conn) = self.pool.get() {
-                        let (provider, model) =
-                            crate::agent::split_model_label(out.model.as_deref());
-                        let _ = crate::api_agent::agent_loop::record_usage_row(
-                            &conn,
-                            &self.usage_scope,
-                            provider,
-                            model,
-                            "Acp",
-                            u.prompt,
-                            u.completion,
-                            u.total,
-                            u.cache_read,
-                            u.cache_write,
-                            &format!("acp:{}", descriptor.agent_id),
-                        );
-                    }
+                if crate::agent::record_transport_usage(
+                    &self.pool,
+                    &self.usage_scope,
+                    &format!("acp:{}", descriptor.agent_id),
+                    "Acp",
+                    out.usage,
+                    out.model.as_deref(),
+                ) {
+                    self.emit_usage_dirty();
                 }
                 if let Some(sid) = remote_sid.lock().unwrap().clone() {
                     self.sessions
@@ -286,13 +287,15 @@ impl CliRunner for PilotDeskCliRunner {
         }
 
         // 用量落库：本地 CLI 通道（归因按房间席位 scope，与会话/工作流同口径）
-        crate::agent::record_cli_usage(
+        if crate::agent::record_cli_usage(
             &self.pool,
             &self.usage_scope,
             agent_type,
             result.usage,
             result.model.as_deref(),
-        );
+        ) {
+            self.emit_usage_dirty();
+        }
 
         Ok(CliOutput {
             stdout: result.stdout,
