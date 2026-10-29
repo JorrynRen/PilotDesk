@@ -118,6 +118,9 @@ pub struct UsageSummary {
     pub totals: UsageTotals,
     pub by_provider: Vec<UsageGroup>,
     pub by_model: Vec<UsageGroup>,
+    /// 按**执行通道**（`api` / `acp:<agent_type>` / `cli:<agent_type>`）平铺分组。
+    /// 不做宿主身份归并：同一 Agent 的两种接入方式就是两个通道。
+    pub by_channel: Vec<UsageGroup>,
     pub trend: Vec<UsageDay>,
 }
 
@@ -422,6 +425,88 @@ fn group_model(conn: &Connection, since: Option<i64>) -> Result<Vec<UsageGroup>,
     Ok(rows)
 }
 
+/// `agents.agent_type` → `display_name`（通道显示名用；表缺失时为空映射）。
+fn agent_display_names(conn: &Connection) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if !table_exists(conn, "agents") {
+        return map;
+    }
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT agent_type, COALESCE(display_name, '') FROM agents WHERE TRIM(COALESCE(display_name, '')) != ''",
+    ) {
+        if let Ok(it) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        {
+            for row in it.flatten() {
+                map.insert(row.0, row.1);
+            }
+        }
+    }
+    map
+}
+
+/// 通道原始值 → 展示标签：
+/// - `api` → 「内置 API Agent」
+/// - `acp:<agent_type>` / `cli:<agent_type>` → 「ACP · <显示名>」/「本地 CLI · <显示名>」
+///   （Agent 行已删则回落 agent_type）
+/// - 其它（含历史空值）原样保留
+fn channel_label(channel: &str, display: &HashMap<String, String>) -> String {
+    if let Some((kind, agent_type)) = channel.split_once(':') {
+        let name = display
+            .get(agent_type)
+            .cloned()
+            .unwrap_or_else(|| agent_type.to_string());
+        return match kind {
+            "acp" => format!("ACP · {}", name),
+            "cli" => format!("本地 CLI · {}", name),
+            _ => channel.to_string(),
+        };
+    }
+    if channel == "api" {
+        return "内置 API Agent".to_string();
+    }
+    channel.to_string()
+}
+
+/// 按执行通道分组汇总（平铺：一个接入条目一行，不做宿主归并）。
+fn group_channel(conn: &Connection, since: Option<i64>) -> Result<Vec<UsageGroup>, AppError> {
+    let display = agent_display_names(conn);
+    let select = "SELECT CASE WHEN TRIM(COALESCE(channel, '')) = '' THEN 'api' ELSE channel END AS name,
+                    COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+             FROM api_usage_log";
+    let mut rows = Vec::new();
+    if let Some(s) = since {
+        let mut stmt = conn.prepare(&format!(
+            "{} WHERE created_at >= ?1 GROUP BY name ORDER BY name",
+            select
+        ))?;
+        let it = stmt.query_map(params![s], |r| {
+            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
+        })?;
+        for row in it {
+            let (name, totals) = row?;
+            rows.push(UsageGroup {
+                name: channel_label(&name, &display),
+                totals,
+            });
+        }
+    } else {
+        let mut stmt = conn.prepare(&format!("{} GROUP BY name ORDER BY name", select))?;
+        let it = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
+        })?;
+        for row in it {
+            let (name, totals) = row?;
+            rows.push(UsageGroup {
+                name: channel_label(&name, &display),
+                totals,
+            });
+        }
+    }
+    Ok(rows)
+}
+
 /// 总量汇总。
 fn total(conn: &Connection, since: Option<i64>) -> Result<UsageTotals, AppError> {
     let t = match since {
@@ -527,6 +612,7 @@ pub fn usage_summary(conn: &Connection, days: Option<i64>) -> Result<UsageSummar
         totals: total(conn, since)?,
         by_provider: group_provider(conn, since)?,
         by_model: group_model(conn, since)?,
+        by_channel: group_channel(conn, since)?,
         trend: trend(conn, since)?,
     })
 }
@@ -1347,6 +1433,7 @@ mod tests {
                 cached_tokens     INTEGER NOT NULL DEFAULT 0,
                 cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
                 cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                channel           TEXT NOT NULL DEFAULT 'api',
                 created_at        INTEGER NOT NULL
             );",
         )
@@ -1479,6 +1566,51 @@ mod tests {
             "未注册 provider 回落 id"
         );
         assert!(!by_provider.contains_key("deepseek"));
+    }
+
+    #[test]
+    fn channel_group_is_flat_by_entry() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "CREATE TABLE agents (
+                agent_type TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '',
+                transport TEXT NOT NULL DEFAULT 'subprocess'
+            );",
+        )
+        .unwrap();
+        // 同一 Agent 的两种接入方式各自是独立条目（两个 agent_type）
+        conn.execute(
+            "INSERT INTO agents (agent_type, display_name, transport) VALUES
+               ('hermes', 'Hermes Agent', 'acp'),
+               ('hermes-acp', 'Hermes（ACP）', 'acp')",
+            [],
+        )
+        .unwrap();
+        let now = crate::utils::now();
+        let insert_channel = |scope: &str, channel: &str, prompt: i64| {
+            conn.execute(
+                "INSERT INTO api_usage_log
+                   (session_id, provider, model, api_format, prompt_tokens, completion_tokens,
+                    total_tokens, cached_tokens, cache_read_tokens, cache_write_tokens, channel, created_at)
+                 VALUES (?1, 'custom', 'm', 'Acp', ?2, 5, ?2 + 5, 0, 0, 0, ?3, ?4)",
+                params![scope, prompt, channel, now],
+            )
+            .unwrap();
+        };
+        insert_channel("s1", "api", 10);
+        insert_channel("s2", "acp:hermes", 20);
+        insert_channel("s3", "acp:hermes-acp", 30);
+        insert_channel("s4", "acp:hermes", 40);
+
+        let s = usage_summary(&conn, None).unwrap();
+        let by_channel: std::collections::BTreeMap<String, &UsageGroup> =
+            s.by_channel.iter().map(|g| (g.name.clone(), g)).collect();
+        assert_eq!(by_channel.len(), 3, "一个条目一行，不做宿主归并");
+        assert_eq!(by_channel["内置 API Agent"].totals.call_count, 1);
+        assert_eq!(by_channel["内置 API Agent"].totals.prompt_tokens, 10);
+        assert_eq!(by_channel["ACP · Hermes Agent"].totals.call_count, 2);
+        assert_eq!(by_channel["ACP · Hermes Agent"].totals.prompt_tokens, 60);
+        assert_eq!(by_channel["ACP · Hermes（ACP）"].totals.call_count, 1);
     }
 
     #[test]

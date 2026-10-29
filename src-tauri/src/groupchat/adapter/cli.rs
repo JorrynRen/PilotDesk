@@ -29,6 +29,8 @@ pub struct PilotDeskCliRunner {
     approvals: Arc<dyn crate::agent::transport::ApprovalGate>,
     /// 房间级审批尺度（随每条指令更新）：ACP 按它的风险矩阵过滤权限请求，超阈值的交主持人裁决。
     security: Arc<RwLock<Option<SecurityMode>>>,
+    /// 用量归因 scope（`groupchat:{room}:{participantId}`）：宿主上报用量时按它落库。
+    usage_scope: String,
 }
 
 impl PilotDeskCliRunner {
@@ -38,6 +40,7 @@ impl PilotDeskCliRunner {
         cwd: String,
         approvals: Arc<dyn crate::agent::transport::ApprovalGate>,
         security: Arc<RwLock<Option<SecurityMode>>>,
+        usage_scope: String,
     ) -> Self {
         Self {
             agent_manager,
@@ -46,6 +49,7 @@ impl PilotDeskCliRunner {
             sessions: Mutex::new(HashMap::new()),
             approvals,
             security,
+            usage_scope,
         }
     }
 
@@ -132,6 +136,26 @@ impl PilotDeskCliRunner {
 
         match result {
             Ok(out) => {
+                // 宿主上报用量才落库：通道 `acp:<agent_type>`，归因按房间席位 scope
+                if let Some(u) = out.usage {
+                    if let Ok(conn) = self.pool.get() {
+                        let (provider, model) =
+                            crate::agent::split_model_label(out.model.as_deref());
+                        let _ = crate::api_agent::agent_loop::record_usage_row(
+                            &conn,
+                            &self.usage_scope,
+                            provider,
+                            model,
+                            "Acp",
+                            u.prompt,
+                            u.completion,
+                            u.total,
+                            u.cache_read,
+                            u.cache_write,
+                            &format!("acp:{}", descriptor.agent_id),
+                        );
+                    }
+                }
                 if let Some(sid) = remote_sid.lock().unwrap().clone() {
                     self.sessions
                         .lock()

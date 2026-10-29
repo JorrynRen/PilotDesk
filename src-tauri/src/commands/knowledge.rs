@@ -1791,12 +1791,13 @@ pub(crate) fn record_kb_usage_conn(
             &scope,
             &model.provider_id,
             &model.model,
-            &api_format,
+            &format!("{:?}", api_format),
             u.prompt,
             u.completion,
             u.total,
             u.cache_read,
             u.cache_write,
+            "api",
         );
     }
 }

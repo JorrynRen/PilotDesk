@@ -338,6 +338,8 @@ export interface UsageSummary {
   totals: UsageTotals;
   byProvider: UsageGroup[];
   byModel: UsageGroup[];
+  /** 按执行通道平铺（`内置 API Agent` / `ACP · X` / `本地 CLI · X`），不做宿主归并。 */
+  byChannel: UsageGroup[];
   trend: UsageDay[];
 }
 

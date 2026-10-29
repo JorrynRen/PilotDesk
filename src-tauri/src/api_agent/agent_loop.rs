@@ -703,9 +703,11 @@ pub struct AgentLoopOutput {
     pub tool_calls: Vec<ThinkingChainStep>,
 }
 
-/// 统一用量写入口：INSERT `api_usage_log`（含 provider 归因）。
+/// 统一用量写入口：INSERT `api_usage_log`（含 provider 归因与执行通道）。
 /// 缓存拆分：`cache_read`=缓存命中读取、`cache_write`=缓存写入；
 /// `cached_tokens` 列恒等于两者之和（兼容既有汇总/展示）。
+/// `channel` 是「谁执行的」维度：`api` = 内置 API Agent，`acp:<agent_type>` / `cli:<agent_type>`
+/// = 某个接入条目（仅统计用，不参与归因）。
 /// 单 Agent `AgentLoop`、群聊纯补全/工具两分支共用，避免重复 SQL。
 /// 返回 `conn.execute` 结果；调用方在 Ok 时才向前端发射 `usage-recorded` 脏标记。
 pub fn record_usage_row(
@@ -713,27 +715,29 @@ pub fn record_usage_row(
     scope_key: &str,
     provider: &str,
     model: &str,
-    api_format: &ApiFormat,
+    api_format: &str,
     prompt: u32,
     completion: u32,
     total: u32,
     cache_read: u32,
     cache_write: u32,
+    channel: &str,
 ) -> rusqlite::Result<usize> {
     conn.execute(
-        "INSERT INTO api_usage_log (session_id, provider, model, api_format, prompt_tokens, completion_tokens, total_tokens, cached_tokens, cache_read_tokens, cache_write_tokens, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO api_usage_log (session_id, provider, model, api_format, prompt_tokens, completion_tokens, total_tokens, cached_tokens, cache_read_tokens, cache_write_tokens, channel, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         rusqlite::params![
             scope_key,
             provider,
             model,
-            format!("{:?}", api_format),
+            api_format,
             prompt,
             completion,
             total,
             cache_read + cache_write,
             cache_read,
             cache_write,
+            channel,
             crate::utils::now(),
         ],
     )
@@ -1152,12 +1156,13 @@ impl AgentLoop {
             &scope_key,
             &provider,
             &self.model,
-            &self.api_format,
+            &format!("{:?}", self.api_format),
             prompt,
             completion,
             total,
             cache_read,
             cache_write,
+            "api",
         )
         .is_ok()
         {

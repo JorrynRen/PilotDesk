@@ -65,10 +65,23 @@ pub(crate) fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &st
     }
 }
 
+/// 宿主自报的模型标签拆成 `(provider, model)`：`custom:agnes-2.5-flash` →
+/// `("custom", "agnes-2.5-flash")`；不含冒号时只认作 model，provider 留空（不猜）。
+pub(crate) fn split_model_label(label: Option<&str>) -> (&str, &str) {
+    let Some(raw) = label.map(str::trim).filter(|s| !s.is_empty()) else {
+        return ("", "");
+    };
+    match raw.split_once(':') {
+        Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
+            (provider, model)
+        }
+        _ => ("", raw),
+    }
+}
+
 // ------------------------------------------------------------------
 //  P0-v2 开关
 // ------------------------------------------------------------------
-
 /// v2 开关：缺省**开启**（CLI 会话经传输抽象层执行）。
 ///
 /// 设 `PILOTDESK_TRANSPORT_V2=0`（或 `false`）可**立即回退**到 legacy 路径，
@@ -1093,6 +1106,8 @@ pub async fn run_transport_session(
     security_mode: Option<crate::api_agent::agent_loop::SecurityMode>,
     // 用户固定的宿主会话模式 id（None = 跟随宿主；仅 ACP 使用）
     acp_mode: Option<&str>,
+    // 用量落库用的连接池（宿主上报用量时写 `api_usage_log`；None 则只发前端事件）
+    pool: Option<crate::db::init::DbPool>,
 ) -> Result<(), String> {
     use crate::agent::transport::{
         build_session, AgentConn, AgentError, PromptInput, UnifiedAgentEvent,
@@ -1304,6 +1319,51 @@ pub async fn run_transport_session(
 
     match result {
         Ok(out) => {
+            // 用量：宿主上报才落库（缺失/全 0 一律不写，避免污染调用次数与命中率）。
+            // 通道写 `acp:<agent_type>`；provider/model 取宿主自报值（形如 `custom:agnes-2.5-flash`）。
+            if let Some(u) = out.usage {
+                let (provider, model) = split_model_label(out.model.as_deref());
+                let mut wrote = false;
+                if let Some(pool) = pool.as_ref() {
+                    if let Ok(conn) = pool.get() {
+                        wrote = crate::api_agent::agent_loop::record_usage_row(
+                            &conn,
+                            session_id,
+                            provider,
+                            model,
+                            "Acp",
+                            u.prompt,
+                            u.completion,
+                            u.total,
+                            u.cache_read,
+                            u.cache_write,
+                            &format!("acp:{}", descriptor.agent_id),
+                        )
+                        .is_ok();
+                    }
+                }
+                // 与会话用量条/统计面板同一脏标记事件（API 路径同样在写库成功后发射）
+                if wrote {
+                    let _ = app.emit(
+                        "usage-recorded",
+                        serde_json::json!({
+                            "sessionId": session_id,
+                            "provider": provider,
+                            "model": model,
+                        }),
+                    );
+                }
+                // 前端用量条（与会话内 token 展示同口径，不含缓存拆分）
+                let _ = app.emit(
+                    "agent-usage",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "promptTokens": u.prompt,
+                        "completionTokens": u.completion,
+                        "totalTokens": u.total,
+                    }),
+                );
+            }
             // 空正文 + 对端"拒绝"：不是正常的空回答，而是宿主拒绝了本轮（典型原因是对端
             // 不认识我们发的会话 id，例如恢复后它换了新 id）。按失败上报，避免前端只能显示
             // 一句无从排查的"未收到模型有效响应"。

@@ -194,6 +194,9 @@ impl AgentSession for HttpSession {
                 },
                 // 以流式累积为准；若回调未触发（异常路径）则回落响应体
                 text: if text.is_empty() { resp.content } else { text },
+                // HTTP 通道的用量已由事件侧携带，这里不重复
+                usage: None,
+                model: None,
             }),
             Err(e) => {
                 // 区分"用户取消"与真实失败（与 subprocess 的约定一致）

@@ -256,12 +256,13 @@ impl PilotDeskLlmClient {
             scope_key,
             &self.provider,
             &self.model,
-            &self.format,
+            &format!("{:?}", self.format),
             prompt,
             completion,
             total,
             cache_read,
             cache_write,
+            "api",
         )
         .is_ok()
         {

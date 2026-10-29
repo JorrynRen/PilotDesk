@@ -24,7 +24,8 @@ use tokio::io::AsyncReadExt;
 use super::jsonrpc::JsonRpcPeer;
 use crate::agent::transport::{
     AcpMode, AgentConn, AgentError, AgentSession, Capabilities, EventSink, PermissionDecision,
-    PromptInput, PromptOutput, SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
+    PromptInput, PromptOutput, SessionHandle, StopReason, TransportKind, TurnUsage,
+    UnifiedAgentEvent,
 };
 use crate::api_agent::agent_loop::{approval_floor, SecurityMode};
 use crate::tools::RiskLevel;
@@ -161,6 +162,46 @@ pub fn map_stop_reason(s: &str) -> StopReason {
         "cancelled" => StopReason::Cancelled,
         "refusal" => StopReason::Refusal,
         other => StopReason::Other(other.to_string()),
+    }
+}
+
+/// 解析 `PromptResponse.usage`（ACP v1）：字段可缺，全 0 视为"宿主没报"。
+///
+/// 口径：`inputTokens` 已是**不含缓存**的输入（codex 适配器自己做了
+/// `input - cached - cacheWrite` 的换算，claude 走 Anthropic 口径，hermes 实测两者互斥），
+/// 因此可直接映射到本应用的四桶，`cached_tokens` 由写库侧取 read+write 之和。
+pub fn parse_usage(resp: &Value) -> Option<TurnUsage> {
+    let u = &resp["usage"];
+    if !u.is_object() {
+        return None;
+    }
+    let pick = |k: &str| {
+        u[k].as_u64()
+            .map(|v| v.min(u32::MAX as u64) as u32)
+            .unwrap_or(0)
+    };
+    let prompt = pick("inputTokens");
+    let completion = pick("outputTokens");
+    let cache_read = pick("cachedReadTokens");
+    let cache_write = pick("cachedWriteTokens");
+    let mut total = pick("totalTokens");
+    if total == 0 {
+        total = prompt
+            .saturating_add(completion)
+            .saturating_add(cache_read)
+            .saturating_add(cache_write);
+    }
+    let usage = TurnUsage {
+        prompt,
+        completion,
+        total,
+        cache_read,
+        cache_write,
+    };
+    if usage.is_empty() {
+        None
+    } else {
+        Some(usage)
     }
 }
 
@@ -655,6 +696,9 @@ pub struct AcpSession {
     idle: Arc<IdleState>,
     /// 子进程 pid（0 = 已收尾）。退出时按它强杀进程树，`close()` / Drop 时摘除。
     child_pid: AtomicU32,
+    /// 宿主自报的当前模型（`session/new|resume|load` 响应里的 `models.currentModelId`）。
+    /// 用量归属需要它；宿主不给就留空，不猜。
+    current_model: Option<String>,
 }
 
 impl AcpSession {
@@ -669,6 +713,7 @@ impl AcpSession {
             abort: Arc::new(AtomicBool::new(false)),
             idle: Arc::new(IdleState::default()),
             child_pid: AtomicU32::new(0),
+            current_model: None,
         }
     }
 
@@ -1138,6 +1183,13 @@ impl AgentSession for AcpSession {
         // ── 5) 会话模式（`modes` 由 `new`/`resume`/`load` 三种响应其一带回）──
         // 模式取值由宿主自定义，本应用只原样展示，不做映射；宿主提供模式时，
         // 权限语义完全交给它（见 2b），这里的标志位就是那条分界的开关。
+        // 顺手记下宿主自报的当前模型：用量归属要用（形如 `custom:agnes-2.5-flash`），
+        // 宿主不给就留空，不猜。
+        if let Some(model) = resp["models"]["currentModelId"].as_str() {
+            if !model.trim().is_empty() {
+                self.current_model = Some(model.to_string());
+            }
+        }
         let (available_modes, current_mode_id) = parse_session_modes(&resp);
         let host_has_modes = !available_modes.is_empty();
         host_modes_available.store(host_has_modes, Ordering::Relaxed);
@@ -1341,10 +1393,25 @@ impl AgentSession for AcpSession {
             .lock()
             .map(|b| b.clone())
             .unwrap_or_default();
+        // 用量：宿主上报才带（字段可缺），缺失/全 0 一律 None，不落"零用量"行
+        let usage = parse_usage(&resp);
+        if let Some(u) = usage {
+            log::info!(
+                "[acp] 本轮用量：session={} prompt={} completion={} cache_read={} cache_write={} total={}",
+                sid,
+                u.prompt,
+                u.completion,
+                u.cache_read,
+                u.cache_write,
+                u.total
+            );
+        }
 
         Ok(PromptOutput {
             stop_reason: map_stop_reason(stop),
             text,
+            usage,
+            model: self.current_model.clone(),
         })
     }
 

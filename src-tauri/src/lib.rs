@@ -556,6 +556,8 @@ async fn agent_send_message_with_config(
                 // 宿主提供会话模式时它不参与判定，仅作"宿主无模式"时的兜底审批策略
                 security_mode.as_deref().and_then(SecurityMode::from_str),
                 acp_mode.as_deref(),
+                // 宿主上报用量时写库用；池不可用则只发前端事件
+                Some(state.pool.clone()),
             )
             .await;
             return result;
@@ -1445,12 +1447,13 @@ async fn run_api_agent_body(
                 &session_id,
                 &provider.id,
                 &model,
-                &intent_api_format,
+                &format!("{:?}", intent_api_format),
                 u.prompt,
                 u.completion,
                 u.total,
                 u.cache_read,
                 u.cache_write,
+                "api",
             );
         }
     }
@@ -2236,12 +2239,13 @@ async fn run_api_agent_body(
                         session_id,
                         &summary_provider_id,
                         &summary_model,
-                        &summary_format,
+                        &format!("{:?}", summary_format),
                         p,
                         c,
                         t,
                         cr,
                         cw,
+                        "api",
                     );
                 }
             },

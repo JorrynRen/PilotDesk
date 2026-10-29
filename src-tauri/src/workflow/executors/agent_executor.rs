@@ -772,6 +772,25 @@ impl AgentExecutor {
 
         let text = match result {
             Ok(out) => {
+                // 用量：宿主上报才落库（通道 `acp:<agent_type>`，归因沿用 `wf_{execution}_{node}`）
+                if let Some(u) = out.usage {
+                    if let Ok(conn) = self.pool.get() {
+                        let (provider, model) = crate::agent::split_model_label(out.model.as_deref());
+                        let _ = crate::api_agent::agent_loop::record_usage_row(
+                            &conn,
+                            session_key,
+                            provider,
+                            model,
+                            "Acp",
+                            u.prompt,
+                            u.completion,
+                            u.total,
+                            u.cache_read,
+                            u.cache_write,
+                            &format!("acp:{}", descriptor.agent_id),
+                        );
+                    }
+                }
                 let text = out.text.trim().to_string();
                 if text.is_empty() {
                     collected

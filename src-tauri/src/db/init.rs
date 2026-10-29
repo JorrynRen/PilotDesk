@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS api_usage_log (
             cached_tokens     INTEGER NOT NULL DEFAULT 0, -- 总缓存 = cache_read_tokens + cache_write_tokens（兼容既有汇总/展示）
             cache_read_tokens  INTEGER NOT NULL DEFAULT 0, -- 缓存命中读取 token
             cache_write_tokens INTEGER NOT NULL DEFAULT 0, -- 缓存写入 token
+            -- 执行通道（统计维度，不参与归因）：`api` = 内置 API Agent；
+            -- `acp:<agent_type>` / `cli:<agent_type>` = 宿主/本地 CLI 的某个接入条目。
+            channel           TEXT NOT NULL DEFAULT 'api',
             created_at        INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
@@ -430,6 +433,14 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
         "workflow_versions",
         "origin",
         "TEXT NOT NULL DEFAULT 'manual'",
+    )?;
+    // 用量通道列：只加不改数据，历史行默认 'api' 恰与事实相符（v9 之前的用量全部来自 API 路径），
+    // 故与上面两列同理放在版本门控之外，无需 +1 SCHEMA_VERSION。
+    ensure_column(
+        conn,
+        "api_usage_log",
+        "channel",
+        "TEXT NOT NULL DEFAULT 'api'",
     )?;
     if current_version < SCHEMA_VERSION {
         // v4 → v5：api_usage_log 缓存读/写拆分。cache_read_tokens=缓存命中读取，

@@ -416,8 +416,8 @@ const RANGES: { label: string; value: number }[] = [
   { label: '近 7 天', value: 7 },
 ];
 
-/** 一级分页：provider/model 是「按什么调的」，归因是「谁花的」。 */
-type TabKey = 'provider' | 'model' | 'attribution';
+/** 一级分页：provider/model/channel 是「按什么调的」，归因是「谁花的」。 */
+type TabKey = 'provider' | 'model' | 'attribution' | 'channel';
 
 /** 归因二级维度（仅「按归因」下钻用）。 */
 type DimensionKey = 'session' | 'groupchat' | 'workflow' | 'knowledge';
@@ -426,6 +426,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'provider', label: '按 Provider' },
   { key: 'model', label: '按 Model' },
   { key: 'attribution', label: '按归因' },
+  { key: 'channel', label: '按通道' },
 ];
 
 /** 维度展示名（key 与后端 `UsageDimension.key` 一一对应，顺序固定）。 */
@@ -785,6 +786,14 @@ export function UsageStats() {
 
             {tab === 'provider' && <GroupTable title="按 Provider" rows={summary.byProvider} />}
             {tab === 'model' && <GroupTable title="按 Model" rows={summary.byModel} />}
+            {tab === 'channel' && (
+              <>
+                <GroupTable title="按通道（一个接入条目一行）" rows={summary.byChannel ?? []} />
+                <div className="text-[10px] leading-relaxed mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                  内置 API Agent 与本机 CLI、ACP 接入的 Agent 分别计一行；同一 Agent 的两种接入方式视为两个通道，不做合并。宿主未上报用量的轮次不计入。
+                </div>
+              </>
+            )}
             {tab === 'attribution' && (
               <>
                 <GroupTable title="维度汇总（会话 / 圆桌 / 工作流 / 知识库）" rows={summaryRows} />

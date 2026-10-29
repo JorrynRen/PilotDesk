@@ -285,6 +285,9 @@ impl AgentSession for SubprocessSession {
         Ok(PromptOutput {
             stop_reason: StopReason::EndTurn,
             text: full_output,
+            // CLI 的用量在流式过程中已作为 `Usage` 事件下发；这里不重复携带
+            usage: None,
+            model: None,
         })
     }
 

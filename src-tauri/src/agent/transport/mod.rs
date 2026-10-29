@@ -304,6 +304,26 @@ pub struct AgentConn {
 /// 进程启动回调（`Fn` 而非 `FnMut`：可能被多线程共享）。
 pub type PidCallback = Arc<dyn Fn(u32) + Send + Sync>;
 
+/// 一轮执行的用量（四桶互斥口径，与 `api_usage_log` 对齐）。
+///
+/// `prompt` = 未命中输入的 token、`completion` = 输出 token、
+/// `cache_read` / `cache_write` = 缓存命中读取 / 缓存写入。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TurnUsage {
+    pub prompt: u32,
+    pub completion: u32,
+    pub total: u32,
+    pub cache_read: u32,
+    pub cache_write: u32,
+}
+
+impl TurnUsage {
+    /// 四桶全 0 → 视为"宿主没报用量"（不要落库，否则会污染调用次数与命中率）
+    pub fn is_empty(&self) -> bool {
+        self.prompt == 0 && self.completion == 0 && self.cache_read == 0 && self.cache_write == 0
+    }
+}
+
 /// 一轮执行的产出。
 #[derive(Debug, Clone)]
 pub struct PromptOutput {
@@ -311,6 +331,10 @@ pub struct PromptOutput {
     pub stop_reason: StopReason,
     /// 本回合累计正文（口径与现有 `ExecuteResult.stdout` 一致）
     pub text: String,
+    /// 本回合用量（宿主上报才有；ACP 由 `PromptResponse.usage` 提供）
+    pub usage: Option<TurnUsage>,
+    /// 宿主自报的当前模型 id（如 `custom:agnes-2.5-flash`），供用量归属；未知为 None
+    pub model: Option<String>,
 }
 
 /// 会话句柄。
