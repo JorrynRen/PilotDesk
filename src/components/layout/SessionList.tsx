@@ -54,10 +54,10 @@ function formatHostTime(value?: string | null): string {
 const WORKFLOW_GROUP_STORAGE_KEY = 'pilotdesk.session-list.workflow-expanded';
 
 /**
- * 列表顶部图标操作钮的统一尺寸：14px 图标 + 四周 7px 内边距 = 28px 命中区。
- * `pd-btn-sm` 默认的 2px 8px 内边距配 11px 图标，在 260px 侧栏里偏小、不好点中。
+ * 列表顶部图标操作钮的统一尺寸：13px 图标 + 4px 6px 内边距 ≈ 21×25。
+ * 比 `pd-btn-sm` 默认（11px 图标 + 2px 8px）略大，又不至于在 36px 高的头部里显得突兀。
  */
-const HEADER_ICON_BTN_STYLE: React.CSSProperties = { padding: 7 };
+const HEADER_ICON_BTN_STYLE: React.CSSProperties = { padding: '4px 6px' };
 
 function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const { t } = useI18n();
@@ -1014,7 +1014,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               }}
               title={t('sessionList.batch.title', '批量操作')}
             >
-              <ListChecks size={14} />
+              <ListChecks size={13} />
             </button>
             <button
               onClick={() => {
@@ -1027,7 +1027,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               style={{ ...HEADER_ICON_BTN_STYLE, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
               title={t('sessionList.host.refresh', '刷新宿主会话')}
             >
-              <RefreshCw size={14} className={hostListLoading ? 'animate-spin' : ''} />
+              <RefreshCw size={13} className={hostListLoading ? 'animate-spin' : ''} />
             </button>
           </div>
         ) : (
@@ -1043,7 +1043,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               title={t('sessionList.batch.title', '批量操作')}
             >
               {/* 语义=多选/批量；不要用宫格图标（与顶部门户标签的 LayoutGrid 撞脸） */}
-              <ListChecks size={14} />
+              <ListChecks size={13} />
             </button>
             <button
               onClick={toggleArchived}
@@ -1051,7 +1051,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               style={{ ...HEADER_ICON_BTN_STYLE, color: showArchived ? 'var(--accent)' : 'var(--text-secondary)', backgroundColor: showArchived ? 'var(--accent-light)' : 'var(--bg-tertiary)' }}
               title={t('sessionList.archive.title', '归档')}
             >
-              <Archive size={14} />
+              <Archive size={13} />
             </button>
             <button
               onClick={() => setShowNewDialog(true)}
@@ -1059,7 +1059,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               style={HEADER_ICON_BTN_STYLE}
               title={t('sessionList.new.title', '新建会话')}
             >
-              <Plus size={14} />
+              <Plus size={13} />
             </button>
           </div>
         )}
