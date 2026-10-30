@@ -520,6 +520,9 @@ const RANGES: { key: RangeKey; label: string }[] = [
 /** 自定义区间上限：一个月（含首尾最多 31 天 → 差值不超过 30 天）。 */
 const CUSTOM_MAX_SPAN_DAYS = 30;
 
+/** 完整规则只放进悬停提示：行内留短提示，否则一行放不下会把按钮挤换行。 */
+const CUSTOM_RANGE_HINT = '自定义区间最长一个月（含首尾最多 31 天）';
+
 /** 本地时区某个月月初的 epoch 秒（`offset` 为月偏移，0 = 本月）。 */
 function startOfLocalMonth(offset = 0): number {
   const now = new Date();
@@ -617,12 +620,12 @@ export function UsageStats() {
     if (rangeKey !== 'custom') return '';
     if (!customFrom || !customTo) return '请选择起止日期';
     if (customFromTs === null || customToTs === null) return '日期格式不正确';
-    if (customToTs < customFromTs) return '结束日期不能早于开始日期';
-    if (customToTs - customFromTs > CUSTOM_MAX_SPAN_DAYS * 86400) {
-      return '自定义区间最长一个月（含首尾最多 31 天）';
-    }
+    if (customToTs < customFromTs) return '结束早于开始';
+    if (customToTs - customFromTs > CUSTOM_MAX_SPAN_DAYS * 86400) return '最长 31 天';
     return '';
   })();
+  /** 只有"超长"这一条需要额外解释规则（完整说法放悬停提示，不占行宽） */
+  const customErrorHint = customError === '最长 31 天' ? CUSTOM_RANGE_HINT : undefined;
   /** 当前窗口；自定义未选全 / 校验未通过时为 null —— 此时保留上次数据、不发请求 */
   const rangeQuery: UsageRangeQuery | null = (() => {
     switch (rangeKey) {
@@ -888,7 +891,13 @@ export function UsageStats() {
             </span>
           )}
           {customError && (
-            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{customError}</span>
+            <span
+              className="text-[10px] whitespace-nowrap"
+              style={{ color: 'var(--text-tertiary)' }}
+              title={customErrorHint}
+            >
+              {customError}
+            </span>
           )}
         </div>
         <div className="flex items-center gap-2">
