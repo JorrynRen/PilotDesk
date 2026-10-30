@@ -1030,7 +1030,8 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
   const atts = parseAttachments(message.attachments);
   const confirmation = message.kind === 'confirmation_request' ? parseConfirmation(message.extra) : null;
   const isConclusion = message.kind === 'conclusion';
-  // 正文提及的视觉替换（参与者 id → @显示名）；用户消息保留原样（其内容由本人输入，已是显示名）。
+  // 正文提及的视觉替换（参与者 id → @显示名）。
+  // 用户消息同样需要替换：发送时 `@显示名` 会先被改写为 `[@id]` 落库，直接渲染会看到原始 id。
   const renderedContent = renderMentions(message.content, mentionMap);
   const renderedConfirmation = confirmation
     ? { ...confirmation, prompt: renderMentions(confirmation.prompt, mentionMap) }
@@ -1111,7 +1112,7 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
               </div>
             )}
             {isUser ? (
-              <span className="whitespace-pre-wrap break-all">{message.content}</span>
+              <span className="whitespace-pre-wrap break-all">{renderedContent}</span>
             ) : isConclusion ? (
               <ConclusionContent content={renderedContent} />
             ) : (
