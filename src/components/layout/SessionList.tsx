@@ -53,6 +53,12 @@ function formatHostTime(value?: string | null): string {
 /** 「工作流会话」折叠分组的展开状态（纯 UI 状态，存 localStorage 即可，不入库）。 */
 const WORKFLOW_GROUP_STORAGE_KEY = 'pilotdesk.session-list.workflow-expanded';
 
+/**
+ * 列表顶部图标操作钮的统一尺寸：14px 图标 + 四周 7px 内边距 = 28px 命中区。
+ * `pd-btn-sm` 默认的 2px 8px 内边距配 11px 图标，在 260px 侧栏里偏小、不好点中。
+ */
+const HEADER_ICON_BTN_STYLE: React.CSSProperties = { padding: 7 };
+
 function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const { t } = useI18n();
   const sessions = useSessionStore((s) => s.sessions);
@@ -1002,12 +1008,13 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               }}
               className="pd-btn pd-btn-sm"
               style={{
+                ...HEADER_ICON_BTN_STYLE,
                 backgroundColor: hostBatchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
                 color: hostBatchMode ? '#fff' : 'var(--text-secondary)',
               }}
               title={t('sessionList.batch.title', '批量操作')}
             >
-              <ListChecks size={11} />
+              <ListChecks size={14} />
             </button>
             <button
               onClick={() => {
@@ -1017,10 +1024,10 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               }}
               disabled={!hostAgent || hostListLoading}
               className="pd-btn pd-btn-sm"
-              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
+              style={{ ...HEADER_ICON_BTN_STYLE, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
               title={t('sessionList.host.refresh', '刷新宿主会话')}
             >
-              <RefreshCw size={11} className={hostListLoading ? 'animate-spin' : ''} />
+              <RefreshCw size={14} className={hostListLoading ? 'animate-spin' : ''} />
             </button>
           </div>
         ) : (
@@ -1029,28 +1036,30 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               onClick={() => setBatchMode(!batchMode)}
               className="pd-btn pd-btn-sm"
               style={{
+                ...HEADER_ICON_BTN_STYLE,
                 backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
                 color: batchMode ? '#fff' : 'var(--text-secondary)',
               }}
               title={t('sessionList.batch.title', '批量操作')}
             >
               {/* 语义=多选/批量；不要用宫格图标（与顶部门户标签的 LayoutGrid 撞脸） */}
-              <ListChecks size={11} />
+              <ListChecks size={14} />
             </button>
             <button
               onClick={toggleArchived}
               className="pd-btn pd-btn-sm"
-              style={{ color: showArchived ? 'var(--accent)' : 'var(--text-secondary)', backgroundColor: showArchived ? 'var(--accent-light)' : 'var(--bg-tertiary)' }}
+              style={{ ...HEADER_ICON_BTN_STYLE, color: showArchived ? 'var(--accent)' : 'var(--text-secondary)', backgroundColor: showArchived ? 'var(--accent-light)' : 'var(--bg-tertiary)' }}
               title={t('sessionList.archive.title', '归档')}
             >
-              <Archive size={11} />
+              <Archive size={14} />
             </button>
             <button
               onClick={() => setShowNewDialog(true)}
               className="pd-btn pd-btn-sm pd-btn-primary"
+              style={HEADER_ICON_BTN_STYLE}
               title={t('sessionList.new.title', '新建会话')}
             >
-              <Plus size={11} />
+              <Plus size={14} />
             </button>
           </div>
         )}
