@@ -744,7 +744,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               }}
               title={marketOpen
                 ? t('titleBar.market.back', '资源市集：点击返回主界面')
-                : t('titleBar.market', '资源市集：插件 / 工作流模板 / Agent 配置 / 灵感')}
+                : t('titleBar.market', '资源市集')}
             >
               <Store size={14} />
             </button>
