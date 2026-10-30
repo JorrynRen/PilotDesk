@@ -1130,9 +1130,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                     查看完整用量 ›
                   </button>
                 </div>
-                <div className="text-[10px] px-2.5" style={{ color: 'var(--text-tertiary)' }}>
-                  API / ACP / 本地 CLI 会话的用量均已计入；仅在终端里直接运行的 CLI 不纳入统计。
-                </div>
               </div>
             )}
           </Section>
