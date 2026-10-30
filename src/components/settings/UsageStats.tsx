@@ -15,6 +15,7 @@ import {
   type UsageRangeQuery,
 } from '../../types';
 import { errorMessage } from '../../utils/errorMessage';
+import { Select } from '../common/Select';
 
 function fmt(n: number): string {
   const trim = (s: string) => s.replace(/\.?0+$/, '');
@@ -61,36 +62,95 @@ const CACHE_RATE_NOTE_DETAIL =
   + '此外，部分 Agent 不上报缓存明细（本地 CLI、ACP 宿主，以及只返回 total/input/output 的转发端点），'
   + '这类通道的缓存命中恒为 0、命中率恒显示 0%：不是"确实没命中"，而是对端没有提供这个数。';
 
-/* ── 趋势：按区间跨度自动换粒度（日 / 周 / 月）─────────────────────────────
-   为什么必须聚合：「全部」会返回表里每一个有数据的日子，逐日一行时用一年就是几百行 ——
-   那既看不出形状（是清单不是趋势），又把页面拉成一条长带。
-   粒度按**时间跨度**而不是行数决定：跨度才是决定横轴密度的量（用得少的人行数少、跨度却可能很大）。 */
-type TrendGranularity = 'day' | 'week' | 'month';
+/* ── 趋势：按「可用宽度」决定桶长（日 / N 天 / 周 / 月）─────────────────────
+   为什么必须聚合：「全部」会返回表里每一个有数据的日子，逐日一根柱时用一年就是几百根 ——
+   既看不出形状（是清单不是趋势），也会被压成一团糊。
+   桶长按**图表可用宽度**选，而不是写死天数阈值：同一张卡在 600px 与 1200px 下能分辨的列数不同，
+   写死阈值必然一端过密、一端过稀。 */
+type TrendGranularity = { kind: 'day' | 'week' | 'month'; step: number };
 
-function granularityOf(spanDays: number): TrendGranularity {
-  if (spanDays <= 60) return 'day';
-  if (spanDays <= 420) return 'week';
-  return 'month';
+/** 一根柱最少占的像素（含 1px 间隙）：再窄的话堆叠三段肉眼分不开 */
+const MIN_COL_PX = 12;
+const MIN_COLS = 8;
+const MAX_COLS = 48;
+
+/**
+ * 桶长阶梯：取「列数放得下」的第一档。
+ * 7 天沿用 ISO 周（周一起，符合阅读习惯）；14 天以上仍不够就直接退到日历月（一年 12 列）。
+ */
+const BUCKET_LADDER: TrendGranularity[] = [
+  { kind: 'day', step: 1 },
+  { kind: 'day', step: 2 },
+  { kind: 'day', step: 3 },
+  { kind: 'week', step: 7 },
+  { kind: 'day', step: 14 },
+  { kind: 'month', step: 1 },
+];
+
+/** 该粒度下大约有多少个桶（只用于选档；月按 30.44 天估算，最终列数以实际数据为准） */
+function approxBucketCount(spanDays: number, g: TrendGranularity): number {
+  if (g.kind === 'month') return Math.ceil(spanDays / 30.44) + 1;
+  return Math.ceil(spanDays / g.step) + 1;
 }
 
-/** 某个日期属于哪个桶：日 = 当天；周 = 当周周一（周一为一周之始）；月 = `YYYY-MM`。 */
-function bucketKey(date: string, g: TrendGranularity): string {
-  if (g === 'day') return date;
-  if (g === 'month') return date.slice(0, 7);
+/** 选粒度：先按可用宽度定列数上限，再取阶梯里放得下的最小桶长 */
+function pickGranularity(spanDays: number, chartWidth: number): TrendGranularity {
+  const byWidth = chartWidth > 0 ? Math.floor(chartWidth / MIN_COL_PX) : MAX_COLS;
+  const slots = Math.max(MIN_COLS, Math.min(MAX_COLS, byWidth));
+  for (const g of BUCKET_LADDER) {
+    if (approxBucketCount(spanDays, g) <= slots) return g;
+  }
+  return BUCKET_LADDER[BUCKET_LADDER.length - 1];
+}
+
+/** 粒度说明（图表 hint 用） */
+function granularityLabelOf(g: TrendGranularity): string {
+  if (g.kind === 'month') return '按月聚合';
+  if (g.kind === 'week') return '按周聚合';
+  return g.step === 1 ? '按天' : `按 ${g.step} 天聚合`;
+}
+
+/** 空档时长的说法（把"几段"换算成天数/周/月，避免"4 个 3 天"这种叠词） */
+function gapSpanLabel(buckets: number, g: TrendGranularity): string {
+  if (g.kind === 'day') return `${buckets * g.step} 天`;
+  return `${buckets} ${g.kind === 'week' ? '周' : '个月'}`;
+}
+
+/** `YYYY-MM-DD` 加减天数（UTC 计算：避免夏令时把日期算歪） */
+function shiftDate(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+/** 两个 `YYYY-MM-DD` 之间的天数差 */
+function dayDiff(from: string, to: string): number {
+  return Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000,
+  );
+}
+
+/** 某个日期属于哪个桶：日（N>1 时以 `anchor` 为起点切）、周（周一起）、月（`YYYY-MM`）。 */
+function bucketKey(date: string, g: TrendGranularity, anchor: string): string {
+  if (g.kind === 'month') return date.slice(0, 7);
+  if (g.kind === 'week') {
+    const d = new Date(`${date}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  }
+  if (g.step <= 1) return date;
+  // 以窗口内第一天的有数据日为起点按 N 天切：桶 key 就是该段起始日
+  const offset = Math.max(0, Math.floor(dayDiff(anchor, date) / g.step) * g.step);
+  return shiftDate(anchor, offset);
 }
 
 /** 下一个桶 key（按 key 自身步进，用来把中间缺数据的桶补出来）。 */
 function nextKey(key: string, g: TrendGranularity): string {
-  if (g === 'month') {
+  if (g.kind === 'month') {
     const [y, m] = key.split('-').map(Number);
     return m >= 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
   }
-  const d = new Date(`${key}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + (g === 'week' ? 7 : 1));
-  return d.toISOString().slice(0, 10);
+  return shiftDate(key, g.kind === 'week' ? 7 : g.step);
 }
 
 interface TrendBucket {
@@ -116,10 +176,10 @@ interface TrendBucket {
  *    否则"某天只调了 1 次、命中 100%"会把整周拉高；
  * 2. 中间没有数据的桶补 0：横轴要按时距等距，否则"隔了半年"会被画成相邻两根柱（假趋势）。
  */
-function bucketize(trend: UsageDay[], g: TrendGranularity): TrendBucket[] {
+function bucketize(trend: UsageDay[], g: TrendGranularity, anchor: string): TrendBucket[] {
   const acc = new Map<string, { days: number; prompt: number; read: number; write: number }>();
   for (const d of trend) {
-    const k = bucketKey(d.date, g);
+    const k = bucketKey(d.date, g, anchor);
     const cur = acc.get(k) ?? { days: 0, prompt: 0, read: 0, write: 0 };
     cur.days += 1;
     cur.prompt += d.promptTokens ?? 0;
@@ -184,6 +244,27 @@ function collapseGaps(buckets: TrendBucket[]): TrendItem[] {
   }
   flush();
   return out;
+}
+
+/**
+ * 量元素内容宽（`ResizeObserver`）：趋势图靠它决定能放几列。
+ *
+ * 首帧宽度是 0（还没量到），调用方按「最密档」兜底，量到后立即重算 —— 只多一次渲染。
+ */
+function useElementWidth<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      setWidth(Math.round(w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width] as const;
 }
 
 /** 输入构成三桶的柱色：同一主色的深浅阶梯，含义由图例给（不引入新色相）。 */
@@ -707,7 +788,7 @@ export function UsageStats() {
       : detailGroups;
 
   /**
-   * 趋势图的派生数据：先按**跨度**选粒度（日/周/月），再聚合。
+   * 趋势图的派生数据：先按**图表可用宽度**选桶长（日 / N 天 / 周 / 月），再聚合。
    * 这里读的是数据自带的日期字符串，不读当前时钟。
    */
   const trend = summary?.trend ?? [];
@@ -718,14 +799,21 @@ export function UsageStats() {
         (Date.parse(`${trendDates[trendDates.length - 1]}T00:00:00Z`) - Date.parse(`${trendDates[0]}T00:00:00Z`)) / 86400000,
       )
     : 0;
-  const trendGranularity = granularityOf(trendSpanDays);
-  const trendBuckets = bucketize(trend, trendGranularity);
+  // 卡片左右各 12px 内边距，量到的是卡片宽，柱区要扣掉再算能放几列
+  const [trendWrapRef, trendWrapWidth] = useElementWidth<HTMLDivElement>();
+  const trendChartWidth = Math.max(0, trendWrapWidth - 24);
+  const trendGranularity = pickGranularity(trendSpanDays, trendChartWidth);
+  const trendBuckets = bucketize(trend, trendGranularity, trendDates[0] ?? '');
   // 纵轴上限：输入构成的峰值（下限 1 防 0 除）。命中率那根固定 0–100，用不到它。
   const trendPeak = Math.max(1, ...trendBuckets.map((b) => b.input));
-  /** 桶的时间说明，用在 tooltip 里（按天时不需要） */
-  const bucketScope = trendGranularity === 'week' ? '那一周' : trendGranularity === 'month' ? '当月' : '';
-  const granularityLabel =
-    trendGranularity === 'day' ? '按天' : trendGranularity === 'week' ? '按周聚合' : '按月聚合';
+  /** 桶的时间说明，用在 tooltip 里（逐日时不需要） */
+  const bucketScope =
+    trendGranularity.kind === 'day'
+      ? (trendGranularity.step > 1 ? `（${trendGranularity.step} 天合计）` : '')
+      : trendGranularity.kind === 'week'
+        ? '那一周'
+        : '当月';
+  const granularityLabel = granularityLabelOf(trendGranularity);
   const inputTitle = (b: TrendBucket) =>
     `${b.key}${bucketScope}：输入 ${fmt(b.input)}（缓存命中 ${fmt(b.read)} / 未命中 ${fmt(b.prompt)} / 缓存写 ${fmt(b.write)}`
     + `${b.days > 1 ? `，${b.days} 天合计` : ''}）`;
@@ -740,8 +828,7 @@ export function UsageStats() {
   const trendSelItem = trendItems.find((it) => it.key === trendSelKey) ?? null;
   /** 点同一列＝取消选中 */
   const toggleTrendSel = (key: string) => setTrendSelKey((prev) => (prev === key ? null : key));
-  const gapUnit = trendGranularity === 'day' ? '天' : trendGranularity === 'week' ? '周' : '个月';
-  const gapTitle = (n: number) => `此处 ${n} ${gapUnit}无用量`;
+  const gapTitle = (n: number) => `此处连续 ${gapSpanLabel(n, trendGranularity)}无用量`;
   /** 横轴两端：给时间轴一个落点（中间的具体日期靠悬停看） */
   const trendAxisFrom = trendBuckets.length > 0 ? trendBuckets[0].key : '';
   const trendAxisTo = trendBuckets.length > 0 ? trendBuckets[trendBuckets.length - 1].key : '';
@@ -751,25 +838,25 @@ export function UsageStats() {
       title="用量统计"
       description="Token 用量与缓存命中（含单 Agent 会话、圆桌与知识库整理/生成调用）；可按 Provider / Model 分组，并按会话 / 圆桌 / 工作流 / 知识库归因。四桶互斥口径：输入=未命中输入（OpenAI 协议已扣除命中部分）、输出、缓存读=命中读取、缓存写=写入；合计 = 四桶之和。缓存写只有 Anthropic 上报（cache_creation_input_tokens），OpenAI 兼容协议（OpenAI / DeepSeek / Qwen 等）响应里没有该字段，故恒为 0。命中率 = 缓存读 / (输入 + 读 + 写)。"
     >
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1 flex-wrap">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              onClick={() => setRangeKey(r.key)}
-              className="px-2 py-0.5 rounded text-xs"
-              style={{
-                background: rangeKey === r.key ? 'var(--bg-field)' : 'transparent',
-                color: rangeKey === r.key ? 'var(--text-primary)' : 'var(--text-secondary)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              {r.label}
-            </button>
-          ))}
+      <div className="flex items-center justify-between mb-2 gap-2">
+        <div className="flex items-center gap-1 flex-wrap min-w-0">
+          {/* 区间收成下拉：原来 6 个按钮要占 ~320px，窄窗下会把右侧三个动作挤到第二行 */}
+          <Select
+            value={rangeKey}
+            onChange={(v) => setRangeKey(v as RangeKey)}
+            options={RANGES.map((r) => ({
+              value: r.key,
+              // 自定义且选全时，触发器直接显示区间本身，比只写"自定义"信息量大
+              label: r.key === 'custom' && customFrom && customTo ? `${customFrom} ~ ${customTo}` : r.label,
+            }))}
+            size="xs"
+            style={{ width: 148, flex: '0 0 auto' }}
+            panelMinWidth={148}
+            title="统计区间"
+          />
           {/* 自定义区间：两个本地日期的日期输入（含首尾，最多 31 天） */}
           {rangeKey === 'custom' && (
-            <span className="flex items-center gap-1 ml-1">
+            <span className="flex items-center gap-1">
               <input
                 type="date"
                 value={customFrom}
@@ -801,7 +888,7 @@ export function UsageStats() {
             </span>
           )}
           {customError && (
-            <span className="text-[10px] ml-1" style={{ color: 'var(--text-tertiary)' }}>{customError}</span>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{customError}</span>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -972,18 +1059,27 @@ export function UsageStats() {
             )}
           </Block>
 
-          {trendItems.length > 0 && (
-            <Block
-              title="趋势"
-              hint={`${granularityLabel}（跨度 ${trendSpanDays} 天）；点柱子看该时段明细，长段无用量压成一截虚线`}
-            >
+          <Block
+            title="趋势"
+            hint={trendItems.length === 0
+              ? '所选区间内没有用量记录'
+              : `${granularityLabel}（跨度 ${trendSpanDays} 天 · ${trendItems.length} 列，按卡片宽度自适应）；点柱子看该时段明细，长段无用量压成一截虚线`}
+          >
+            {/* 量这张卡的宽度：桶长按可用列数选，宽屏更细、窄屏更粗（见 pickGranularity） */}
+            <div ref={trendWrapRef}>
+              {trendItems.length === 0 ? (
+                <div className="text-xs py-3" style={{ color: 'var(--text-tertiary)' }}>
+                  该区间没有用量记录，换个区间（或看「全部」）试试。
+                </div>
+              ) : (
+                <>
               {/* 两张图各自成卡：标题、坐标轴、图例都收在自己的卡里 ——
                   原来两图只有一行小字区分，读者不知道哪根柱属于哪张图 */}
               <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                 <div className="flex items-baseline justify-between gap-2 mb-2">
                   <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>用量趋势</span>
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    每日输入 Token 构成 · 柱高按峰值归一（峰值 {fmt(trendPeak)}）
+                    输入 Token 构成（{granularityLabel}） · 柱高按峰值归一（峰值 {fmt(trendPeak)}）
                   </span>
                 </div>
                 <TrendColumns
@@ -1020,7 +1116,7 @@ export function UsageStats() {
                 <div className="flex items-baseline justify-between gap-2 mb-2">
                   <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>缓存命中趋势</span>
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    每日缓存命中率 · 浅色底轨 = 100%，填充高度 = 命中率 · 窗口内 {fmtRate(t?.cacheHitRate ?? 0)}
+                    缓存命中率（{granularityLabel}） · 浅色底轨 = 100%，填充高度 = 命中率 · 窗口内 {fmtRate(t?.cacheHitRate ?? 0)}
                   </span>
                 </div>
                 <TrendColumns
@@ -1061,7 +1157,7 @@ export function UsageStats() {
                 {!trendSelItem ? (
                   <span style={{ color: 'var(--text-tertiary)' }}>点选上图中任意柱子，这里显示该时段的明细（再点一次取消）</span>
                 ) : !trendSelItem.bucket ? (
-                  <span>{trendSelItem.key} 起连续 {trendSelItem.gap} {gapUnit} 无用量</span>
+                  <span>{trendSelItem.key} 起连续 {gapSpanLabel(trendSelItem.gap, trendGranularity)} 无用量</span>
                 ) : (
                   <>
                     <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
@@ -1076,8 +1172,10 @@ export function UsageStats() {
                   </>
                 )}
               </div>
-            </Block>
-          )}
+                </>
+              )}
+            </div>
+          </Block>
         </>
       )}
     </SettingsSection>
