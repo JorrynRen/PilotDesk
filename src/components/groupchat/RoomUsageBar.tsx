@@ -135,7 +135,10 @@ export function RoomUsageBar({ roomId }: { roomId: string | null }) {
     };
   }, [roomId]);
 
-  if (!roomId || !data || data.totals.callCount === 0) return null;
+  if (!roomId) return null;
+  // 没有用量记录（纯本地 CLI 参与者等）时不渲染数字，但占一块 8px 高度：
+  // 输入区容器只留了 4px 底边距，这块占位补回 12px，与「有用量行」时的底部留白一致
+  if (!data || data.totals.callCount === 0) return <div className="h-2" />;
 
   const t = data.totals;
   // 命中率 = 缓存读 / (输入 + 读 + 写)，与后端口径一致（避免把缓存写 token 当命中）。

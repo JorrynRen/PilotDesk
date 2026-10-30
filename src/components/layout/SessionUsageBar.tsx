@@ -99,8 +99,10 @@ export function SessionUsageBar({
   }, [sessionId]);
 
   if (!sessionId) return null;
-  // 非 API 接入（ACP / 本地 CLI）宿主不报用量时没有任何记录：不渲染，而不是显示一排 0
-  if (!isApi && acc.callCount === 0) return null;
+  // 非 API 接入（ACP / 本地 CLI）宿主不报用量时没有任何记录：不渲染数字，而不是显示一排 0。
+  // 但仍占一块 8px 高度：输入区容器只留了 4px 底边距，这块占位把它补回 12px，
+  // 使「有用量行 / 无用量行」两种状态的底部留白一致（不会一换 Agent 就贴到窗口底边）。
+  if (!isApi && acc.callCount === 0) return <div className="h-2" />;
 
   const denom = acc.prompt + acc.cacheRead + acc.cacheWrite;
   const rate = denom > 0 ? acc.cacheRead / denom : 0;

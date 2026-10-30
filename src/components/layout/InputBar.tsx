@@ -759,13 +759,16 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
    *   **这里刻意不画贯穿横线** —— 一条通栏分割线会把消息窗口视觉上切成上下两半，
    *   而输入框本身已是带边框的容器，靠留白分隔更安静。
    * - 常规聊天视图：与消息列表之间只留 12px 安全距离（原先靠一条 border-top 分隔，已去掉）。
-   *   底部留白与用量行**配成一组**：API 会话下方紧跟用量行（自带 4px 上内边距），
-   *   这里只留 4px → 视觉间隙 8px，读作输入区的页脚；CLI 会话没有用量行，留回 12px，
-   *   避免输入框紧贴状态栏。
+   *   底部留白与用量行**配成一组**：有会话时固定留 4px，用量行自带 4px 上内边距
+   *   → 视觉间隙 8px，读作输入区的页脚；没有可显示的用量时由用量行自身占位
+   *   （8px 空块）补回 12px，避免输入框紧贴状态栏。
+   *
+   * 之所以不按 Agent 类型判断：ACP 与本地 CLI 现在也会上报用量，
+   * 「有没有用量行」不再等于「是不是 API 会话」。
    */
   const inputAreaClass = placement === 'top'
     ? 'px-4 pt-3 pb-5'
-    : session && session.agentType === 'api'
+    : session
       ? 'px-4 pt-3 pb-1'
       : 'px-4 pt-3 pb-3';
 
