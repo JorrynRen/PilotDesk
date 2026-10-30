@@ -1131,7 +1131,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                   </button>
                 </div>
                 <div className="text-[10px] px-2.5" style={{ color: 'var(--text-tertiary)' }}>
-                  仅统计经宿主发起的 API 调用；CLI Agent（终端/插件）自行计费，不计入。
+                  API / ACP / 本地 CLI 会话的用量均已计入；仅在终端里直接运行的 CLI 不纳入统计。
                 </div>
               </div>
             )}

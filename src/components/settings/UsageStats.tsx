@@ -441,9 +441,9 @@ const DIMENSION_META: Record<DimensionKey, { label: string; title: string }> = {
   },
 };
 
-/** 归因维度口径提示：CLI Agent 不经宿主，故各维度合计可能小于全局总量。 */
+/** 归因维度口径提示：API 直连、ACP 宿主与本地 CLI 会话的用量均已回流；仅终端里直接运行的 CLI 无法统计。 */
 const DIMENSION_HINT =
-  '仅统计经宿主发起的 API 调用；CLI Agent（终端 / 插件 / claude、codex 等子进程）自行计费、不回流用量，故各维度合计可能小于全局总量。';
+  'API 直连、ACP 宿主与本地 CLI 会话的用量均已计入；仅在终端里直接运行的 CLI 无法回流用量，不纳入统计。';
 
 export function UsageStats() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
