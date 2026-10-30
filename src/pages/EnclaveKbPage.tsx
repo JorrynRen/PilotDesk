@@ -419,7 +419,7 @@ function SearchField({
 }) {
   return (
     <div
-      className="pd-field flex items-center gap-1.5 px-2 py-1 rounded-lg shrink-0 w-[280px]"
+      className="pd-field pd-field-sm flex items-center gap-1.5 px-2 rounded-lg shrink-0 w-[280px]"
       style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
     >
       <Search size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
@@ -2494,7 +2494,7 @@ export function EnclaveKbPage() {
                 )}
                 {attrField && (
                   <div
-                    className="pd-field flex items-center gap-1.5 px-2 py-1 rounded-lg shrink-0 w-[150px]"
+                    className="pd-field pd-field-sm flex items-center gap-1.5 px-2 rounded-lg shrink-0 w-[150px]"
                     style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
                   >
                     <input

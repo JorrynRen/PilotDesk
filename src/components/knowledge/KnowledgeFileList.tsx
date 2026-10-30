@@ -541,7 +541,7 @@ export function KnowledgeFileList({
         {/* `pd-field` 把聚焦反馈交给容器：全局 `:focus-visible` 的 1px 描边优先级高于 Tailwind 的
             `outline-none`，不加这个类的话描边会落在内层 input 上 —— 看着像"边框在外、焦点圈在内"。 */}
         <div
-          className="pd-field flex items-center gap-1.5 px-2 py-1 rounded-lg flex-1 min-w-0"
+          className="pd-field pd-field-sm flex items-center gap-1.5 px-2 rounded-lg flex-1 min-w-0"
           style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)', maxWidth: 260 }}
         >
           <Search size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
