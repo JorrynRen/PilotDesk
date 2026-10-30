@@ -343,9 +343,28 @@ export interface UsageSummary {
   trend: UsageDay[];
 }
 
-/** 拉取全局用量汇总。days<=0 表示全量，否则为近 N 天窗口。 */
-export async function getUsageSummary(days = 30): Promise<UsageSummary> {
-  return await _invoke('get_usage_summary', { days });
+/**
+ * 用量查询窗口。
+ *
+ * - `days`：近 N 天（<=0 表示全量，缺省 30 天）；
+ * - `since` / `until`：epoch 秒的**闭开区间**，用于「本月 / 上月 / 自定义」这类固定区间。
+ *
+ * 显式边界优先：只要给了 `since` 或 `until`，后端就不再按 `days` 推算。
+ * 月初 / 月末在调用方按本地时区算好再传，避免前后端各算一套时区口径。
+ */
+export interface UsageRangeQuery {
+  days?: number;
+  since?: number;
+  until?: number;
+}
+
+/** 拉取全局用量汇总。days<=0 表示全量，否则为近 N 天窗口；显式边界优先。 */
+export async function getUsageSummary(range: UsageRangeQuery = {}): Promise<UsageSummary> {
+  return await _invoke('get_usage_summary', {
+    days: range.days ?? null,
+    since: range.since ?? null,
+    until: range.until ?? null,
+  });
 }
 
 /**
@@ -375,9 +394,13 @@ export interface UsageAttribution {
   dimensions: UsageDimension[];
 }
 
-/** 拉取三维成本归因。days<=0 表示全量，否则为近 N 天窗口。 */
-export async function getUsageAttribution(days = 30): Promise<UsageAttribution> {
-  return await _invoke('get_usage_attribution', { days });
+/** 拉取四维成本归因。窗口口径同 `getUsageSummary`（显式边界优先）。 */
+export async function getUsageAttribution(range: UsageRangeQuery = {}): Promise<UsageAttribution> {
+  return await _invoke('get_usage_attribution', {
+    days: range.days ?? null,
+    since: range.since ?? null,
+    until: range.until ?? null,
+  });
 }
 
 /** 群聊房间用量（director + 各参与者，按 model/provider/席位 聚合）。 */

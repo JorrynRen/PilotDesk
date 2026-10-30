@@ -12,6 +12,7 @@ import {
   type UsageAttribution,
   type UsageGroup,
   type UsageDay,
+  type UsageRangeQuery,
 } from '../../types';
 import { errorMessage } from '../../utils/errorMessage';
 
@@ -417,14 +418,47 @@ function GroupTable({ title, rows, action }: { title: string; rows: UsageGroup[]
   );
 }
 
-const RANGES: { label: string; value: number }[] = [
-  { label: '全部', value: 0 },
-  { label: '近 30 天', value: 30 },
-  { label: '近 7 天', value: 7 },
-];
-
 /** 一级分页：provider/model/channel 是「按什么调的」，归因是「谁花的」。 */
 type TabKey = 'provider' | 'model' | 'attribution' | 'channel';
+
+/* ── 统计区间 ────────────────────────────────────────────────────────────────
+   预设里「近 N 天」交给后端按天推；「本月 / 上月 / 自定义」必须给显式边界。
+   边界一律在**前端按本地时区**算成 epoch 秒，后端只按 `created_at >= since AND < until`
+   过滤 —— 这样界面上的"10 月 1 日"与查询边界必然是同一个时区口径。 */
+type RangeKey = '7d' | '30d' | 'all' | 'thisMonth' | 'lastMonth' | 'custom';
+
+const RANGES: { key: RangeKey; label: string }[] = [
+  { key: '7d', label: '近 7 天' },
+  { key: '30d', label: '近 30 天' },
+  { key: 'all', label: '全部' },
+  { key: 'thisMonth', label: '本月' },
+  { key: 'lastMonth', label: '上月' },
+  { key: 'custom', label: '自定义' },
+];
+
+/** 自定义区间上限：一个月（含首尾最多 31 天 → 差值不超过 30 天）。 */
+const CUSTOM_MAX_SPAN_DAYS = 30;
+
+/** 本地时区某个月月初的 epoch 秒（`offset` 为月偏移，0 = 本月）。 */
+function startOfLocalMonth(offset = 0): number {
+  const now = new Date();
+  return Math.floor(new Date(now.getFullYear(), now.getMonth() + offset, 1).getTime() / 1000);
+}
+
+/** `YYYY-MM-DD` → 本地时区当天 00:00 的 epoch 秒；格式不对返回 null。 */
+function parseLocalDate(value: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!m) return null;
+  const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  return Number.isNaN(t) ? null : Math.floor(t / 1000);
+}
+
+/** 今天的 `YYYY-MM-DD`（本地时区）：给日期输入的 max，挡住"未来的用量"。 */
+function todayInputValue(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 /** 归因二级维度（仅「按归因」下钻用）。 */
 type DimensionKey = 'session' | 'groupchat' | 'workflow' | 'knowledge';
@@ -464,7 +498,10 @@ const DIMENSION_HINT =
 export function UsageStats() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [attribution, setAttribution] = useState<UsageAttribution | null>(null);
-  const [days, setDays] = useState(30);
+  const [rangeKey, setRangeKey] = useState<RangeKey>('30d');
+  /** 自定义区间的起止日期（本地时区 `YYYY-MM-DD`），仅 `rangeKey === 'custom'` 时生效 */
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [tab, setTab] = useState<TabKey>('provider');
   /**
    * 趋势图选中的列（桶 key）。两张图共用这一份 —— 它们本来就是同一日期轴，
@@ -488,15 +525,57 @@ export function UsageStats() {
   const seqRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unlistenersRef = useRef<UnlistenFn[]>([]);
-  const daysRef = useRef(days);
+  /** 当前查询窗口（脏事件回调与「刷新」按钮都要拿到最新值，故用 ref 供异步逻辑读取） */
+  const rangeRef = useRef<UsageRangeQuery>({ days: 30 });
 
-  const refresh = async (forDays = days) => {
+  // ── 区间 → 查询窗口 ──
+  const customFromTs = parseLocalDate(customFrom);
+  const customToTs = parseLocalDate(customTo);
+  /** 自定义区间的校验结果（空串 = 通过；未选全也给提示，避免"点了自定义却没反应"） */
+  const customError = (() => {
+    if (rangeKey !== 'custom') return '';
+    if (!customFrom || !customTo) return '请选择起止日期';
+    if (customFromTs === null || customToTs === null) return '日期格式不正确';
+    if (customToTs < customFromTs) return '结束日期不能早于开始日期';
+    if (customToTs - customFromTs > CUSTOM_MAX_SPAN_DAYS * 86400) {
+      return '自定义区间最长一个月（含首尾最多 31 天）';
+    }
+    return '';
+  })();
+  /** 当前窗口；自定义未选全 / 校验未通过时为 null —— 此时保留上次数据、不发请求 */
+  const rangeQuery: UsageRangeQuery | null = (() => {
+    switch (rangeKey) {
+      case '7d':
+        return { days: 7 };
+      case '30d':
+        return { days: 30 };
+      case 'all':
+        return { days: 0 };
+      case 'thisMonth':
+        // 本月：月初 → 现在（不设上界，跨月后自然随右下界推进）
+        return { since: startOfLocalMonth(0) };
+      case 'lastMonth':
+        return { since: startOfLocalMonth(-1), until: startOfLocalMonth(0) };
+      default:
+        // 自定义：日期是本地日，上界取结束日的次日 00:00（闭开区间）
+        return customError || customFromTs === null || customToTs === null
+          ? null
+          : { since: customFromTs, until: customToTs + 86400 };
+    }
+  })();
+  const rangeQueryKey = rangeQuery ? JSON.stringify(rangeQuery) : '';
+  /** 导出按钮/提示用的区间说明 */
+  const rangeLabel = rangeKey === 'custom'
+    ? (customFrom && customTo ? `${customFrom} ~ ${customTo}` : '自定义区间')
+    : (RANGES.find((r) => r.key === rangeKey)?.label ?? '所选区间');
+
+  const refresh = async (query: UsageRangeQuery = rangeRef.current) => {
     const seq = ++seqRef.current;
     setLoading(true);
     try {
       const [data, attr] = await Promise.all([
-        getUsageSummary(forDays),
-        getUsageAttribution(forDays),
+        getUsageSummary(query),
+        getUsageAttribution(query),
       ]);
       if (seq !== seqRef.current) return;
       setSummary(data);
@@ -518,16 +597,24 @@ export function UsageStats() {
         filters: [{ name: 'CSV', extensions: ['csv'] }],
       });
       if (!filePath) return;
-      await invoke('export_usage_report_csv', { days, filePath });
+      // 与页面共用同一窗口：显式边界优先，没有边界才回落到 days
+      await invoke('export_usage_report_csv', {
+        days: rangeRef.current.days ?? null,
+        since: rangeRef.current.since ?? null,
+        until: rangeRef.current.until ?? null,
+        filePath,
+      });
       showToast('报表导出成功', 'success');
     } catch (e) {
       showToast(`报表导出失败: ${errorMessage(e)}`, 'error');
     }
   };
 
+  // 先把最新窗口写进 ref（声明顺序在前，下面的拉取 effect 才能读到当次的值）
   useEffect(() => {
-    daysRef.current = days;
-  }, [days]);
+    if (rangeQuery) rangeRef.current = rangeQuery;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeQueryKey]);
 
   // 知识库名映射：挂载时拉一次（库列表变动很少，失败就退化成显示 id）
   useEffect(() => {
@@ -547,11 +634,13 @@ export function UsageStats() {
   }, []);
 
   useEffect(() => {
+    // 窗口还没攒齐（自定义只选了一头 / 校验不通过）就不发请求：保留上次数据，避免"闪成空态"
+    if (!rangeQuery) return;
     // 不在 effect 里同步调用 `refresh`：它开头就 setLoading(true)，属于"effect 体内同步 setState"
     // （`react-hooks/set-state-in-effect` 判为级联渲染）。推到微任务 —— 同一个任务、早于绘制，行为一致。
-    void Promise.resolve().then(() => refresh(days));
+    void Promise.resolve().then(() => refresh(rangeRef.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [days]);
+  }, [rangeQueryKey]);
 
   useEffect(() => {
     let disposed = false;
@@ -560,12 +649,12 @@ export function UsageStats() {
       if (document.hidden) return;
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
-        if (!disposed) refresh(daysRef.current);
+        if (!disposed) refresh(rangeRef.current);
       }, 400);
     };
 
     const onVisibility = () => {
-      if (!document.hidden && !disposed) refresh(daysRef.current);
+      if (!document.hidden && !disposed) refresh(rangeRef.current);
     };
 
     (async () => {
@@ -663,21 +752,57 @@ export function UsageStats() {
       description="Token 用量与缓存命中（含单 Agent 会话、圆桌与知识库整理/生成调用）；可按 Provider / Model 分组，并按会话 / 圆桌 / 工作流 / 知识库归因。四桶互斥口径：输入=未命中输入（OpenAI 协议已扣除命中部分）、输出、缓存读=命中读取、缓存写=写入；合计 = 四桶之和。缓存写只有 Anthropic 上报（cache_creation_input_tokens），OpenAI 兼容协议（OpenAI / DeepSeek / Qwen 等）响应里没有该字段，故恒为 0。命中率 = 缓存读 / (输入 + 读 + 写)。"
     >
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap">
           {RANGES.map((r) => (
             <button
-              key={r.value}
-              onClick={() => setDays(r.value)}
+              key={r.key}
+              onClick={() => setRangeKey(r.key)}
               className="px-2 py-0.5 rounded text-xs"
               style={{
-                background: days === r.value ? 'var(--bg-field)' : 'transparent',
-                color: days === r.value ? 'var(--text-primary)' : 'var(--text-secondary)',
+                background: rangeKey === r.key ? 'var(--bg-field)' : 'transparent',
+                color: rangeKey === r.key ? 'var(--text-primary)' : 'var(--text-secondary)',
                 border: '1px solid var(--border)',
               }}
             >
               {r.label}
             </button>
           ))}
+          {/* 自定义区间：两个本地日期的日期输入（含首尾，最多 31 天） */}
+          {rangeKey === 'custom' && (
+            <span className="flex items-center gap-1 ml-1">
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || todayInputValue()}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="px-1.5 py-0.5 rounded text-xs"
+                style={{
+                  background: 'var(--bg-field)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+                title="起始日期（含）"
+              />
+              <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>~</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                max={todayInputValue()}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="px-1.5 py-0.5 rounded text-xs"
+                style={{
+                  background: 'var(--bg-field)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+                title="结束日期（含）"
+              />
+            </span>
+          )}
+          {customError && (
+            <span className="text-[10px] ml-1" style={{ color: 'var(--text-tertiary)' }}>{customError}</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {loading && (
@@ -686,11 +811,11 @@ export function UsageStats() {
           <SettingsButton
             onClick={() => void handleExportReport()}
             variant="secondary"
-            title={days === 0 ? '导出全部用量的 CSV 报表' : `导出近 ${days} 天用量的 CSV 报表`}
+            title={`导出「${rangeLabel}」用量的 CSV 报表`}
           >
             导出报表
           </SettingsButton>
-          <SettingsButton onClick={() => refresh(days)} variant="secondary" disabled={loading}>
+          <SettingsButton onClick={() => refresh()} variant="secondary" disabled={loading || !rangeQuery}>
             刷新
           </SettingsButton>
         </div>

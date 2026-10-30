@@ -348,79 +348,49 @@ fn merge_groups_by_name(groups: Vec<UsageGroup>) -> Vec<UsageGroup> {
     merged
 }
 
-/// provider 维度分组汇总（展示名优先取 api_providers.name）。
-fn group_provider(conn: &Connection, since: Option<i64>) -> Result<Vec<UsageGroup>, AppError> {
+/// provider 维度分组汇总（展示名优先取 agents.display_name）。
+fn group_provider(conn: &Connection, w: UsageWindow) -> Result<Vec<UsageGroup>, AppError> {
     let display = provider_display_names(conn);
+    let (filter, args) = w.filter();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT CASE WHEN TRIM(COALESCE(provider, '')) = '' THEN '未知' ELSE provider END AS name,
+                COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+                COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+         FROM api_usage_log{} GROUP BY name ORDER BY name",
+        filter
+    ))?;
+    let it = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
+    })?;
     let mut rows = Vec::new();
-    if let Some(s) = since {
-        let mut stmt = conn.prepare(
-            "SELECT CASE WHEN TRIM(COALESCE(provider, '')) = '' THEN '未知' ELSE provider END AS name,
-                    COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
-                    COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log WHERE created_at >= ?1 GROUP BY name ORDER BY name",
-        )?;
-        let it = stmt.query_map(params![s], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            let (name, totals) = row?;
-            let name = resolve_provider_label(&name, &display);
-            rows.push(UsageGroup { name, totals });
-        }
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT CASE WHEN TRIM(COALESCE(provider, '')) = '' THEN '未知' ELSE provider END AS name,
-                    COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
-                    COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log GROUP BY name ORDER BY name",
-        )?;
-        let it = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            let (name, totals) = row?;
-            let name = resolve_provider_label(&name, &display);
-            rows.push(UsageGroup { name, totals });
-        }
+    for row in it {
+        let (name, totals) = row?;
+        // provider 维度：历史数据可能既写 id 又写显示名，解析到同一标签后合并为一行
+        let name = resolve_provider_label(&name, &display);
+        rows.push(UsageGroup { name, totals });
     }
     Ok(merge_groups_by_name(rows))
 }
 
 /// model 维度分组汇总。
-fn group_model(conn: &Connection, since: Option<i64>) -> Result<Vec<UsageGroup>, AppError> {
+fn group_model(conn: &Connection, w: UsageWindow) -> Result<Vec<UsageGroup>, AppError> {
+    let (filter, args) = w.filter();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT CASE WHEN TRIM(COALESCE(model, '')) = '' THEN '未知' ELSE model END AS name,
+                COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+                COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+         FROM api_usage_log{} GROUP BY name ORDER BY name",
+        filter
+    ))?;
+    let it = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
+    })?;
     let mut rows = Vec::new();
-    if let Some(s) = since {
-        let mut stmt = conn.prepare(
-            "SELECT CASE WHEN TRIM(COALESCE(model, '')) = '' THEN '未知' ELSE model END AS name,
-                    COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
-                    COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log WHERE created_at >= ?1 GROUP BY name ORDER BY name",
-        )?;
-        let it = stmt.query_map(params![s], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            let (name, totals) = row?;
-            rows.push(UsageGroup { name, totals });
-        }
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT CASE WHEN TRIM(COALESCE(model, '')) = '' THEN '未知' ELSE model END AS name,
-                    COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
-                    COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log GROUP BY name ORDER BY name",
-        )?;
-        let it = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            let (name, totals) = row?;
-            rows.push(UsageGroup { name, totals });
-        }
+    for row in it {
+        let (name, totals) = row?;
+        rows.push(UsageGroup { name, totals });
     }
     Ok(rows)
 }
@@ -468,152 +438,145 @@ fn channel_label(channel: &str, display: &HashMap<String, String>) -> String {
 }
 
 /// 按执行通道分组汇总（平铺：一个接入条目一行，不做宿主归并）。
-fn group_channel(conn: &Connection, since: Option<i64>) -> Result<Vec<UsageGroup>, AppError> {
+fn group_channel(conn: &Connection, w: UsageWindow) -> Result<Vec<UsageGroup>, AppError> {
     let display = agent_display_names(conn);
-    let select = "SELECT CASE WHEN TRIM(COALESCE(channel, '')) = '' THEN 'api' ELSE channel END AS name,
-                    COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
-                    COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log";
+    let (filter, args) = w.filter();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT CASE WHEN TRIM(COALESCE(channel, '')) = '' THEN 'api' ELSE channel END AS name,
+                COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+                COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+         FROM api_usage_log{} GROUP BY name ORDER BY name",
+        filter
+    ))?;
+    let it = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
+    })?;
     let mut rows = Vec::new();
-    if let Some(s) = since {
-        let mut stmt = conn.prepare(&format!(
-            "{} WHERE created_at >= ?1 GROUP BY name ORDER BY name",
-            select
-        ))?;
-        let it = stmt.query_map(params![s], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            let (name, totals) = row?;
-            rows.push(UsageGroup {
-                name: channel_label(&name, &display),
-                totals,
-            });
-        }
-    } else {
-        let mut stmt = conn.prepare(&format!("{} GROUP BY name ORDER BY name", select))?;
-        let it = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            let (name, totals) = row?;
-            rows.push(UsageGroup {
-                name: channel_label(&name, &display),
-                totals,
-            });
-        }
+    for row in it {
+        let (name, totals) = row?;
+        rows.push(UsageGroup {
+            name: channel_label(&name, &display),
+            totals,
+        });
     }
     Ok(rows)
 }
 
+/// 统计窗口：epoch 秒的**闭开区间** `[since, until)`；两者均为 None 表示全量。
+///
+/// 之所以不只留「近 N 天」：本月 / 上月 / 自定义区间都不是"以此刻为终点往前推"，
+/// 必须由调用方给出显式边界。月初 / 月末在**前端按本地时区**算好再传 ——
+/// Rust 侧不碰时区与月份规则，避免界面与查询各算一套口径。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UsageWindow {
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+}
+
+impl UsageWindow {
+    /// 「近 N 天」口径（与原 `window_since` 一致：None 视作 30 天，<=0 为全量）。
+    pub fn from_days(days: Option<i64>) -> Self {
+        let days_value = days.unwrap_or(30);
+        Self {
+            since: if days_value <= 0 {
+                None
+            } else {
+                Some(crate::utils::now() - days_value * 24 * 3600)
+            },
+            until: None,
+        }
+    }
+
+    /// 命令参数 → 窗口：显式边界优先（任一非空即按显式处理），否则回落到「近 N 天」。
+    pub fn resolve(days: Option<i64>, since: Option<i64>, until: Option<i64>) -> Self {
+        if since.is_some() || until.is_some() {
+            Self { since, until }
+        } else {
+            Self::from_days(days)
+        }
+    }
+
+    /// `created_at` 的过滤片段（带前导 ` WHERE `；无边界时为空串）与对应占位参数。
+    ///
+    /// 占位符按追加顺序编号，调用方用 `params_from_iter` 原样传入即可。
+    fn filter(&self) -> (String, Vec<i64>) {
+        let mut clauses: Vec<String> = Vec::new();
+        let mut args: Vec<i64> = Vec::new();
+        if let Some(s) = self.since {
+            args.push(s);
+            clauses.push(format!("created_at >= ?{}", args.len()));
+        }
+        if let Some(u) = self.until {
+            args.push(u);
+            clauses.push(format!("created_at < ?{}", args.len()));
+        }
+        if clauses.is_empty() {
+            (String::new(), args)
+        } else {
+            (format!(" WHERE {}", clauses.join(" AND ")), args)
+        }
+    }
+}
+
 /// 总量汇总。
-fn total(conn: &Connection, since: Option<i64>) -> Result<UsageTotals, AppError> {
-    let t = match since {
-        Some(s) => {
-            let mut stmt = conn.prepare(
-                "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
-                        COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-                 FROM api_usage_log WHERE created_at >= ?1",
-            )?;
-            stmt.query_row(params![s], |r| UsageTotals::from_row(r))?
-        }
-        None => {
-            let mut stmt = conn.prepare(
-                "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
-                        COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-                 FROM api_usage_log",
-            )?;
-            stmt.query_row([], |r| UsageTotals::from_row(r))?
-        }
-    };
+fn total(conn: &Connection, w: UsageWindow) -> Result<UsageTotals, AppError> {
+    let (filter, args) = w.filter();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+                COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+         FROM api_usage_log{}",
+        filter
+    ))?;
+    let t = stmt.query_row(rusqlite::params_from_iter(args), |r| UsageTotals::from_row(r))?;
     Ok(t)
 }
 
-/// 按天趋势（近 N 天）。
-fn trend(conn: &Connection, since: Option<i64>) -> Result<Vec<UsageDay>, AppError> {
+/// 按天趋势（窗口内）。
+fn trend(conn: &Connection, w: UsageWindow) -> Result<Vec<UsageDay>, AppError> {
+    let (filter, args) = w.filter();
+    // 分桶用**本地日**：`unixepoch` 得到的是 UTC，再 `localtime` 转本地，
+    // 否则"本月"的月界会差一个时区的量（凌晨用量被算到前一天）。
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DATE(created_at, 'unixepoch', 'localtime') AS d,
+                COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+         FROM api_usage_log{} GROUP BY d ORDER BY d ASC",
+        filter
+    ))?;
+    let it = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        let prompt_tokens: i64 = r.get(1)?;
+        let cached_tokens: i64 = r.get(2)?;
+        let cache_read_tokens: i64 = r.get(3)?;
+        let cache_write_tokens: i64 = r.get(4)?;
+        Ok(UsageDay {
+            date: r.get(0)?,
+            prompt_tokens,
+            cached_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            cache_hit_rate: cache_hit_rate(cache_read_tokens, cache_write_tokens, prompt_tokens),
+        })
+    })?;
     let mut days = Vec::new();
-    if let Some(s) = since {
-        let mut stmt = conn.prepare(
-            "SELECT DATE(created_at, 'unixepoch') AS d,
-                    COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                    COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log WHERE created_at >= ?1 GROUP BY d ORDER BY d ASC",
-        )?;
-        let it = stmt.query_map(params![s], |r| {
-            let prompt_tokens: i64 = r.get(1)?;
-            let cached_tokens: i64 = r.get(2)?;
-            let cache_read_tokens: i64 = r.get(3)?;
-            let cache_write_tokens: i64 = r.get(4)?;
-            Ok(UsageDay {
-                date: r.get(0)?,
-                prompt_tokens,
-                cached_tokens,
-                cache_read_tokens,
-                cache_write_tokens,
-                cache_hit_rate: cache_hit_rate(
-                    cache_read_tokens,
-                    cache_write_tokens,
-                    prompt_tokens,
-                ),
-            })
-        })?;
-        for row in it {
-            days.push(row?);
-        }
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT DATE(created_at, 'unixepoch') AS d,
-                    COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(cached_tokens), 0),
-                    COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log GROUP BY d ORDER BY d ASC",
-        )?;
-        let it = stmt.query_map([], |r| {
-            let prompt_tokens: i64 = r.get(1)?;
-            let cached_tokens: i64 = r.get(2)?;
-            let cache_read_tokens: i64 = r.get(3)?;
-            let cache_write_tokens: i64 = r.get(4)?;
-            Ok(UsageDay {
-                date: r.get(0)?,
-                prompt_tokens,
-                cached_tokens,
-                cache_read_tokens,
-                cache_write_tokens,
-                cache_hit_rate: cache_hit_rate(
-                    cache_read_tokens,
-                    cache_write_tokens,
-                    prompt_tokens,
-                ),
-            })
-        })?;
-        for row in it {
-            days.push(row?);
-        }
+    for row in it {
+        days.push(row?);
     }
     Ok(days)
 }
 
-/// 统计窗口起点：days<=0/None 语义与 `usage_summary` 一致（None 视作 30 天，<=0 为全量）。
-fn window_since(days: Option<i64>) -> Option<i64> {
-    let days_value = days.unwrap_or(30);
-    if days_value <= 0 {
-        None
-    } else {
-        Some(crate::utils::now() - days_value * 24 * 3600)
-    }
-}
-
-/// 计算用量汇总（days<=0 表示全量，默认 30 天窗口）。
-pub fn usage_summary(conn: &Connection, days: Option<i64>) -> Result<UsageSummary, AppError> {
-    let since = window_since(days);
+/// 计算用量汇总（显式窗口：本月 / 上月 / 自定义区间走这条）。
+pub fn usage_summary_window(
+    conn: &Connection,
+    w: UsageWindow,
+) -> Result<UsageSummary, AppError> {
     Ok(UsageSummary {
-        totals: total(conn, since)?,
-        by_provider: group_provider(conn, since)?,
-        by_model: group_model(conn, since)?,
-        by_channel: group_channel(conn, since)?,
-        trend: trend(conn, since)?,
+        totals: total(conn, w)?,
+        by_provider: group_provider(conn, w)?,
+        by_model: group_model(conn, w)?,
+        by_channel: group_channel(conn, w)?,
+        trend: trend(conn, w)?,
     })
 }
 
@@ -687,33 +650,23 @@ pub struct UsageAttribution {
 /// 逐 `session_id` 的用量合计（分桶输入；窗口口径同 `usage_summary`）。
 fn group_by_scope(
     conn: &Connection,
-    since: Option<i64>,
+    w: UsageWindow,
 ) -> Result<Vec<(String, UsageTotals)>, AppError> {
-    let select = "SELECT session_id, COUNT(*), COALESCE(SUM(prompt_tokens), 0),
-                    COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0),
-                    COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
-                    COALESCE(SUM(cache_write_tokens), 0)
-             FROM api_usage_log";
+    let (filter, args) = w.filter();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT session_id, COUNT(*), COALESCE(SUM(prompt_tokens), 0),
+                COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0),
+                COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(cache_write_tokens), 0)
+         FROM api_usage_log{} GROUP BY session_id",
+        filter
+    ))?;
+    let it = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
+    })?;
     let mut rows = Vec::new();
-    if let Some(s) = since {
-        let mut stmt = conn.prepare(&format!(
-            "{} WHERE created_at >= ?1 GROUP BY session_id",
-            select
-        ))?;
-        let it = stmt.query_map(params![s], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            rows.push(row?);
-        }
-    } else {
-        let mut stmt = conn.prepare(&format!("{} GROUP BY session_id", select))?;
-        let it = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
-        })?;
-        for row in it {
-            rows.push(row?);
-        }
+    for row in it {
+        rows.push(row?);
     }
     Ok(rows)
 }
@@ -822,12 +775,12 @@ fn dimension(key: &str, groups: Vec<UsageGroup>) -> UsageDimension {
     }
 }
 
-/// 计算四维成本归因（days<=0 表示全量，默认 30 天窗口）。
-pub fn usage_attribution(
+/// 计算四维成本归因（显式窗口：本月 / 上月 / 自定义区间走这条）。
+pub fn usage_attribution_window(
     conn: &Connection,
-    days: Option<i64>,
+    w: UsageWindow,
 ) -> Result<UsageAttribution, AppError> {
-    let scopes = group_by_scope(conn, window_since(days))?;
+    let scopes = group_by_scope(conn, w)?;
     let meta = session_meta(conn);
     let rooms = room_titles(conn);
     let workflows = workflow_names(conn);
@@ -927,13 +880,16 @@ pub fn usage_attribution(
 pub fn export_usage_report_csv(
     state: tauri::State<'_, crate::DbState>,
     days: Option<i64>,
+    since: Option<i64>,
+    until: Option<i64>,
     file_path: String,
 ) -> Result<(), String> {
     let conn = state
         .get_conn()
         .map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
-    let summary =
-        usage_summary(&conn, days).map_err(|e| AppError::Db(format!("查询用量失败: {}", e)))?;
+    // 导出与页面共用同一窗口口径（本月 / 上月 / 自定义都走显式边界）
+    let summary = usage_summary_window(&conn, UsageWindow::resolve(days, since, until))
+        .map_err(|e| AppError::Db(format!("查询用量失败: {}", e)))?;
 
     let mut out = String::new();
     out.push('\u{feff}'); // BOM：Excel 打开才不会把中文表头显示成乱码
@@ -1461,6 +1417,16 @@ mod tests {
         .unwrap();
     }
 
+    /// 「近 N 天」口径的测试便捷封装（None = 30 天，0 = 全量）。
+    fn summary(conn: &Connection, days: Option<i64>) -> UsageSummary {
+        usage_summary_window(conn, UsageWindow::from_days(days)).unwrap()
+    }
+
+    /// 归因的「近 N 天」口径封装（同上）。
+    fn attribution(conn: &Connection, days: Option<i64>) -> UsageAttribution {
+        usage_attribution_window(conn, UsageWindow::from_days(days)).unwrap()
+    }
+
     #[test]
     fn summary_totals_groups_and_trend() {
         let conn = mem_conn();
@@ -1489,7 +1455,7 @@ mod tests {
         // 无 provider 行 → 归 "未知"。
         insert(&conn, "g1", "", "claude-3-5", 50, 10, 0, base);
 
-        let s = usage_summary(&conn, None).unwrap();
+        let s = summary(&conn, None);
         assert_eq!(s.totals.call_count, 4);
         assert_eq!(s.totals.prompt_tokens, 650);
         assert_eq!(s.totals.completion_tokens, 100);
@@ -1514,7 +1480,7 @@ mod tests {
         assert_eq!(by_model["deepseek-chat"].totals.prompt_tokens, 300);
 
         // 近 1 天窗口只含 2 条。
-        let s1 = usage_summary(&conn, Some(1)).unwrap();
+        let s1 = summary(&conn, Some(1));
         assert_eq!(s1.totals.call_count, 2);
         // 趋势按天至少 2 天。
         assert!(s.trend.len() >= 2);
@@ -1526,7 +1492,7 @@ mod tests {
         let now = crate::utils::now();
         insert(&conn, "s1", "p", "m", 0, 0, 0, now);
         insert(&conn, "s2", "p", "m", 100, 0, 250, now); // read 超过 prompt：分母按 prompt+read+write，命中率不会失真到 >100
-        let s = usage_summary(&conn, None).unwrap();
+        let s = summary(&conn, None);
         assert_eq!(s.totals.call_count, 2);
         assert_eq!(
             s.totals.cache_hit_rate,
@@ -1554,7 +1520,7 @@ mod tests {
         // 未在 agents 注册的 id → 回落显示 id。
         insert(&conn, "s2", "custom", "m", 10, 5, 0, now);
 
-        let s = usage_summary(&conn, None).unwrap();
+        let s = summary(&conn, None);
         let by_provider: std::collections::BTreeMap<String, &UsageGroup> =
             s.by_provider.iter().map(|g| (g.name.clone(), g)).collect();
         assert!(
@@ -1602,7 +1568,7 @@ mod tests {
         insert_channel("s3", "acp:hermes-acp", 30);
         insert_channel("s4", "acp:hermes", 40);
 
-        let s = usage_summary(&conn, None).unwrap();
+        let s = summary(&conn, None);
         let by_channel: std::collections::BTreeMap<String, &UsageGroup> =
             s.by_channel.iter().map(|g| (g.name.clone(), g)).collect();
         assert_eq!(by_channel.len(), 3, "一个条目一行，不做宿主归并");
@@ -1611,6 +1577,38 @@ mod tests {
         assert_eq!(by_channel["ACP · Hermes Agent"].totals.call_count, 2);
         assert_eq!(by_channel["ACP · Hermes Agent"].totals.prompt_tokens, 60);
         assert_eq!(by_channel["ACP · Hermes（ACP）"].totals.call_count, 1);
+    }
+
+    /// 显式窗口按闭开区间过滤：`since` 当天计入、`until` 当刻及之后不计入。
+    #[test]
+    fn window_bounds_are_half_open() {
+        let conn = mem_conn();
+        insert(&conn, "s1", "p", "m", 10, 1, 0, 1000); // since 之前
+        insert(&conn, "s1", "p", "m", 20, 2, 0, 2000); // 窗口内
+        insert(&conn, "s1", "p", "m", 30, 3, 0, 3000); // until 之后
+        let s = usage_summary_window(
+            &conn,
+            UsageWindow {
+                since: Some(2000),
+                until: Some(3000),
+            },
+        )
+        .unwrap();
+        assert_eq!(s.totals.call_count, 1);
+        assert_eq!(s.totals.prompt_tokens, 20);
+    }
+
+    /// 参数解析：显式边界优先（只给一端也算显式），两端都没有才回落到「近 N 天」。
+    #[test]
+    fn window_resolves_explicit_bounds_first() {
+        let both = UsageWindow::resolve(Some(7), Some(100), Some(200));
+        assert_eq!((both.since, both.until), (Some(100), Some(200)));
+        // 只给上界（如"上月"以本月月初收尾）：不叠加 days 的下界
+        let only_until = UsageWindow::resolve(Some(7), None, Some(200));
+        assert_eq!((only_until.since, only_until.until), (None, Some(200)));
+        // 只有 days：0 表示全量
+        let all = UsageWindow::resolve(Some(0), None, None);
+        assert_eq!((all.since, all.until), (None, None));
     }
 
     #[test]
@@ -1633,7 +1631,7 @@ mod tests {
         insert(&conn, "s1", "deepseek", "deepseek-chat", 100, 20, 40, now);
         insert(&conn, "s2", "DeepSeek", "deepseek-chat", 200, 30, 60, now);
 
-        let s = usage_summary(&conn, None).unwrap();
+        let s = summary(&conn, None);
         assert_eq!(s.by_provider.len(), 1, "id 行与显示名行应合并为一个分组");
         let g = &s.by_provider[0];
         assert_eq!(g.name, "DeepSeek");
@@ -1833,7 +1831,7 @@ mod tests {
         insert(&conn, "kb:kb-1", "p", "m", 60, 6, 0, now);
         insert(&conn, "kb:kb-1", "p", "m", 70, 7, 0, now);
 
-        let a = usage_attribution(&conn, None).unwrap();
+        let a = attribution(&conn, None);
         // 维度顺序固定：会话 → 群聊 → 工作流 → 知识库
         let keys: Vec<&str> = a.dimensions.iter().map(|d| d.key.as_str()).collect();
         assert_eq!(keys, vec!["session", "groupchat", "workflow", "knowledge"]);
@@ -1869,13 +1867,13 @@ mod tests {
         assert_eq!(knowledge.groups[0].totals.call_count, 2);
 
         // 四维合计 = 全局总量（无用量行落在维度之外）。
-        let all = usage_summary(&conn, None).unwrap().totals.prompt_tokens;
+        let all = summary(&conn, None).totals.prompt_tokens;
         let sum: i64 = a.dimensions.iter().map(|d| d.totals.prompt_tokens).sum();
         assert_eq!(sum, all);
 
         // 窗口：3 天前的行在近 1 天窗口内不可见。
         insert(&conn, "s-old", "p", "m", 999, 1, 0, now - 3 * 86400);
-        let recent = usage_attribution(&conn, Some(1)).unwrap();
+        let recent = attribution(&conn, Some(1));
         assert!(names(&dim(&recent, "session").groups)
             .get("s-old")
             .is_none());
@@ -1889,7 +1887,7 @@ mod tests {
         insert(&conn, "groupchat:r9", "p", "m", 10, 1, 0, now);
         insert(&conn, "s-orphan", "p", "m", 20, 2, 0, now);
 
-        let a = usage_attribution(&conn, None).unwrap();
+        let a = attribution(&conn, None);
         let groupchat = dim(&a, "groupchat");
         assert_eq!(groupchat.groups.len(), 1);
         assert_eq!(groupchat.groups[0].name, "房间 r9");

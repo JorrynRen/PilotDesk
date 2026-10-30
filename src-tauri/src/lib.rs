@@ -343,18 +343,29 @@ fn set_app_setting(
 fn get_usage_summary(
     state: tauri::State<'_, DbState>,
     days: Option<i64>,
+    since: Option<i64>,
+    until: Option<i64>,
 ) -> Result<commands::usage::UsageSummary, crate::utils::errors::AppError> {
     let conn = state.get_conn()?;
-    commands::usage::usage_summary(&conn, days)
+    // 显式窗口（本月 / 上月 / 自定义）优先，否则沿用「近 N 天」
+    commands::usage::usage_summary_window(
+        &conn,
+        commands::usage::UsageWindow::resolve(days, since, until),
+    )
 }
 
 #[tauri::command]
 fn get_usage_attribution(
     state: tauri::State<'_, DbState>,
     days: Option<i64>,
+    since: Option<i64>,
+    until: Option<i64>,
 ) -> Result<commands::usage::UsageAttribution, crate::utils::errors::AppError> {
     let conn = state.get_conn()?;
-    commands::usage::usage_attribution(&conn, days)
+    commands::usage::usage_attribution_window(
+        &conn,
+        commands::usage::UsageWindow::resolve(days, since, until),
+    )
 }
 
 #[tauri::command]

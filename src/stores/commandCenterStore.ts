@@ -85,7 +85,7 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => {
     // 使用向导的就绪判定要看「提供商是否已配 Key / 模型」，故顺带刷新
     void useApiProviderStore.getState().fetchProviders();
     try {
-      const usage = await getUsageAttribution(USAGE_DAYS);
+      const usage = await getUsageAttribution({ days: USAGE_DAYS });
       set({ usage, loadingUsage: false });
     } catch {
       // 成本速览是辅助信息：取不到就展示"暂无数据"，不打断面板
