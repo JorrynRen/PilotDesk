@@ -267,7 +267,7 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
     items: [
       {
         term: '飞地',
-        desc: '团队内网协作空间（顶栏「飞地」进入）：核心是任务管理与团队知识库，任务产出自动沉淀进知识库，并提供任务汇总报告与操作审计；团队数据只在内网 / 线下流转、迁移不经云，能否发送至云端模型由组织总闸统一控制（默认关闭）。「组织与权限」只管理该模块内任务与知识库的成员权限，不涉及组织本身的权限',
+        desc: '团队内网协作空间（顶栏「飞地」进入）：核心是任务管理与团队知识库，任务产出自动沉淀进知识库，并提供任务汇总报告与操作审计；团队数据只在内网 / 线下流转、迁移不经云，能否发送至云端模型由组织总闸统一控制（默认关闭）',
       },
       {
         term: '灵感库',
@@ -692,7 +692,10 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 className="rounded-lg px-2.5 py-2"
                 style={{ backgroundColor: 'var(--bg-primary)' }}
               >
-                <div className="flex items-center gap-1.5 mb-2">
+                <div
+                  className="flex items-center gap-1.5 pb-1.5 mb-2"
+                  style={{ borderBottom: '1px solid var(--border)' }}
+                >
                   <span style={{ width: 2, height: 9, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
                   <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
                     使用向导
@@ -772,10 +775,12 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                     className="rounded-lg px-2.5 py-2"
                     style={{ backgroundColor: 'var(--bg-primary)' }}
                   >
-                    {/* 组标题：主色竖条 + 标题（不再拖一条分隔线，避免整屏线条）。
-                        下间距刻意大于条目之间的段间距（12px vs 6px + 行高半距）：
-                        两者接近时，标题读起来会像"又一条内容"，分不出这组从哪开始。 */}
-                    <div className="flex items-center gap-1.5 mb-3">
+                    {/* 组标题：主色竖条 + 标题，底部一条淡分隔线与条目分层（只靠留白时
+                        标题会和首条内容读成一块）。 */}
+                    <div
+                      className="flex items-center gap-1.5 pb-1.5 mb-2.5"
+                      style={{ borderBottom: '1px solid var(--border)' }}
+                    >
                       <span style={{ width: 2, height: 10, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
                       <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
                         {group.title}
