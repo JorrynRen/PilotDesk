@@ -3197,16 +3197,19 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         ) : (
           <>
             {/* ── 文件历史 tab：当前房间 write_file/edit_file 快照，可撤销，占满整栏 ── */}
-            {/* 记录开关：持久化 tool_overrides.groupchat 并热切换运行期标记（当前房间立即生效） */}
-            <div className="px-2 py-2 shrink-0 flex items-center justify-between gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div className="min-w-0">
-                <div className="text-[10px] font-medium flex items-center gap-1" style={{ color: 'var(--text-primary)' }}>
-                  <History size={10} style={{ color: 'var(--accent)' }} />
-                  文件历史记录
-                </div>
-                <div className="text-[9px] truncate" style={{ color: 'var(--text-tertiary)' }}>
-                  {fileHistoryEnabled ? '已开启，write_file/edit_file 修改自动记录' : '已关闭，不再记录文件修改'}
-                </div>
+            {/* 记录开关：持久化 tool_overrides.groupchat 并热切换运行期标记（当前房间立即生效）。
+                标题行与「讨论 / 立场」两个 tab 同规格：px-3 py-2、--bg-tertiary 底色、10px 中等字重；
+                开关状态从第二行收到标题行内（右侧开关本身已表达状态，不必再占一行高）。 */}
+            <div
+              className="px-3 py-2 shrink-0 flex items-center justify-between gap-2"
+              style={{ backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}
+            >
+              <div className="text-[10px] font-medium flex items-center gap-1 min-w-0" style={{ color: 'var(--text-secondary)' }}>
+                <History size={10} style={{ color: 'var(--accent)' }} />
+                文件历史记录
+                <span className="truncate" style={{ color: 'var(--text-tertiary)' }}>
+                  {fileHistoryEnabled ? '已开启' : '已关闭'}
+                </span>
               </div>
               <button
                 role="switch"
