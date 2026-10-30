@@ -430,7 +430,12 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               role="radiogroup"
               aria-label={t('titleBar.modeGroup', '工作模式切换')}
               style={{
-                backgroundColor: 'var(--bg-tertiary)',
+                // 浅色主题的壳层底就是 --bg-tertiary，分段控件若也用它会和顶栏糊成一片，
+                // 选中滑块看起来像"凭空浮着一块色"。这里改用 --bg-primary 并补一条淡描边，
+                // 让控件本身有清晰边界（深色族下 primary 比 canvas 略亮，同样成立）。
+                backgroundColor: 'var(--bg-primary)',
+                // 用 inset 阴影画 1px 边：不参与布局，滑块的 offsetLeft/height 计算保持不变。
+                boxShadow: 'inset 0 0 0 1px var(--border)',
                 padding: 2,
                 borderRadius: 8,
                 width: 'fit-content',
