@@ -444,35 +444,35 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
           {/* Action buttons — 统一放置在卡片底部 */}
           {isUser ? (
             <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={handleCopy} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="复制">
+              <button onClick={handleCopy} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}>
                 {copied ? <Check size={11} /> : <Copy size={11} />}{copied ? '已复制' : '复制'}
               </button>
               {isEditing ? (
                 <>
-                  <button onClick={handleSaveEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: '#22c55e' }} title="保存"><Check size={11} />保存</button>
-                  <button onClick={handleCancelEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="取消"><Edit3 size={11} />取消</button>
+                  <button onClick={handleSaveEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: '#22c55e' }}><Check size={11} />保存</button>
+                  <button onClick={handleCancelEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><Edit3 size={11} />取消</button>
                 </>
               ) : onEdit && (
-                <button onClick={handleStartEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="编辑"><Pencil size={11} />编辑</button>
+                <button onClick={handleStartEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><Pencil size={11} />编辑</button>
               )}
-              <button onClick={handleSaveInspiration} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="收藏灵感"><Bookmark size={11} />收藏灵感</button>
+              <button onClick={handleSaveInspiration} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><Bookmark size={11} />收藏灵感</button>
               {message.content.trim() && (
-                <button onClick={() => setSaveToKb(true)} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="存为知识：选知识库后进入「待确认」，核对后采纳（正文不会被改写）"><BookPlus size={11} />存为知识</button>
+                <button onClick={() => setSaveToKb(true)} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><BookPlus size={11} />存为知识</button>
               )}
               {onResend && (
-                <button onClick={handleResend} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--accent)' }} title="重发">
+                <button onClick={handleResend} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--accent)' }}>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>重发
                 </button>
               )}
             </div>
           ) : message.role !== 'system' ? (
             <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={handleCopy} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="复制">
+              <button onClick={handleCopy} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}>
                 {copied ? <Check size={11} /> : <Copy size={11} />}{copied ? '已复制' : '复制'}
               </button>
-              <button onClick={handleSaveInspiration} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="收藏灵感"><Bookmark size={11} />收藏灵感</button>
+              <button onClick={handleSaveInspiration} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><Bookmark size={11} />收藏灵感</button>
               {message.content.trim() && (
-                <button onClick={() => setSaveToKb(true)} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="存为知识：选知识库后进入「待确认」，核对后采纳（正文不会被改写）"><BookPlus size={11} />存为知识</button>
+                <button onClick={() => setSaveToKb(true)} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><BookPlus size={11} />存为知识</button>
               )}
             </div>
           ) : null}
