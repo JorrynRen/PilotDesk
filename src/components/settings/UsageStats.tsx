@@ -893,8 +893,9 @@ export function UsageStats() {
               // 自定义且选全时，触发器直接显示区间本身，比只写"自定义"信息量大
               label: r.key === 'custom' && customFrom && customTo ? `${customFrom} ~ ${customTo}` : r.label,
             }))}
-            size="xs"
-            style={{ width: 148, flex: '0 0 auto' }}
+            size="md"
+            // 与右侧「导出报表 / 刷新」同一档：字号 12、左右内边距 10、圆角 rounded-lg、高 30
+            style={{ width: 148, height: 30, flex: '0 0 auto' }}
             panelMinWidth={148}
             title="统计区间"
           />
@@ -908,8 +909,10 @@ export function UsageStats() {
                 min={fromMin}
                 max={fromMax}
                 onChange={(e) => handleCustomFrom(e.target.value)}
-                className="px-1.5 py-0.5 rounded text-xs"
+                className="px-2.5 text-xs rounded-lg"
+                // 与右侧「刷新」按钮同高同圆角（30px），作为同一行的同级控件
                 style={{
+                  height: 30,
                   background: 'var(--bg-field)',
                   color: 'var(--text-primary)',
                   border: '1px solid var(--border)',
@@ -923,8 +926,9 @@ export function UsageStats() {
                 min={toMin}
                 max={toMax}
                 onChange={(e) => handleCustomTo(e.target.value)}
-                className="px-1.5 py-0.5 rounded text-xs"
+                className="px-2.5 text-xs rounded-lg"
                 style={{
+                  height: 30,
                   background: 'var(--bg-field)',
                   color: 'var(--text-primary)',
                   border: '1px solid var(--border)',
