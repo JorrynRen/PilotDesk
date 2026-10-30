@@ -56,8 +56,10 @@ const WORKFLOW_GROUP_STORAGE_KEY = 'pilotdesk.session-list.workflow-expanded';
 /**
  * 列表顶部图标操作钮的统一尺寸：13px 图标 + 4px 6px 内边距 ≈ 21×25。
  * 比 `pd-btn-sm` 默认（11px 图标 + 2px 8px）略大，又不至于在 36px 高的头部里显得突兀。
+ *
+ * 导出给同类页头复用（圆桌列表的「新建圆桌」），避免两处各写一套导致大小漂移。
  */
-const HEADER_ICON_BTN_STYLE: React.CSSProperties = { padding: '4px 6px' };
+export const HEADER_ICON_BTN_STYLE: React.CSSProperties = { padding: '4px 6px' };
 
 function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const { t } = useI18n();

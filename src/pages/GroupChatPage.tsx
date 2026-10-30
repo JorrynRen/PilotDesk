@@ -35,6 +35,8 @@ import { SecurityModeSelector, type SecurityModeValue } from '../components/secu
 import { VoiceInputButton } from '../components/input/VoiceInputButton';
 import { Select } from '../components/common/Select';
 import type { ThinkingChainStep } from '../components/layout/MainPanel';
+// 页头图标按钮尺寸与会话列表共用同一份，避免两处各写一套导致大小漂移
+import { HEADER_ICON_BTN_STYLE } from '../components/layout/SessionList';
 import type {
   GroupChatParticipant,
   GroupChatParticipantInput,
@@ -971,7 +973,7 @@ function GroupChatIntro() {
         <div className="flex flex-col gap-1.5">
           <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>快速开始</div>
           <ol className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>1. 点击左上角「新建」，填写圆桌标题与目标（可直接粘贴需求），选择主持人模型与参与者（可留空由主持人自动组建）；</li>
+            <li>1. 点击左上角圆桌列表顶部的「+」，填写圆桌标题与目标（可直接粘贴需求），选择主持人模型与参与者（可留空由主持人自动组建）；</li>
             <li>2. 主持人理解目标后自动编排任务与议程，有歧义时会向你发起确认（确认项可多选、可选填补充内容）；</li>
             <li>3. 讨论进行中可直接发送消息插话/调整方向，主持人/其他参与者的推理与工具调用可在「实时活动」与思维链中查看；</li>
             <li>4. 产物统一写入右侧面板指定的产物目录；任务结束后可导出为工作流复用。</li>
@@ -2429,17 +2431,16 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           <button
             className="pd-btn pd-btn-sm pd-btn-primary"
             title="新建圆桌"
-            style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            style={HEADER_ICON_BTN_STYLE}
             onClick={() => setShowCreate(true)}
           >
-            <Plus size={11} />
-            新建
+            <Plus size={13} />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
           {rooms.length === 0 && (
             <div className="px-3 py-4 text-[11px] text-center" style={{ color: 'var(--text-tertiary)' }}>
-              暂无圆桌，点击「新建」创建。
+              暂无圆桌，点击右上角「+」创建。
             </div>
           )}
           {rooms.map((r) => {
