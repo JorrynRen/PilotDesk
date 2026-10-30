@@ -517,11 +517,26 @@ const RANGES: { key: RangeKey; label: string }[] = [
   { key: 'custom', label: '自定义' },
 ];
 
-/** 自定义区间上限：一个月（含首尾最多 31 天 → 差值不超过 30 天）。 */
-const CUSTOM_MAX_SPAN_DAYS = 30;
+/* 自定义区间的长度上限：**一个日历月**，以先选那一端的"日号"为界
+   （选了 09-25 → 另一端最晚 10-25；反向同理）。
 
-/** 完整规则只放进悬停提示：行内留短提示，否则一行放不下会把按钮挤换行。 */
-const CUSTOM_RANGE_HINT = '自定义区间最长一个月（含首尾最多 31 天）';
+   不用"固定 31 天"：日历月更贴近用户对"一个月"的理解，且边界能直接落成日期控件的
+   `min`/`max` —— 非法区间在日历上就点不出来，不需要额外的错误文案。 */
+
+/** 本地时区日期加减 N 个月：目标月没有该日号时夹到月末（`01-31` + 1 月 → `02-28`）。 */
+function addMonths(value: string, delta: number): string {
+  const [y, m, d] = value.split('-').map(Number);
+  const base = new Date(y, m - 1 + delta, 1);
+  const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  const day = Math.min(d, lastDay);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(day)}`;
+}
+
+/** 取较早的日期字符串（ISO 格式可直接按字典序比较）。 */
+function minDateStr(a: string, b: string): string {
+  return a <= b ? a : b;
+}
 
 /** 本地时区某个月月初的 epoch 秒（`offset` 为月偏移，0 = 本月）。 */
 function startOfLocalMonth(offset = 0): number {
@@ -615,18 +630,44 @@ export function UsageStats() {
   // ── 区间 → 查询窗口 ──
   const customFromTs = parseLocalDate(customFrom);
   const customToTs = parseLocalDate(customTo);
-  /** 自定义区间的校验结果（空串 = 通过；未选全也给提示，避免"点了自定义却没反应"） */
-  const customError = (() => {
-    if (rangeKey !== 'custom') return '';
-    if (!customFrom || !customTo) return '请选择起止日期';
-    if (customFromTs === null || customToTs === null) return '日期格式不正确';
-    if (customToTs < customFromTs) return '结束早于开始';
-    if (customToTs - customFromTs > CUSTOM_MAX_SPAN_DAYS * 86400) return '最长 31 天';
-    return '';
-  })();
-  /** 只有"超长"这一条需要额外解释规则（完整说法放悬停提示，不占行宽） */
-  const customErrorHint = customError === '最长 31 天' ? CUSTOM_RANGE_HINT : undefined;
-  /** 当前窗口；自定义未选全 / 校验未通过时为 null —— 此时保留上次数据、不发请求 */
+  /** 今天（本地日）：两个输入的上限，挡住"未来的用量" */
+  const todayStr = todayInputValue();
+  /* 自定义区间的边界直接算成控件属性：选完一端后，另一端的日历上就只剩合法日期。
+     先选哪端都成立 —— 只给"另一端"设限，所以第一次点击永远不受约束。 */
+  const fromMax = minDateStr(customTo || todayStr, todayStr);
+  const fromMin = customTo ? addMonths(customTo, -1) : undefined;
+  const toMin = customFrom || undefined;
+  const toMax = customFrom ? minDateStr(addMonths(customFrom, 1), todayStr) : todayStr;
+
+  /** 选起始日：夹到今天以内，并保证与已选结束日相差不超过一个月（手输兜底，弹层已挡住） */
+  const handleCustomFrom = (value: string) => {
+    if (!value) {
+      setCustomFrom('');
+      return;
+    }
+    let next = minDateStr(value, todayStr);
+    if (customTo) {
+      if (next > customTo) next = customTo;
+      else if (next < addMonths(customTo, -1)) next = addMonths(customTo, -1);
+    }
+    setCustomFrom(next);
+  };
+
+  /** 选结束日：同理，起点不动、夹结束日（与"以先选那端为锚"的规则一致） */
+  const handleCustomTo = (value: string) => {
+    if (!value) {
+      setCustomTo('');
+      return;
+    }
+    let next = minDateStr(value, todayStr);
+    if (customFrom) {
+      if (next < customFrom) next = customFrom;
+      else if (next > addMonths(customFrom, 1)) next = addMonths(customFrom, 1);
+    }
+    setCustomTo(next);
+  };
+
+  /** 当前窗口；自定义未选全时为 null —— 此时保留上次数据、不发请求 */
   const rangeQuery: UsageRangeQuery | null = (() => {
     switch (rangeKey) {
       case '7d':
@@ -642,7 +683,7 @@ export function UsageStats() {
         return { since: startOfLocalMonth(-1), until: startOfLocalMonth(0) };
       default:
         // 自定义：日期是本地日，上界取结束日的次日 00:00（闭开区间）
-        return customError || customFromTs === null || customToTs === null
+        return customFromTs === null || customToTs === null
           ? null
           : { since: customFromTs, until: customToTs + 86400 };
     }
@@ -857,46 +898,45 @@ export function UsageStats() {
             panelMinWidth={148}
             title="统计区间"
           />
-          {/* 自定义区间：两个本地日期的日期输入（含首尾，最多 31 天） */}
+          {/* 自定义区间：两个本地日期输入。选完一端后，另一端只提供一个月内的日期，
+              所以"结束早于开始""跨度超一个月"这类非法组合在日历上就点不出来 */}
           {rangeKey === 'custom' && (
             <span className="flex items-center gap-1">
               <input
                 type="date"
                 value={customFrom}
-                max={customTo || todayInputValue()}
-                onChange={(e) => setCustomFrom(e.target.value)}
+                min={fromMin}
+                max={fromMax}
+                onChange={(e) => handleCustomFrom(e.target.value)}
                 className="px-1.5 py-0.5 rounded text-xs"
                 style={{
                   background: 'var(--bg-field)',
                   color: 'var(--text-primary)',
                   border: '1px solid var(--border)',
                 }}
-                title="起始日期（含）"
+                title="起始日期（含）；与结束日期最多相差一个月"
               />
               <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>~</span>
               <input
                 type="date"
                 value={customTo}
-                min={customFrom || undefined}
-                max={todayInputValue()}
-                onChange={(e) => setCustomTo(e.target.value)}
+                min={toMin}
+                max={toMax}
+                onChange={(e) => handleCustomTo(e.target.value)}
                 className="px-1.5 py-0.5 rounded text-xs"
                 style={{
                   background: 'var(--bg-field)',
                   color: 'var(--text-primary)',
                   border: '1px solid var(--border)',
                 }}
-                title="结束日期（含）"
+                title="结束日期（含）；与起始日期最多相差一个月"
               />
             </span>
           )}
-          {customError && (
-            <span
-              className="text-[10px] whitespace-nowrap"
-              style={{ color: 'var(--text-tertiary)' }}
-              title={customErrorHint}
-            >
-              {customError}
+          {/* 这不属于"校验失败"，只是还没选完：一句话说明为什么没刷新 */}
+          {rangeKey === 'custom' && (!customFrom || !customTo) && (
+            <span className="text-[10px] whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
+              请选择起止日期
             </span>
           )}
         </div>
