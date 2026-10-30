@@ -181,12 +181,12 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         : t('titleBar.knowledge.title', '个人知识库'),
       onClick: () => onOpenKnowledge?.(),
     },
-    { key: 'enclave', icon: <Boxes size={14} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '飞地：团队内网协作空间'), onClick: () => onOpenEnclave?.() },
+    { key: 'enclave', icon: <Boxes size={14} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '团队内网协作空间'), onClick: () => onOpenEnclave?.() },
     {
       key: 'portal',
       icon: <LayoutGrid size={14} />,
       label: t('titleBar.portal', '门户'),
-      title: t('titleBar.portal.title', '门户：按分组查看全部标签'),
+      title: t('titleBar.portal.title', '门户广场'),
       onClick: () => {
         // 门户是 custom 模式下的特殊页：用哨兵 id 激活
         setActiveCustomTab(PORTAL_TAB_ID);
@@ -767,7 +767,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               }}
               title={inspirationsOpen
                 ? t('titleBar.inspirations.back', '灵感库：点击返回主界面')
-                : t('titleBar.inspirations', '灵感库：本地保存的灵感 / 提示词（可编辑、可导出投稿）')}
+                : t('titleBar.inspirations', '灵感库')}
             >
               <Lightbulb size={14} />
             </button>
