@@ -2864,7 +2864,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               color: rightTab === 'stances' ? 'var(--accent)' : 'var(--text-secondary)',
               borderBottom: rightTab === 'stances' ? '2px solid var(--accent)' : '2px solid transparent',
             }}
-            title="参与者立场快照（从讨论页独立，节省空间）"
+            title="参与者立场快照"
           >
             <Scale size={11} />
             立场
@@ -2913,10 +2913,6 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                     <span>中立 <b style={{ color: 'var(--text-tertiary)' }}>{stanceStats.neutral}</b></span>
                   </span>
                 )}
-              </div>
-              {/* 说明这块信息为何不在「讨论」里（与 tab 的 tooltip 同口径） */}
-              <div className="mt-0.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                （从讨论页独立，节省空间）
               </div>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
