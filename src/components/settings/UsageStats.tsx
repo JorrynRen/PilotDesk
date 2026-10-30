@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, HelpCircle } from 'lucide-react';
 import { SettingsSection, SettingsButton } from '../settings';
 import { showToast } from '../../utils/toast';
 import {
@@ -44,16 +44,19 @@ function Bar({ value }: { value: number }) {
 /**
  * 命中率口径说明（放在命中率数字下方）。
  *
- * 页头 description 已经讲过「四桶互斥 / 缓存写只有 Anthropic 上报故恒为 0 / 命中率公式」，
- * 这里只补它**没讲**、而恰好是与模型商后台对不上时最需要的三点：
- * ① 缓存读、分母三桶都取自模型商上报值（不是估算），但**比率本身是本机算的**，展示公式可能与厂商不同；
+ * 页头 description 已经讲过「四桶互斥 / 缓存写只有 Anthropic 上报故恒为 0 / 命中率公式」。
+ * 这里只在明面上留一句「比率是本机算的」，其余三点放进 `?` 的悬停提示：
+ * ① 缓存读、分母三桶都取自模型商上报值（不是估算），展示公式可能与厂商不同；
  * ② 口径只覆盖经本应用发起的调用 —— 终端里直接跑 CLI 的用量根本不入库，厂商后台却会算进去；
  * ③ **有的通道压根不上报缓存明细**（本地 CLI、ACP 宿主，以及像 zhipu 这类经本地代理转发的端点），
  *    这类通道的缓存读恒为 0，命中率显示 0% 不代表真的没命中，而是"无从得知"。
  */
 const CACHE_RATE_NOTE =
-  '命中率由本机按上式计算的派生值（分子分母均取模型商上报值，非估算），与模型商后台的展示口径可能不同；'
-  + '且只统计经本应用发起的调用 —— 终端里直接跑 CLI 的用量不入库，而厂商后台会计入。'
+  '命中率由本机按上式计算的派生值（分子分母均取模型商上报值，非估算），与模型商后台的展示口径可能不同。';
+
+/** 命中率说明的展开部分（悬停 `?` 显示；说明太长，留在正文会把概览区撑散）。 */
+const CACHE_RATE_NOTE_DETAIL =
+  '只统计经本应用发起的调用 —— 终端里直接跑 CLI 的用量不入库，而厂商后台会计入。\n'
   + '此外，部分 Agent 不上报缓存明细（本地 CLI、ACP 宿主，以及只返回 total/input/output 的转发端点），'
   + '这类通道的缓存命中恒为 0、命中率恒显示 0%：不是"确实没命中"，而是对端没有提供这个数。';
 
@@ -433,6 +436,15 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'channel', label: '按通道' },
 ];
 
+/** 「按通道」的口径说明：明面一句，其余细节放进 `?` 的悬停提示（太长会把表格压下去）。 */
+const CHANNEL_NOTE =
+  '内置 API Agent 与本机 CLI、ACP 接入的 Agent 分别计一行（一行 = 一个接入条目，名称取该 Agent 的显示名）。';
+
+const CHANNEL_NOTE_DETAIL =
+  '同一 Agent 的两种接入方式就是两个通道，不做合并。\n'
+  + '用量一律以宿主自报的 token 数为准：宿主不上报的调用既不计次数也不计 token，'
+  + '所以纯文本类 CLI 可能整行不显示，ACP / CLI 通道的缓存命中率也可能恒为 0。';
+
 /** 维度展示名（key 与后端 `UsageDimension.key` 一一对应，顺序固定）。 */
 const DIMENSION_ORDER: DimensionKey[] = ['session', 'groupchat', 'workflow', 'knowledge'];
 const DIMENSION_META: Record<DimensionKey, { label: string; title: string }> = {
@@ -711,8 +723,12 @@ export function UsageStats() {
                 <span style={{ color: 'var(--text-primary)' }}>{fmtRate(t?.cacheHitRate ?? 0)}</span>
               </div>
               <Bar value={t?.cacheHitRate ?? 0} />
-              <div className="text-[10px] leading-relaxed mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
-                {CACHE_RATE_NOTE}
+              <div className="flex items-start gap-1 text-[10px] leading-relaxed mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                <span>{CACHE_RATE_NOTE}</span>
+                {/* ? 用 span 包一层：全局 TooltipLayer 不接管 <svg> 自身的 title */}
+                <span className="shrink-0 cursor-help mt-[1px]" title={CACHE_RATE_NOTE_DETAIL}>
+                  <HelpCircle size={11} />
+                </span>
               </div>
             </div>
           </Block>
@@ -793,11 +809,12 @@ export function UsageStats() {
             {tab === 'channel' && (
               <>
                 <GroupTable title="按通道（一个接入条目一行）" rows={summary.byChannel ?? []} />
-                <div className="text-[10px] leading-relaxed mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
-                  内置 API Agent 与本机 CLI、ACP 接入的 Agent 分别计一行（一行 = 一个接入条目，名称取该 Agent 的显示名）；
-                  同一 Agent 的两种接入方式就是两个通道，不做合并。用量一律以宿主自报的 token 数为准：
-                  宿主不上报的调用既不计次数也不计 token，所以纯文本类 CLI 可能整行不显示，
-                  ACP / CLI 通道的缓存命中率也可能恒为 0。
+                <div className="flex items-start gap-1 text-[10px] leading-relaxed mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                  <span>{CHANNEL_NOTE}</span>
+                  {/* ? 用 span 包一层：全局 TooltipLayer 不接管 <svg> 自身的 title */}
+                  <span className="shrink-0 cursor-help mt-[1px]" title={CHANNEL_NOTE_DETAIL}>
+                    <HelpCircle size={11} />
+                  </span>
                 </div>
               </>
             )}
