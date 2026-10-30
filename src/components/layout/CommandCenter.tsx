@@ -266,6 +266,10 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
     title: '常用功能',
     items: [
       {
+        term: '飞地',
+        desc: '团队内网协作空间：任务管理与任务产出自动沉淀进组织知识库，数据存放在内网主机侧；从顶栏「飞地」进入（组织与权限、团队知识库同属该模块）',
+      },
+      {
         term: '灵感库',
         desc: '收藏灵感 / 提示词（可打标签）并一键发到会话或终端；入口在右栏「灵感」页签',
       },
@@ -759,11 +763,9 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 </div>
               </div>
 
-              {/* 功能说明：展开引导时一并展示（默认折叠态不占屏） */}
-              <div
-                className="grid gap-2"
-                style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)' }}
-              >
+              {/* 功能说明：展开引导时一并展示（默认折叠态不占屏）。
+                  两组按垂直顺序排列（不再左右分栏），避免长说明在窄列里被压成多行。 */}
+              <div className="flex flex-col gap-2">
                 {GUIDE_GROUPS.map((group) => (
                   <div
                     key={group.title}
