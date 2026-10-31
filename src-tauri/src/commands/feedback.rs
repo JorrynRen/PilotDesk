@@ -53,7 +53,7 @@ pub struct FeedbackLogLine {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitFeedbackInput {
-    /// `bug` | `suggestion` | `other`
+    /// `bug` | `suggestion` | `other` | `crash`（`crash` 由崩溃上报自动带入，用户不可手选）
     pub category: String,
     pub title: String,
     pub content: String,
@@ -423,7 +423,7 @@ pub async fn submit_feedback(
     let token = require_token(state.inner()).await?;
 
     let category = input.category.trim().to_string();
-    if !matches!(category.as_str(), "bug" | "suggestion" | "other") {
+    if !matches!(category.as_str(), "bug" | "suggestion" | "other" | "crash") {
         return Err("反馈分类不合法".to_string());
     }
 

@@ -146,9 +146,11 @@ function loadDraft(): Draft {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return { ...EMPTY_DRAFT, envItems: { ...DEFAULT_ENV_ITEMS } };
     const parsed = JSON.parse(raw) as Partial<Draft>;
+    const categories: FeedbackCategory[] = ['bug', 'suggestion', 'other', 'crash'];
     return {
-      category:
-        parsed.category === 'suggestion' || parsed.category === 'other' ? parsed.category : 'bug',
+      category: categories.includes(parsed.category as FeedbackCategory)
+        ? (parsed.category as FeedbackCategory)
+        : 'bug',
       title: typeof parsed.title === 'string' ? parsed.title : '',
       content: typeof parsed.content === 'string' ? parsed.content : '',
       email: typeof parsed.email === 'string' ? parsed.email : '',
@@ -268,10 +270,15 @@ export function FeedbackDialog() {
     }
   }, [draft]);
 
-  // 预填：从通知中心进来时带入标题/明细/分类
+  // 预填：从通知中心 / 崩溃上报进来时带入标题/明细/分类
   useEffect(() => {
     if (!open) return;
-    if (preset && appliedPresetRef.current !== preset) {
+    if (!preset) {
+      // 未带预设（设置 › 关于 手动打开）：`crash` 是系统自动归类，不能沿用到人工反馈上
+      setDraft((d) => (d.category === 'crash' ? { ...d, category: 'bug' } : d));
+      return;
+    }
+    if (appliedPresetRef.current !== preset) {
       appliedPresetRef.current = preset;
       setDraft((d) => ({
         ...d,
@@ -616,7 +623,21 @@ export function FeedbackDialog() {
             {/* 表单 */}
             <div className="px-5 py-4 overflow-y-auto pd-scroll-stable flex flex-col gap-3" style={{ minHeight: 0 }}>
               {/* 分类 */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {/* 崩溃报告只读：它是崩溃现场自动带进来的归类，不让用户手选 */}
+                {draft.category === 'crash' && (
+                  <span
+                    className="pd-btn text-[11px] px-2.5 py-1 rounded-full"
+                    style={{
+                      border: '1px solid var(--accent)',
+                      backgroundColor: 'var(--accent-light)',
+                      color: 'var(--accent)',
+                    }}
+                    title="崩溃报告由应用自动归类；点选其它分类可改为普通反馈"
+                  >
+                    崩溃（自动归类）
+                  </span>
+                )}
                 {CATEGORIES.map(({ key, label }) => {
                   const active = draft.category === key;
                   return (

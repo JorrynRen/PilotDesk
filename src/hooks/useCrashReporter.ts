@@ -75,7 +75,7 @@ export function useCrashReporter() {
         if (!alive || !Array.isArray(list) || list.length === 0) return;
         const newest = list[0];
         useFeedbackStore.getState().openFeedback({
-          category: 'bug',
+          category: 'crash',
           title: `崩溃报告：${newest.summary}`.slice(0, 80),
           detail: buildCrashDetail(newest, list.length),
           // 日志聚焦到崩溃发生的那一刻附近

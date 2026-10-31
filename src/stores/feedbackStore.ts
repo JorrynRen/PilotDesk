@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 
-export type FeedbackCategory = 'bug' | 'suggestion' | 'other';
+/**
+ * 反馈分类。
+ *
+ * `crash` 不是用户可选项：由崩溃上报（`useCrashReporter`）自动带入，
+ * 平台侧据此与人工提交的问题反馈分开统计（按版本 / 平台聚合）。
+ */
+export type FeedbackCategory = 'bug' | 'suggestion' | 'other' | 'crash';
 
 /**
  * 打开反馈弹窗时携带的预填信息。
