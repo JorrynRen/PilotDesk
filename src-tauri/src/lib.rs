@@ -2604,6 +2604,30 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 进程插件：供更新安装完成后重启应用（process:allow-restart）
         .plugin(tauri_plugin_process::init())
+        // 拖拽落文件是 OS（OLE）级事件，前端只能被动接收：这里把 enter/drop/leave 落到应用日志，
+        // 用来区分"事件根本没到 webview"（窗口/权限问题）与"到了但被前端判定丢掉"（坐标问题）。
+        // over 每次鼠标移动都会触发，量大且无诊断价值，故不记。
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::DragDrop(ev) = event {
+                match ev {
+                    tauri::DragDropEvent::Enter { paths, position } => log::info!(
+                        "[dragdrop] enter paths={} at ({}, {})",
+                        paths.len(),
+                        position.x,
+                        position.y
+                    ),
+                    tauri::DragDropEvent::Drop { paths, position } => log::info!(
+                        "[dragdrop] drop paths={} at ({}, {})",
+                        paths.len(),
+                        position.x,
+                        position.y
+                    ),
+                    tauri::DragDropEvent::Leave => log::info!("[dragdrop] leave"),
+                    tauri::DragDropEvent::Over { .. } => {}
+                    _ => {}
+                }
+            }
+        })
         // dirindex 自定义协议：目录索引页（?path=<urlencoded 绝对路径>）
         .register_uri_scheme_protocol("dirindex", |_ctx, request| {
             commands::dirindex::handle_dirindex(request)
