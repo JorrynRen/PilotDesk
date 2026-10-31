@@ -364,6 +364,27 @@ pub async fn read_recent_logs(query: LogQuery) -> Result<LogPage, String> {
     })
 }
 
+/// 前端未捕获异常落盘（`window.onerror` / `unhandledrejection`）。
+///
+/// 复用应用日志同一条链路：写进 `app.log` 后，反馈弹窗的「最近错误日志」与设置里的
+/// 「检测日志」页都能看到，不另建存储。`env_logger` 的行内模块名取的是宏展开处
+/// （即本模块），所以消息前加 `[frontend]` 前缀来区分来源。
+#[tauri::command]
+pub fn log_frontend_error(level: String, message: String, stack: String) {
+    let msg = truncate_chars(&sanitize(&message), MAX_MESSAGE_CHARS);
+    let stack = truncate_chars(&sanitize(&stack), MAX_MESSAGE_CHARS);
+    let text = if stack.is_empty() {
+        format!("[frontend] {}", msg)
+    } else {
+        format!("[frontend] {}\n{}", msg, stack)
+    };
+    if level.eq_ignore_ascii_case("warn") {
+        log::warn!("{}", text);
+    } else {
+        log::error!("{}", text);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

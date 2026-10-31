@@ -6,6 +6,7 @@ import { useSessionStore } from './stores/sessionStore';
 import { useAccountStore } from './stores/accountStore';
 import { useSkillStore } from './stores/skillStore';
 import { useAgentEvent } from './hooks/useAgentEvent';
+import { useCrashReporter } from './hooks/useCrashReporter';
 import { commandDispatcher } from './plugin/CommandDispatcher';
 import { usePluginStore, applyCommandParamDefaults } from './stores/pluginStore';
 import { errorMessage } from './utils/errorMessage';
@@ -154,6 +155,9 @@ function MainLayout() {
 
 function App() {
   const location = useLocation();
+
+  // 崩溃上报（阶段一）：启动时把上次运行的崩溃预填进反馈弹窗，并把前端异常写入日志
+  useCrashReporter();
 
   // 启动时拉一次会员登录状态与已解锁能力（受限入口按它显隐；平台不可达则按未登录处理）
   useEffect(() => {

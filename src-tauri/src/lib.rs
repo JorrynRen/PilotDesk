@@ -1,6 +1,7 @@
 mod agent;
 mod api_agent;
 mod commands;
+mod crash;
 mod db;
 mod enclave;
 mod eventlog;
@@ -2567,6 +2568,11 @@ impl std::io::Write for TeeStdout {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 崩溃上报（阶段一）：接管 panic 落本地崩溃文件，并清掉过期/超量的历史文件。
+    // 必须最先安装 —— 后面 init_db / enclave 的 expect 一旦触发 panic，也要能留下现场。
+    crash::install_panic_hook();
+    crash::cleanup();
+
     // 进程启动时清除 Python 环境变量干扰
     // PilotDesk可能会受到其他app的 PYTHONHOME / PYTHONPATH / CONDA_PREFIX 等环境变量干扰，
     // 导致子进程（hermes 等 Python CLI）加载错误的 .pth / site 模块而异常退出。
@@ -2630,6 +2636,8 @@ pub fn run() {
             commands::feedback::submit_feedback,
             commands::feedback::read_feedback_env,
             commands::logs::read_recent_logs,
+            commands::logs::log_frontend_error,
+            crash::crash_take_pending,
             commands::update::check_pilotdesk_update,
             commands::update::check_agent_update,
             commands::session::list_sessions,
