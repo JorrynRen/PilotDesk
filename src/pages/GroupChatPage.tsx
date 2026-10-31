@@ -2230,20 +2230,15 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     }
   }, [saveAttachments]);
 
-  // 拖拽文件落盘
+  // 拖拽文件落盘（与会话页同一口径：不再按坐标判定"是否落在输入区"）
+  //
+  // Tauri 的 drag-drop 位置是**物理像素**、`getBoundingClientRect` 是 CSS 像素，
+  // 靠 `devicePixelRatio` 换算；缩放变化或 DevTools 打开（官方文档明确说此时位置可能不准）
+  // 会让换算偏掉 → 事件到了却判成"不在输入区"被静默丢弃，表现为"拖拽没反应、只能粘贴"。
+  // 圆桌页只有附件区消费拖拽，因此进入即高亮、落在页面任意处都收下。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-
-    const isOverInputBar = (x: number, y: number): boolean => {
-      const el = inputBarRef.current;
-      if (!el) return false;
-      const scale = window.devicePixelRatio || 1;
-      const r = el.getBoundingClientRect();
-      const lx = x / scale;
-      const ly = y / scale;
-      return lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom;
-    };
 
     (async () => {
       try {
@@ -2255,18 +2250,14 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               const name = p.split(/[\\/]/).pop() || 'file';
               return { name, kind: isImageName(name) ? 'image' : 'file' } as const;
             }));
-            setDragActive(isOverInputBar(payload.position.x, payload.position.y));
-          } else if (type === 'over') {
-            setDragActive(isOverInputBar(payload.position.x, payload.position.y));
+            setDragActive(true);
           } else if (type === 'leave') {
             setDragActive(false);
             setDraggingFiles([]);
           } else if (type === 'drop') {
-            if (isOverInputBar(payload.position.x, payload.position.y)) {
-              addFromPaths(payload.paths);
-            }
             setDragActive(false);
             setDraggingFiles([]);
+            if (payload.paths.length > 0) addFromPaths(payload.paths);
           }
         });
         if (disposed) unlisten();

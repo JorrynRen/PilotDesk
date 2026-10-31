@@ -623,20 +623,17 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     }
   }, [session, saveToSession]);
 
-  // 拖拽文件落盘（悬停 InputBar 区时高亮附件区并虚拟展示，松开后落盘）
+  // 拖拽文件落盘（悬停时高亮附件区并虚拟展示，松开后落盘）
+  //
+  // 为什么**不再按坐标判定"是否落在输入区"**：Tauri 的 drag-drop 事件给的是
+  // **物理像素**（相对 webview 左上角），而 `getBoundingClientRect` 是 CSS 像素，
+  // 中间要靠 `devicePixelRatio` 换算；缩放比例变化、DevTools 打开（官方文档明确说
+  // 此时位置可能不准）都会让换算偏掉，于是事件明明到了、`drop` 却被判成"不在输入区"
+  // 而静默丢弃 —— 表现就是"只能粘贴、拖拽没反应"。
+  // 会话页只有输入区消费拖拽，因此进入即高亮、落在页面任意处都收下。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-
-    const isOverInputBar = (x: number, y: number): boolean => {
-      const el = inputBarRef.current;
-      if (!el) return false;
-      const scale = window.devicePixelRatio || 1;
-      const r = el.getBoundingClientRect();
-      const lx = x / scale;
-      const ly = y / scale;
-      return lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom;
-    };
 
     (async () => {
       try {
@@ -651,18 +648,14 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 return { name, kind: isImageName(name) ? 'image' : 'file' } as const;
               }),
             );
-            setDragActive(isOverInputBar(payload.position.x, payload.position.y));
-          } else if (type === 'over') {
-            setDragActive(isOverInputBar(payload.position.x, payload.position.y));
+            setDragActive(true);
           } else if (type === 'leave') {
             setDragActive(false);
             setDraggingFiles([]);
           } else if (type === 'drop') {
-            if (isOverInputBar(payload.position.x, payload.position.y)) {
-              addFromPaths(payload.paths);
-            }
             setDragActive(false);
             setDraggingFiles([]);
+            if (payload.paths.length > 0) addFromPaths(payload.paths);
           }
         });
         if (disposed) unlisten();
