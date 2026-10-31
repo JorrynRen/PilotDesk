@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -17,25 +17,65 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { CustomTabHost } from './components/custom/CustomTabHost';
 import { TooltipLayer } from './components/common/TooltipLayer';
 import { useCustomTabsStore } from './stores/customTabsStore';
-import { InspirationLibraryPage } from './components/inspiration/InspirationLibraryPage';
-import { ResourceMarketPage } from './components/market/ResourceMarketPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { WorkflowPage } from './pages/WorkflowPage';
-import { GroupChatPage } from './pages/GroupChatPage';
-import { KnowledgePage } from './pages/KnowledgePage';
-import { EnclavePage } from './pages/EnclavePage';
-import { EnclaveOrgPage } from './pages/EnclaveOrgPage';
-import { EnclaveKbPage } from './pages/EnclaveKbPage';
-import { EnclaveReportPage } from './pages/EnclaveReportPage';
 import { subscribeGroupChat, useGroupChatStore } from './stores/groupChatStore';
 import { subscribeNotifications } from './stores/notificationEvents';
-import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
 import { TerminalProvider } from './TerminalProvider';
 import { useTerminal } from './TerminalManager';
 import { ImagePreview } from './components/message/ImagePreview';
 import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { FeedbackDialog } from './components/feedback/FeedbackDialog';
 import './styles/ui.css';
+
+/**
+ * 路由/模式级懒加载：这些页面只在真正进入时才下载。
+ *
+ * 冷启动只需要「壳 + 会话三栏」，下面这些页面对应的重依赖原本都会被打进首屏：
+ * 设置页（@dnd-kit）、知识库（three）、工作流编辑器、资源市集、飞地等。
+ * 拆出去之后首屏不再为「可能永远不会打开的页面」付解析成本。
+ */
+const InspirationLibraryPage = lazy(() =>
+  import('./components/inspiration/InspirationLibraryPage').then((m) => ({
+    default: m.InspirationLibraryPage,
+  })),
+);
+const ResourceMarketPage = lazy(() =>
+  import('./components/market/ResourceMarketPage').then((m) => ({ default: m.ResourceMarketPage })),
+);
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+);
+const WorkflowPage = lazy(() =>
+  import('./pages/WorkflowPage').then((m) => ({ default: m.WorkflowPage })),
+);
+const GroupChatPage = lazy(() =>
+  import('./pages/GroupChatPage').then((m) => ({ default: m.GroupChatPage })),
+);
+const KnowledgePage = lazy(() =>
+  import('./pages/KnowledgePage').then((m) => ({ default: m.KnowledgePage })),
+);
+const EnclavePage = lazy(() =>
+  import('./pages/EnclavePage').then((m) => ({ default: m.EnclavePage })),
+);
+const EnclaveOrgPage = lazy(() =>
+  import('./pages/EnclaveOrgPage').then((m) => ({ default: m.EnclaveOrgPage })),
+);
+const EnclaveKbPage = lazy(() =>
+  import('./pages/EnclaveKbPage').then((m) => ({ default: m.EnclaveKbPage })),
+);
+const EnclaveReportPage = lazy(() =>
+  import('./pages/EnclaveReportPage').then((m) => ({ default: m.EnclaveReportPage })),
+);
+const WorkflowEditorPage = lazy(() =>
+  import('./pages/WorkflowEditorPage').then((m) => ({ default: m.WorkflowEditorPage })),
+);
+
+/**
+ * 懒加载占位：本地 chunk 读取极快，不放 spinner（一闪而过的转圈比空白更扰人），
+ * 只占住布局，避免骨架先塌再撑开。
+ */
+function PageFallback() {
+  return <div className="flex-1 min-h-0" />;
+}
 
 function MainLayout() {
   // 各模式各自的右侧面板开合状态（会话/终端用 RightPanel；群聊用其页内专属右侧面板；
@@ -115,13 +155,17 @@ function MainLayout() {
               由页面内部的三栏各自圆角成面板（与其它模式观感一致）。 */}
           {isGroupChat && (
             <div className="flex-1 flex flex-col overflow-hidden">
-              <GroupChatPage rightPanelOpen={sidePanelOpen.groupchat} />
+              <Suspense fallback={<PageFallback />}>
+                <GroupChatPage rightPanelOpen={sidePanelOpen.groupchat} />
+              </Suspense>
             </div>
           )}
           {/* 工作流模式：嵌入主布局（复用工作流管理页，去除自身 TitleBar/StatusBar），全宽 */}
           {isWorkflow && (
             <div className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
-              <WorkflowPage embedded />
+              <Suspense fallback={<PageFallback />}>
+                <WorkflowPage embedded />
+              </Suspense>
             </div>
           )}
           {/* 门户标签模式：固定壳。CustomTabHost 常挂载（CSS 隐藏切换），
@@ -313,28 +357,30 @@ function App() {
       <CommandCenter />
       {/* 全局接管原生 title：统一延迟/换行/最大宽度，并保证不溢出窗口 */}
       <TooltipLayer />
-      <Routes>
-        <Route path="/" element={<MainLayout />} />
-        {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
-        <Route path="/inspirations" element={<InspirationLibraryPage />} />
-        {/* 资源市集：插件 / 工作流模板 / Agent 配置 / 灵感 的统一获取入口 */}
-        <Route path="/market" element={<ResourceMarketPage />} />
-        {/* 工作流/群聊：不再独立全屏路由，挂载后切到对应模式并回到主布局（用户感知为开关滑动） */}
-        <Route path="/workflow" element={<ModeRedirect mode="workflow" />} />
-        <Route path="/groupchat" element={<ModeRedirect mode="groupchat" />} />
-        <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
-        <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
-        {/* 知识库：独立路由（顶部组合菜单的「知识库」段进入） */}
-        <Route path="/knowledge" element={<KnowledgePage />} />
-        {/* 飞地：独立路由（顶部组合菜单的「飞地」段进入） */}
-        <Route path="/enclave" element={<EnclavePage />} />
-        {/* 飞地「组织与权限」：只读展示组织与成员快照（从飞地空态卡片进入） */}
-        <Route path="/enclave/org" element={<EnclaveOrgPage />} />
-        {/* 飞地团队知识库：任务产出自动沉淀，成员可检索 */}
-        <Route path="/enclave/kb" element={<EnclaveKbPage />} />
-        {/* 飞地团队报告：周报 / 月报与成员绩效数据（只读派生） */}
-        <Route path="/enclave/reports" element={<EnclaveReportPage />} />
-      </Routes>
+      <Suspense fallback={<PageFallback />}>
+        <Routes>
+          <Route path="/" element={<MainLayout />} />
+          {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
+          <Route path="/inspirations" element={<InspirationLibraryPage />} />
+          {/* 资源市集：插件 / 工作流模板 / Agent 配置 / 灵感 的统一获取入口 */}
+          <Route path="/market" element={<ResourceMarketPage />} />
+          {/* 工作流/群聊：不再独立全屏路由，挂载后切到对应模式并回到主布局（用户感知为开关滑动） */}
+          <Route path="/workflow" element={<ModeRedirect mode="workflow" />} />
+          <Route path="/groupchat" element={<ModeRedirect mode="groupchat" />} />
+          <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
+          <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
+          {/* 知识库：独立路由（顶部组合菜单的「知识库」段进入） */}
+          <Route path="/knowledge" element={<KnowledgePage />} />
+          {/* 飞地：独立路由（顶部组合菜单的「飞地」段进入） */}
+          <Route path="/enclave" element={<EnclavePage />} />
+          {/* 飞地「组织与权限」：只读展示组织与成员快照（从飞地空态卡片进入） */}
+          <Route path="/enclave/org" element={<EnclaveOrgPage />} />
+          {/* 飞地团队知识库：任务产出自动沉淀，成员可检索 */}
+          <Route path="/enclave/kb" element={<EnclaveKbPage />} />
+          {/* 飞地团队报告：周报 / 月报与成员绩效数据（只读派生） */}
+          <Route path="/enclave/reports" element={<EnclaveReportPage />} />
+        </Routes>
+      </Suspense>
     </TerminalProvider>
   );
 }

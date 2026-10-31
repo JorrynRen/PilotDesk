@@ -23,6 +23,18 @@ export default defineConfig(async () => ({
     // 文本替换，构建时静态内联；开发期同样可用
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(pkg.version),
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          // three 只有「知识库-图谱」用得到，却因为默认分块策略会和首屏必需的
+          // highlight.js 被并进同一个公共 chunk，结果被打包进首屏。
+          // 单独成组后它只随知识库页面按需加载。
+          groups: [{ name: "three", test: /[\\/]node_modules[\\/]three[\\/]/ }],
+        },
+      },
+    },
+  },
   server: {
     port: 1420,
     strictPort: true,
