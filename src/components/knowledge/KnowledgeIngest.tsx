@@ -127,7 +127,6 @@ export function KnowledgeIngest({
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudLoadingDocs, setCloudLoadingDocs] = useState(false);
 
-  const panelRef = useRef<HTMLDivElement>(null);
   /** 加工能力：none 时投喂不失败，只是进「待整理」 */
   const capability = useKnowledgeStore((s) => s.ingestCapability);
   const pending = useKnowledgeStore((s) => s.ingestQueue);
@@ -254,41 +253,33 @@ export function KnowledgeIngest({
    * 拖入文件先**入列**（不再当场投喂）：用户可以核对清单、填名字、勾选加工方式，
    * 再由「提交入库」真正开始 —— 之前是选完/拖进去就悄悄开始，那个按钮永远是灰的，
    * 用户以为按钮坏了，其实文件已经在处理。
+   *
+   * 不按坐标判定「是否落在投喂面板」：Tauri 的 drag-drop 位置是**物理像素**，
+   * 与 `getBoundingClientRect`（CSS 像素）之间要靠 `devicePixelRatio` 换算，
+   * 缩放变化或 DevTools 打开（官方文档明确说此时位置可能不准）会让换算偏掉 ——
+   * 事件明明到了却被判成"不在面板内"而静默丢弃。投喂页只有本面板消费拖拽，
+   * 因此进入即高亮、落在页面任意处都收下（与会话/圆桌输入区同一口径）。
    */
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-
-    const isOverPanel = (x: number, y: number): boolean => {
-      const el = panelRef.current;
-      if (!el) return false;
-      const scale = window.devicePixelRatio || 1;
-      const r = el.getBoundingClientRect();
-      const lx = x / scale;
-      const ly = y / scale;
-      return lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom;
-    };
 
     (async () => {
       try {
         unlisten = await getCurrentWebview().onDragDropEvent((event) => {
           const p = event.payload;
           if (p.type === 'enter') {
-            const over = isOverPanel(p.position.x, p.position.y);
-            setDragOver(over);
-            setDragCount(over ? p.paths.length : 0);
+            setDragOver(true);
+            setDragCount(p.paths.length);
             // 拖着文件进来必然是"要投文件"，顺手切到文件模式，反馈才跟得上
-            if (over) setMode('file');
-          } else if (p.type === 'over') {
-            setDragOver(isOverPanel(p.position.x, p.position.y));
+            setMode('file');
           } else if (p.type === 'leave') {
             setDragOver(false);
             setDragCount(0);
           } else if (p.type === 'drop') {
-            const over = isOverPanel(p.position.x, p.position.y);
             setDragOver(false);
             setDragCount(0);
-            if (over && p.paths.length > 0) {
+            if (p.paths.length > 0) {
               setMode('file');
               addFiles(p.paths);
             }
@@ -372,7 +363,6 @@ export function KnowledgeIngest({
     <div className="flex-1 flex overflow-hidden">
       {/* 左：投喂（也是拖入文件的投放区） */}
       <div
-        ref={panelRef}
         className="w-[400px] shrink-0 flex flex-col overflow-hidden p-4 gap-3"
         style={{ backgroundColor: 'var(--bg-side)' }}
       >

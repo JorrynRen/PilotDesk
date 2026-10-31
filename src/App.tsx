@@ -7,6 +7,7 @@ import { useAccountStore } from './stores/accountStore';
 import { useSkillStore } from './stores/skillStore';
 import { useAgentEvent } from './hooks/useAgentEvent';
 import { useCrashReporter } from './hooks/useCrashReporter';
+import { notifyElevationOnce } from './utils/elevation';
 import { commandDispatcher } from './plugin/CommandDispatcher';
 import { usePluginStore, applyCommandParamDefaults } from './stores/pluginStore';
 import { errorMessage } from './utils/errorMessage';
@@ -158,6 +159,11 @@ function App() {
 
   // 崩溃上报（阶段一）：启动时把上次运行的崩溃预填进反馈弹窗，并把前端异常写入日志
   useCrashReporter();
+
+  // 提权运行时 Windows 会拦掉资源管理器拖入的文件（事件到不了应用）——启动时提示一次
+  useEffect(() => {
+    void notifyElevationOnce();
+  }, []);
 
   // 启动时拉一次会员登录状态与已解锁能力（受限入口按它显隐；平台不可达则按未登录处理）
   useEffect(() => {

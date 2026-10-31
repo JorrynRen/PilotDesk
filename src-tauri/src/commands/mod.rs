@@ -25,6 +25,7 @@ pub mod org_common;
 pub mod org_credentials;
 pub mod org_share;
 pub mod permission;
+pub mod runtime;
 pub mod search;
 pub mod session;
 pub mod skills;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Library,
@@ -593,7 +593,6 @@ export function EnclaveKbPage() {
   const [dragCount, setDragCount] = useState(0);
   /** 本机模型（AI 生成用）：与团队加工能力分开判 —— 生成只把主题发给模型，不需要主机能力 */
   const [localCap, setLocalCap] = useState<IngestCapability | null>(null);
-  const ingestPanelRef = useRef<HTMLDivElement>(null);
   const modelBlocked = capability !== null && capability.canProcess === 'none';
   const aiBlocked = localCap === null || localCap.canProcess === 'none';
   const canSubmitIngest =
@@ -671,36 +670,34 @@ export function EnclaveKbPage() {
       .catch(() => setLocalCap(null));
   }, [tab, activeOrgId, activeKbId]);
 
-  /** 拖拽投喂：拖入即切到文件模式；只认投喂面板内的落点 */
+  /**
+   * 拖拽投喂：拖入即切到文件模式。
+   *
+   * 不按坐标判定「是否落在投喂面板」：Tauri 的 drag-drop 位置是**物理像素**，
+   * 与 `getBoundingClientRect`（CSS 像素）之间要靠 `devicePixelRatio` 换算，
+   * 缩放变化或 DevTools 打开都会让换算偏掉 —— 事件到了却被判成"不在面板内"而丢弃。
+   * 只在投喂页注册（其它 Tab 不消费拖拽），落在页面任意处都收下
+   * （与会话/圆桌输入区、个人知识库投喂同一口径）。
+   */
   useEffect(() => {
+    if (tab !== 'ingest') return;
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    const isOverPanel = (x: number, y: number): boolean => {
-      const el = ingestPanelRef.current;
-      if (!el) return false;
-      const scale = window.devicePixelRatio || 1;
-      const r = el.getBoundingClientRect();
-      return x / scale >= r.left && x / scale <= r.right && y / scale >= r.top && y / scale <= r.bottom;
-    };
     (async () => {
       try {
         unlisten = await getCurrentWebview().onDragDropEvent((event) => {
           const p = event.payload;
           if (p.type === 'enter') {
-            const over = isOverPanel(p.position.x, p.position.y);
-            setDragOver(over);
-            setDragCount(over ? p.paths.length : 0);
-            if (over) setIngestMode('file');
-          } else if (p.type === 'over') {
-            setDragOver(isOverPanel(p.position.x, p.position.y));
+            setDragOver(true);
+            setDragCount(p.paths.length);
+            setIngestMode('file');
           } else if (p.type === 'leave') {
             setDragOver(false);
             setDragCount(0);
           } else if (p.type === 'drop') {
-            const over = isOverPanel(p.position.x, p.position.y);
             setDragOver(false);
             setDragCount(0);
-            if (over && p.paths.length > 0) {
+            if (p.paths.length > 0) {
               setIngestMode('file');
               setFilePaths((prev) => {
                 const seen = new Set(prev);
@@ -718,7 +715,7 @@ export function EnclaveKbPage() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [tab]);
 
   const pickFiles = async () => {
     setPicking(true);
@@ -1738,7 +1735,6 @@ export function EnclaveKbPage() {
           {tab === 'ingest' && (
             <div className="flex-1 min-h-0 flex overflow-hidden">
               <div
-                ref={ingestPanelRef}
                 className="w-[400px] shrink-0 flex flex-col gap-2 p-3 overflow-y-auto"
                 style={{ backgroundColor: 'var(--bg-side)' }}
               >

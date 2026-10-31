@@ -2638,6 +2638,7 @@ pub fn run() {
             commands::logs::read_recent_logs,
             commands::logs::log_frontend_error,
             crash::crash_take_pending,
+            commands::runtime::is_process_elevated,
             commands::update::check_pilotdesk_update,
             commands::update::check_agent_update,
             commands::session::list_sessions,
