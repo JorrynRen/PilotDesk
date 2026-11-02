@@ -169,7 +169,6 @@ interface SessionState {
   deleteSession: (id: string) => Promise<void>;
   toggleArchived: () => void;
   addMessage: (msg: Message) => void;
-  updateMessage: (id: string, content: string) => Promise<void>;
   /**
    * 会话 → 工作流：导出转换后的定义与候选清单（仅预览，不落库）。
    * `tasks` 为 null/省略时由后端决定来源（会话计划 → 退化为用户消息）；
@@ -435,18 +434,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   toggleArchived: () => {
     set((state) => ({ showArchived: !state.showArchived }));
-  },
-
-  updateMessage: async (id: string, content: string) => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const updated = await invoke<Message>('update_message', { messageId: id, content });
-      set((state) => ({
-        messages: state.messages.map((m) => m.id === id ? updated : m),
-      }));
-    } catch (err) {
-      console.error('Failed to update message:', err);
-    }
   },
 
   /**

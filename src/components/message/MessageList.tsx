@@ -23,7 +23,6 @@ interface MessageListProps {
   thinkingChain?: ThinkingChainStep[];
   /** ask_user 确认块（内嵌到最后一条 assistant 消息）。 */
   confirmation?: ConfirmationBlockData | null;
-  onEditMessage?: (content: string) => void;
   onResendMessage?: (content: string) => void;
   /**
    * 搜索栏右侧的操作位（会话页放「转为工作流 / 转为群聊」）。
@@ -37,7 +36,7 @@ interface MessageListProps {
   onCloseSession?: () => void;
 }
 
-export function MessageList({ messages, session, isGenerating, streamingProgress, thinkingChain, confirmation, onEditMessage, onResendMessage, headerActions, onCloseSession }: MessageListProps) {
+export function MessageList({ messages, session, isGenerating, streamingProgress, thinkingChain, confirmation, onResendMessage, headerActions, onCloseSession }: MessageListProps) {
   const { getTheme } = useAgentRegistry();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
@@ -167,14 +166,13 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
         confirmation={isLastAssistant ? confirmation : null}
         isStreaming={isLastAssistant}
         isHighlighted={highlightedMessageId === msg.id}
-        onEdit={onEditMessage}
         onResend={onResendMessage}
         selectable={selectMode}
         selected={selectedIds.includes(msg.id)}
         onToggleSelect={toggleSelect}
       />
     );
-  }, [messages, session, thinkingChain, isGenerating, streamingProgress, confirmation, highlightedMessageId, onEditMessage, onResendMessage, selectMode, selectedIds, toggleSelect]);
+  }, [messages, session, thinkingChain, isGenerating, streamingProgress, confirmation, highlightedMessageId, onResendMessage, selectMode, selectedIds, toggleSelect]);
 
 
   if (!session) {

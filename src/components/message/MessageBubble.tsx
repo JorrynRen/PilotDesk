@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Copy, Edit3, Pencil, Bookmark, Check, User, FileText, BookPlus } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Copy, Bookmark, Check, User, FileText, BookPlus } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { linkifyUrls } from './markdownText';
@@ -11,7 +11,6 @@ import { useInspirationStore } from '../../stores/inspirationStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { elide } from '../../utils/text';
 import { showToast } from '../../utils/toast';
-import { useSessionStore } from '../../stores/sessionStore';
 import { useImagePreviewStore } from '../../stores/imagePreviewStore';
 import { type Message } from '../../types';
 import { AgentIcon } from '../common/AgentIcon';
@@ -31,7 +30,6 @@ interface MessageBubbleProps {
   streamingProgress?: string;
   /** ask_user 确认块（仅最后一条 assistant 消息内嵌渲染）。 */
   confirmation?: ConfirmationBlockData | null;
-  onEdit?: (content: string) => void;
   onResend?: (content: string) => void;
   /** 多选态：在气泡左侧显示勾选框（仅消息列表进入多选时传） */
   selectable?: boolean;
@@ -50,14 +48,10 @@ function formatTimestamp(ts: number): string {
   return `${y}/${m}/${d} ${time}`;
 }
 
-export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, streamingProgress, confirmation, onEdit, onResend, selectable, selected, onToggleSelect, hideTimestamp }: MessageBubbleProps) {
+export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, streamingProgress, confirmation, onResend, selectable, selected, onToggleSelect, hideTimestamp }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   /** 「存为知识」弹窗：把这条消息显式沉淀进某个知识库（进「待确认」队列） */
   const [saveToKb, setSaveToKb] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editContent, setEditContent] = useState('');
-  const editRef = useRef<HTMLTextAreaElement>(null);
-  const { updateMessage } = useSessionStore();
   const { getTheme, getDisplayName } = useAgentRegistry();
   const isUser = message.role === 'user';
 
@@ -111,37 +105,9 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
     showToast('已添加到灵感库', 'success');
   }, [message.content, agentType]);
 
-  const handleStartEdit = useCallback(() => {
-    setEditContent(message.content);
-    setIsEditing(true);
-    setTimeout(() => editRef.current?.focus(), 0);
-  }, [message.content]);
-
-  const handleSaveEdit = useCallback(async () => {
-    if (!editContent.trim()) return;
-    await updateMessage(message.id, editContent);
-    setIsEditing(false);
-    showToast('消息已更新', 'success');
-  }, [message.id, editContent, updateMessage]);
-
-  const handleCancelEdit = useCallback(() => {
-    setIsEditing(false);
-    setEditContent('');
-  }, []);
-
   const handleResend = useCallback(() => {
     onResend?.(message.content);
   }, [message.content, onResend]);
-
-  const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSaveEdit();
-    }
-    if (e.key === 'Escape') {
-      handleCancelEdit();
-    }
-  }, [handleSaveEdit, handleCancelEdit]);
 
   const messageMode = message.mode as keyof typeof MODE_LABELS;
   const modeColor = MODE_COLORS[messageMode];
@@ -338,29 +304,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
         <div className={isUser ? 'flex flex-col items-end w-fit max-w-full' : 'w-full'}>
           {isUser ? (
             <div className="message-bubble-user rounded-xl px-3.5 py-2.5 min-w-0 break-all" style={{ backgroundColor: 'var(--accent)', color: '#fff', ...highlightStyle }}>
-              {isEditing ? (
-                // 网格叠放：隐藏层按内容撑宽、textarea 叠在同一格里填满。
-                // textarea 的固有宽度是浏览器默认 cols（约 20 字符），放进 w-fit 气泡后
-                // 会被锁死成很窄的固定宽度，必须靠一个同字体同换行的测量层反推尺寸。
-                <div className="grid">
-                  <div
-                    className="col-start-1 row-start-1 invisible whitespace-pre-wrap break-all text-[13px] leading-relaxed"
-                    aria-hidden
-                  >
-                    {editContent || ' '}
-                  </div>
-                  <textarea
-                    ref={editRef}
-                    value={editContent}
-                    onChange={(e) => setEditContent(e.target.value)}
-                    onKeyDown={handleEditKeyDown}
-                    rows={1}
-                    className="col-start-1 row-start-1 w-full block p-0 m-0 border-0 text-[13px] leading-relaxed outline-none resize-none"
-                    style={{ color: '#fff', backgroundColor: 'transparent', minHeight: '60px' }}
-                  />
-                </div>
-              ) : (
-                <>
+              <>
                   {message.attachments && message.attachments.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-1.5">
                       {message.attachments.map((att, idx) =>
@@ -391,8 +335,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
                   {message.content && (
                     <p className="text-[13px] leading-relaxed whitespace-pre-wrap break-all m-0">{linkifyUrls(message.content)}</p>
                   )}
-                </>
-              )}
+              </>
             </div>
           ) : message.role === 'system' ? (
             (() => {
@@ -461,14 +404,6 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               <button onClick={handleCopy} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}>
                 {copied ? <Check size={11} /> : <Copy size={11} />}{copied ? '已复制' : '复制'}
               </button>
-              {isEditing ? (
-                <>
-                  <button onClick={handleSaveEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: '#22c55e' }}><Check size={11} />保存</button>
-                  <button onClick={handleCancelEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><Edit3 size={11} />取消</button>
-                </>
-              ) : onEdit && (
-                <button onClick={handleStartEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><Pencil size={11} />编辑</button>
-              )}
               <button onClick={handleSaveInspiration} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><Bookmark size={11} />收藏灵感</button>
               {message.content.trim() && (
                 <button onClick={() => setSaveToKb(true)} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }}><BookPlus size={11} />存为知识</button>

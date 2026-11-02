@@ -1148,11 +1148,6 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
 
   // ── Stable callbacks for MessageList ──
 
-  const handleEditMessage = useCallback((content: string) => {
-    dispatch({ type: 'SET_PENDING_INPUT', content });
-    showToast('消息已填入输入框，可修改后重新发送', 'info');
-  }, []);
-
   const handleResendMessage = useCallback((content: string) => {
     dispatch({ type: 'SET_PENDING_INPUT', content });
   }, []);
@@ -1301,7 +1296,6 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
                 setConfirmationCountdown(0);
               },
             } : null}
-            onEditMessage={handleEditMessage}
             onResendMessage={handleResendMessage}
           />
         )}
