@@ -170,20 +170,20 @@ export function KnowledgePage() {
                     border: '1px solid var(--border)',
                   }}
                 >
-                  {/* 选中标识：一条内缩的圆角竖条。
-                      原先用背景渐变画 3px 竖条，会被卡片的圆角裁掉首尾、并和 1px 描边拼成「[」形；
-                      改成独立的绝对定位元素后，竖条与圆角边框脱钩，读起来就是一条"线"（与会话列表同义）。 */}
+                  {/* 选中标识：主题色左侧竖条，并沿卡片圆角向内延伸（整体呈「[」形）。
+                      用 inset box-shadow 画 —— 它会跟随 border-radius 在左上/左下自然拐弯；
+                      放在独立元素而不是按钮自身，避免被全局 `button:hover` 的 box-shadow 覆盖。
+                      （背景渐变会被圆角裁掉首尾，延伸感因此出不来，已弃用。） */}
                   {active && (
                     <span
                       aria-hidden
                       style={{
                         position: 'absolute',
-                        left: 2,
-                        top: 6,
-                        bottom: 6,
-                        width: 3,
-                        borderRadius: 2,
-                        backgroundColor: 'var(--accent)',
+                        inset: 0,
+                        // 卡片是 border-box 圆角 12px，内缘即 11px，竖条要贴内缘画才不会压到描边
+                        borderRadius: 'calc(var(--radius-lg) - 1px)',
+                        boxShadow: 'inset 3px 0 0 var(--accent)',
+                        pointerEvents: 'none',
                       }}
                     />
                   )}

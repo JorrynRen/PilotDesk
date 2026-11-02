@@ -102,9 +102,9 @@ export const SessionListItem = memo(function SessionListItem({
       data-session-id={session.id}
       onClick={isEditing ? undefined : batchMode ? (e) => { e.stopPropagation(); onToggleSelect?.(session.id); } : undefined}
     >
-      <div className="flex items-start gap-2">
+      <div className="flex items-center gap-2.5">
         {batchMode && (
-          <div className="shrink-0 pt-1" onClick={(e) => { e.stopPropagation(); onToggleSelect?.(session.id); }}>
+          <div className="shrink-0" onClick={(e) => { e.stopPropagation(); onToggleSelect?.(session.id); }}>
             <div
               className="w-4 h-4 rounded border flex items-center justify-center transition-colors cursor-pointer"
               style={{
@@ -116,13 +116,10 @@ export const SessionListItem = memo(function SessionListItem({
             </div>
           </div>
         )}
-        <div className="shrink-0 flex flex-col items-center gap-1">
-          <AgentBadge agentType={session.agentType} isGenerating={isGenerating} />
-          {!isEditing && (
-            <span className="text-[9px] leading-none" style={{ color: 'var(--text-tertiary)' }}>
-              {session.messageCount}
-            </span>
-          )}
+        {/* 头像放大到 28px（原 16px 图标），并与两行文本垂直居中；
+            消息数不再挤在头像下方，见第二行右端 */}
+        <div className="shrink-0">
+          <AgentBadge agentType={session.agentType} size="lg" isGenerating={isGenerating} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
@@ -182,18 +179,28 @@ export const SessionListItem = memo(function SessionListItem({
             )}
           </div>
           {!isEditing && (
-            <>
+            <div className="flex items-center gap-2 mt-0.5 min-w-0">
               {session.lastMessagePreview && (
-                <p className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
+                <p className="text-[10px] truncate flex-1 min-w-0" style={{ color: 'var(--text-secondary)' }}>
                   {session.lastMessagePreview}
                 </p>
               )}
-
-            </>
+              {/* 消息数挂在第二行右端：它与预览同属"元信息"，
+                  既不占头像区，也不随预览长短左右抖动（ml-auto + shrink-0）。 */}
+              {session.messageCount > 0 && (
+                <span
+                  className="shrink-0 ml-auto text-[10px] tabular-nums"
+                  style={{ color: 'var(--text-tertiary)' }}
+                  title={`共 ${session.messageCount} 条消息`}
+                >
+                  {session.messageCount} 条
+                </span>
+              )}
+            </div>
           )}
         </div>
         {!isEditing && (
-          <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+          <div className="hidden group-hover:flex items-center gap-0.5 shrink-0 self-start">
             {onRename && (
               <button
                 onClick={handleStartEdit}

@@ -2453,19 +2453,18 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                   alignItems: 'stretch',
                 }}
               >
-                {/* 选中标识：内缩圆角竖条（不要背景渐变 —— 那个会被卡片圆角裁掉首尾，
-                    再和 1px 描边拼成「[」形，看着像套了个括号） */}
+                {/* 选中标识：主题色左侧竖条，并沿卡片圆角向内延伸（整体呈「[」形）。
+                    用 inset box-shadow 画 —— 跟随 border-radius 在左上/左下自然拐弯；
+                    放在独立元素上，避免被全局 `button:hover` 的 box-shadow 覆盖。 */}
                 {currentRoomId === r.id && (
                   <span
                     aria-hidden
                     style={{
                       position: 'absolute',
-                      left: 2,
-                      top: 6,
-                      bottom: 6,
-                      width: 3,
-                      borderRadius: 2,
-                      backgroundColor: 'var(--accent)',
+                      inset: 0,
+                      borderRadius: 'calc(var(--radius-lg) - 1px)',
+                      boxShadow: 'inset 3px 0 0 var(--accent)',
+                      pointerEvents: 'none',
                     }}
                   />
                 )}
