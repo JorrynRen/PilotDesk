@@ -13,7 +13,6 @@ import { usePluginStore, applyCommandParamDefaults } from './stores/pluginStore'
 import { errorMessage } from './utils/errorMessage';
 import { pluginRegistry } from './plugin/PluginRegistry';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar, NotificationCenter, CommandCenter } from './components/layout';
-import { TerminalPanel } from './components/TerminalPanel';
 import { CustomTabHost } from './components/custom/CustomTabHost';
 import { TooltipLayer } from './components/common/TooltipLayer';
 import { useCustomTabsStore } from './stores/customTabsStore';
@@ -68,6 +67,13 @@ const EnclaveReportPage = lazy(() =>
 const WorkflowEditorPage = lazy(() =>
   import('./pages/WorkflowEditorPage').then((m) => ({ default: m.WorkflowEditorPage })),
 );
+/**
+ * 终端面板：xterm 约 480 kB（未压缩），只有真正用终端的人才需要。
+ * 挂载之后由父层 CSS 隐藏/显示来保留会话内容，所以这里只在**首次进入终端模式**时挂载一次。
+ */
+const TerminalPanel = lazy(() =>
+  import('./components/TerminalPanel').then((m) => ({ default: m.TerminalPanel })),
+);
 
 /**
  * 懒加载占位：本地 chunk 读取极快，不放 spinner（一闪而过的转圈比空白更扰人），
@@ -86,7 +92,7 @@ function MainLayout() {
     terminal: true,
     groupchat: true,
   });
-  const { viewMode, setMode } = useTerminal();
+  const { viewMode, setMode, terminalEverOpened } = useTerminal();
   const rightPanelMode =
     viewMode === 'session' || viewMode === 'terminal' || viewMode === 'groupchat' ? viewMode : null;
   const rightPanelOpen = rightPanelMode ? sidePanelOpen[rightPanelMode] : false;
@@ -174,11 +180,15 @@ function MainLayout() {
             <CustomTabHost />
           </div>
           {/* 终端模式：中间终端 + 右侧面板（保留原始布局：会话列表隐藏）。
-              TerminalPanel 必须常挂载——xterm 会话 DOM/内容由组件实例持有，
-              卸载即丢失；非终端模式仅用 display:none 隐藏，切回时内容原样保留。 */}
-          <div className={`flex-1 flex flex-col overflow-hidden rounded-lg ${isTerminal ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
-            <TerminalPanel />
-          </div>
+              TerminalPanel 在**首次进入终端模式**时才挂载（xterm 不进首屏）；挂载后常驻，
+              非终端模式仅用 display:none 隐藏，切回时 xterm 会话 DOM/内容原样保留。 */}
+          {terminalEverOpened && (
+            <div className={`flex-1 flex flex-col overflow-hidden rounded-lg ${isTerminal ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
+              <Suspense fallback={<PageFallback />}>
+                <TerminalPanel />
+              </Suspense>
+            </div>
+          )}
           {isTerminal && <RightPanel isOpen={rightPanelOpen} mode="terminal" />}
           {/* 会话模式（默认）：三栏布局 */}
           {isSession && (

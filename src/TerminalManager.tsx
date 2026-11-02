@@ -13,6 +13,13 @@ export interface TerminalTabData {
 export interface TerminalContextType {
   /** Current main panel view mode */
   viewMode: ViewMode;
+  /**
+   * 是否**曾经**进入过终端模式。
+   *
+   * 终端面板（xterm）体积大，首屏不加载；一旦挂载就必须常驻（卸载会丢会话 DOM），
+   * 所以这里记「曾经打开过」，切走之后仍然保持挂载、只做 CSS 隐藏。
+   */
+  terminalEverOpened: boolean;
   /** Switch to a specific mode (workflow/session/groupchat/terminal) */
   setMode: (mode: ViewMode) => void;
   /** Switch to terminal view */
