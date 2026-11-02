@@ -174,17 +174,17 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   const assetTabs: { key: string; icon: ReactNode; label: string; title: string; onClick: () => void }[] = [
     {
       key: 'knowledge',
-      icon: <Library size={15} />,
+      icon: <Library size={16} />,
       label: t('titleBar.knowledge', '知识库'),
       title: kbPending > 0
         ? t('titleBar.knowledge.title.pending', `个人知识库（${kbPending} 条待核实）`, { count: kbPending })
         : t('titleBar.knowledge.title', '个人知识库'),
       onClick: () => onOpenKnowledge?.(),
     },
-    { key: 'enclave', icon: <Boxes size={15} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '团队内网协作空间'), onClick: () => onOpenEnclave?.() },
+    { key: 'enclave', icon: <Boxes size={16} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '团队内网协作空间'), onClick: () => onOpenEnclave?.() },
     {
       key: 'portal',
-      icon: <LayoutGrid size={15} />,
+      icon: <LayoutGrid size={16} />,
       label: t('titleBar.portal', '门户'),
       title: t('titleBar.portal.title', '门户广场'),
       onClick: () => {
@@ -506,7 +506,9 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                     }`}
                     style={{
-                      padding: '6px 10px',
+                      // 与一级 tab 同高（32px）：层级差由「分段控件的实心滑块 + 字重」表达，
+                      // 尺寸上则一起高于页内按钮（28px），避免出现"顶栏里还有更小的按钮"。
+                      padding: '7px 10px',
                       fontSize: 12,
                       lineHeight: '18px',
                       fontWeight: isActive ? 600 : 500,
