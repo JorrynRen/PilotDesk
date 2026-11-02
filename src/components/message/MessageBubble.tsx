@@ -339,14 +339,26 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
           {isUser ? (
             <div className="message-bubble-user rounded-xl px-3.5 py-2.5 min-w-0 break-all" style={{ backgroundColor: 'var(--accent)', color: '#fff', ...highlightStyle }}>
               {isEditing ? (
-                <textarea
-                  ref={editRef}
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  onKeyDown={handleEditKeyDown}
-                  className="w-full text-[13px] leading-relaxed outline-none resize-none"
-                  style={{ color: '#fff', backgroundColor: 'transparent', minHeight: '60px' }}
-                />
+                // 网格叠放：隐藏层按内容撑宽、textarea 叠在同一格里填满。
+                // textarea 的固有宽度是浏览器默认 cols（约 20 字符），放进 w-fit 气泡后
+                // 会被锁死成很窄的固定宽度，必须靠一个同字体同换行的测量层反推尺寸。
+                <div className="grid">
+                  <div
+                    className="col-start-1 row-start-1 invisible whitespace-pre-wrap break-all text-[13px] leading-relaxed"
+                    aria-hidden
+                  >
+                    {editContent || ' '}
+                  </div>
+                  <textarea
+                    ref={editRef}
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    onKeyDown={handleEditKeyDown}
+                    rows={1}
+                    className="col-start-1 row-start-1 w-full block p-0 m-0 border-0 text-[13px] leading-relaxed outline-none resize-none"
+                    style={{ color: '#fff', backgroundColor: 'transparent', minHeight: '60px' }}
+                  />
+                </div>
               ) : (
                 <>
                   {message.attachments && message.attachments.length > 0 && (
