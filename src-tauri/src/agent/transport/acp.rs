@@ -131,7 +131,9 @@ pub mod peer_method {
 
 /// 已有 `resume_id` 时如何接上对端会话（按 `initialize` 公布的能力位降级）。
 ///
-/// 优先级：`resume`（不重放）→ `load`（重放，需抑制事件）→ `new`（对端不支持恢复）。
+/// 优先级：`resume` → `load` → `new`（对端不支持恢复）。
+/// 注意"resume 不重放"只是规范期望，**不能当前提用**：hermes 两个方法都会重放历史，
+/// 调用方对两种路径都必须抑制 `session/update`（见 connect 里的 `suppress_replay`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResumePlan {
     Resume,
@@ -1047,7 +1049,7 @@ impl AgentSession for AcpSession {
             .await
             .map_err(|e| with_peer_stderr(e, &stderr_text))?;
 
-        // 对端能力位：决定既有会话走 resume（不重放）还是 load（重放，需抑制事件）。
+        // 对端能力位：既有会话优先 resume，其次 load（两者都可能重放历史，均需抑制事件）。
         // `sessionCapabilities.resume` 在 schema 里是对象（如 `{}`），也兼容布尔写法。
         let agent_caps = &init["agentCapabilities"];
         let resume_supported = agent_caps["sessionCapabilities"]["resume"]
@@ -1059,8 +1061,8 @@ impl AgentSession for AcpSession {
         let load_supported = agent_caps["loadSession"].as_bool().unwrap_or(false);
 
         // ── 4) 建/恢复会话 ──
-        // 有 resume_id 时优先 `session/resume`（不重放）；对端不支持 resume 才退回
-        // `session/load`（会重放历史，期间抑制事件）；两者都不支持只能新建。
+        // 有 resume_id 时优先 `session/resume`，对端不支持才退回 `session/load`。
+        // 两条路径都可能把历史以 `session/update` 重放一遍，期间一律抑制事件。
         let new_params = json!({ "cwd": conn.cwd, "mcpServers": [] });
         let mut resume_params = new_params.clone();
         if let Some(rid) = &conn.resume_id {
@@ -1069,6 +1071,12 @@ impl AgentSession for AcpSession {
         let plan = resume_plan(conn.resume_id.is_some(), resume_supported, load_supported);
         let resp_result = match plan {
             ResumePlan::Resume => {
+                // 不能因为方法名叫 resume 就假定"不重放"：实测 hermes 0.19 的
+                // `session/resume` 与 `session/load` 同语义，会把整段历史以内联
+                // `session/update` 重放（user/assistant 正文 + 思考 + 重建的 tool_call）。
+                // 不抑制的现场表现就是"每发一条消息，前面的消息和回复又执行/发送一遍"。
+                // 上下文由对端自己恢复，历史本应用已落库，重放一律丢弃。
+                suppress_replay.store(true, Ordering::Relaxed);
                 let first = peer
                     .request_with_timeout(
                         method::SESSION_RESUME,
@@ -1077,22 +1085,23 @@ impl AgentSession for AcpSession {
                     )
                     .await;
                 match first {
-                    Ok(v) => Ok(v),
+                    Ok(v) => {
+                        // 回放在 resume 响应前已全部送达，这里解除抑制
+                        suppress_replay.store(false, Ordering::Relaxed);
+                        Ok(v)
+                    }
                     Err(e) => {
                         // 声明支持 resume 但实际失败（版本/实现差异）：按能力退回，
                         // 不要因为恢复失败让整轮消息直接报错。
                         log::warn!("[acp] session/resume 失败，按能力退回：{}", e);
-                        if load_supported {
-                            suppress_replay.store(true, Ordering::Relaxed);
-                            let r = peer
-                                .request_with_timeout(
-                                    method::SESSION_LOAD,
-                                    resume_params.clone(),
-                                    HANDSHAKE_TIMEOUT,
-                                )
-                                .await;
-                            suppress_replay.store(false, Ordering::Relaxed);
-                            r
+                        // 抑制窗口保持到整条分支出口：回退的 load 同样会重放历史
+                        let r = if load_supported {
+                            peer.request_with_timeout(
+                                method::SESSION_LOAD,
+                                resume_params.clone(),
+                                HANDSHAKE_TIMEOUT,
+                            )
+                            .await
                         } else {
                             // 恢复失败且无 load 兜底：只能新建，本轮不再有历史上下文
                             log::warn!(
@@ -1105,7 +1114,9 @@ impl AgentSession for AcpSession {
                                 HANDSHAKE_TIMEOUT,
                             )
                             .await
-                        }
+                        };
+                        suppress_replay.store(false, Ordering::Relaxed);
+                        r
                     }
                 }
             }
@@ -1466,7 +1477,7 @@ mod tests {
     fn resume_plan_falls_back_by_capability() {
         // 首次会话（无 resume_id）一律新建
         assert_eq!(resume_plan(false, true, true), ResumePlan::New);
-        // 已有 id：resume 优先（不重放）
+        // 已有 id：resume 优先（对端支持恢复时优先用"接续"语义）
         assert_eq!(resume_plan(true, true, true), ResumePlan::Resume);
         // 不支持 resume → 退回 load（重放，调用方会抑制事件）
         assert_eq!(resume_plan(true, false, true), ResumePlan::Load);
