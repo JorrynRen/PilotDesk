@@ -452,7 +452,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                     className="relative z-10 flex items-center justify-center gap-2 rounded-md transition-colors"
                     style={{
                       // 一级 tab 要比页内按钮（28px）明显高一档：32px + 13px 字 + 16px 图标
-                      padding: '6px 13px',
+                      padding: '6px 11px',
                       fontSize: 13,
                       lineHeight: '20px',
                       color: isActive ? '#fff' : 'var(--text-secondary)',
@@ -461,7 +461,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                     title={seg.title}
                   >
                     {seg.icon}
-                    <span className="truncate max-w-[110px]">{seg.label}</span>
+                    <span className="truncate max-w-[100px]">{seg.label}</span>
                   </button>
                 );
               })}
@@ -799,8 +799,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             onClick={() => setNotificationOpen(!notificationOpen)}
             className="relative flex items-center justify-center shrink-0 rounded-lg transition-colors hover:bg-[var(--bg-tertiary)]"
             style={{
-              width: 28,
-              height: 28,
+              width: 32,
+              height: 32,
               alignSelf: 'center',
               padding: 0,
               border: 'none',
