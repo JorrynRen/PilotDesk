@@ -48,6 +48,11 @@ export interface SelectProps {
   style?: CSSProperties;
   /** 触发按钮尺寸：md（默认，与表单一致）/ sm（紧凑，工具栏与内联用）/ xs（与工具栏图标按钮齐高，h=24） */
   size?: 'md' | 'sm' | 'xs';
+  /**
+   * 触发按钮外观：field（默认，表单/工具栏的标准输入框样式）/ ghost（顶栏导航区，与相邻幽灵按钮同形）。
+   * ghost 去掉底色与描边、尺寸/字重对齐顶栏二级入口（32px 高、12px 字），配色交给 class 以便 hover 生效。
+   */
+  variant?: 'field' | 'ghost';
   title?: string;
   /** 展开方向偏好；默认 auto：下方空间不足且上方更宽裕时自动向上展开 */
   prefer?: 'auto' | 'up' | 'down';
@@ -79,6 +84,7 @@ export function Select({
   className = '',
   style,
   size = 'md',
+  variant = 'field',
   title,
   prefer = 'auto',
   panelMinWidth,
@@ -201,6 +207,8 @@ export function Select({
    * 都是 12px，只有下拉选择器是 8px —— 在 InputBar 工具栏里最明显（6 个控件 12px、它 8px）。
    */
   const radius = 'var(--radius-lg)';
+  /** ghost：无底色无描边，尺寸/字重与顶栏二级入口一致（见下方 trigger 样式） */
+  const ghost = variant === 'ghost';
 
   /** 单个选项（index 为扁平下标，决定键盘高亮与选中态） */
   const renderItem = (o: SelectOption, i: number, grouped: boolean) => (
@@ -240,15 +248,25 @@ export function Select({
         type="button"
         title={title}
         disabled={disabled}
-        className={`flex items-center justify-between gap-2 text-left ${className}`}
+        className={`flex items-center justify-between text-left ${
+          ghost
+            ? 'gap-1.5 rounded-lg transition-colors text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+            : 'gap-2'
+        } ${className}`}
         style={{
-          height: h,
-          padding: pad,
-          fontSize: fs,
-          borderRadius: radius,
-          backgroundColor: 'var(--bg-field)',
-          color: current ? 'var(--text-primary)' : 'var(--text-tertiary)',
-          border: '1px solid var(--border)',
+          // ghost 与顶栏「知识库 / 飞地 / 门户」同形：32px 高（18px 行高 + 上下 7px）、12px 字。
+          // 颜色只由 class 给 —— 行内 color 的优先级高于 `hover:text-*`，会让 hover 失效。
+          height: ghost ? 32 : h,
+          padding: ghost ? '7px 10px' : pad,
+          fontSize: ghost ? 12 : fs,
+          ...(ghost
+            ? {}
+            : {
+                borderRadius: radius,
+                backgroundColor: 'var(--bg-field)',
+                border: '1px solid var(--border)',
+                color: current ? 'var(--text-primary)' : 'var(--text-tertiary)',
+              }),
           opacity: disabled ? 0.6 : 1,
           cursor: disabled ? 'not-allowed' : 'pointer',
           ...style,

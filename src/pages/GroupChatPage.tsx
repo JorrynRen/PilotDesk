@@ -2444,20 +2444,31 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             <div key={r.id} className="relative group">
               <button
                 onClick={() => selectRoom(r.id)}
-                className="w-full text-left px-3 py-2 rounded-lg transition-colors flex flex-col"
+                className="relative w-full text-left px-3 py-2 rounded-lg transition-colors flex flex-col"
                 style={{
                   // 选中态**统一按会话列表（`SessionListItem`）的口径**：选中 = `var(--border)` 底、
-                  // 未选中 = 透明（卡片描边另给）。底色之外再给一条主题色左侧竖条 ——
-                  // 这个底在不少主题里与侧栏底太接近，只靠它分不出"我在哪儿"。
+                  // 未选中 = 透明（卡片描边另给）。
                   backgroundColor: currentRoomId === r.id ? 'var(--border)' : 'transparent',
                   border: '1px solid var(--border)',
                   alignItems: 'stretch',
-                  // 竖条同样用背景渐变画：不占布局，且不会被全局 button:hover 的 box-shadow 覆盖
-                  backgroundImage: currentRoomId === r.id
-                    ? 'linear-gradient(to right, var(--accent) 3px, transparent 3px)'
-                    : undefined,
                 }}
               >
+                {/* 选中标识：内缩圆角竖条（不要背景渐变 —— 那个会被卡片圆角裁掉首尾，
+                    再和 1px 描边拼成「[」形，看着像套了个括号） */}
+                {currentRoomId === r.id && (
+                  <span
+                    aria-hidden
+                    style={{
+                      position: 'absolute',
+                      left: 2,
+                      top: 6,
+                      bottom: 6,
+                      width: 3,
+                      borderRadius: 2,
+                      backgroundColor: 'var(--accent)',
+                    }}
+                  />
+                )}
                 <div className="flex items-center gap-1.5 text-xs pr-4" style={{ color: 'var(--text-primary)' }}>
                   <Users size={11} className="shrink-0" />
                   <span className="truncate">{r.title}</span>

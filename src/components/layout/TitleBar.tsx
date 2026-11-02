@@ -578,8 +578,9 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 onChange={(id) => openCustomTab(id)}
                 groups={customTabGroups}
                 placeholder={t('titleBar.customTabs.more', '更多')}
-                // md（34）与顶栏其余控件的放大后尺寸同档；sm 的 28 会显得像页内工具按钮
-                size="md"
+                // ghost：与左侧「知识库 / 飞地 / 门户」同组同形（32px 高、12px 字、无底色描边），
+                // 不再是表单下拉框的样子 —— 它本质上是「门户标签溢出」的一个入口。
+                variant="ghost"
                 className="shrink-0"
                 style={{ alignSelf: 'center' }}
                 panelMinWidth={180}

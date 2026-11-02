@@ -154,7 +154,7 @@ export function KnowledgePage() {
                 <button
                   key={b.id}
                   onClick={() => void useKnowledgeStore.getState().selectBase(b.id)}
-                  className="w-full text-left px-2.5 py-2 rounded-lg transition-colors"
+                  className="relative w-full text-left px-2.5 py-2 rounded-lg transition-colors"
                   style={{
                     // 卡片要「标题 / 描述 / 统计」纵向三行，但全局 button 重置把 <button> 定成了
                     // inline-flex + row + gap 4（未分层，优先级高于 Tailwind 的 flex-col 工具类），
@@ -165,16 +165,28 @@ export function KnowledgePage() {
                     gap: 0,
                     // 卡片态：未选中也要有边框，否则一堆卡片贴在侧栏底色上，边界全糊在一起。
                     // 选中态**统一按会话列表（`SessionListItem`）的口径**：选中 = `var(--border)` 底、
-                    // 未选中 = 透明（卡片描边另给）；底色之外再给一条主题色左侧竖条 ——
-                    // `--border` 底在不少主题里与侧栏底几乎同色，只靠它分不出"我在哪儿"。
+                    // 未选中 = 透明（卡片描边另给）。
                     backgroundColor: active ? 'var(--border)' : 'transparent',
                     border: '1px solid var(--border)',
-                    // 竖条用背景渐变画：不占布局（圆角处也会跟着裁切），也不会被 button:hover 覆盖
-                    backgroundImage: active
-                      ? 'linear-gradient(to right, var(--accent) 3px, transparent 3px)'
-                      : undefined,
                   }}
                 >
+                  {/* 选中标识：一条内缩的圆角竖条。
+                      原先用背景渐变画 3px 竖条，会被卡片的圆角裁掉首尾、并和 1px 描边拼成「[」形；
+                      改成独立的绝对定位元素后，竖条与圆角边框脱钩，读起来就是一条"线"（与会话列表同义）。 */}
+                  {active && (
+                    <span
+                      aria-hidden
+                      style={{
+                        position: 'absolute',
+                        left: 2,
+                        top: 6,
+                        bottom: 6,
+                        width: 3,
+                        borderRadius: 2,
+                        backgroundColor: 'var(--accent)',
+                      }}
+                    />
+                  )}
                   <div className="flex items-center gap-1.5 min-w-0">
                     <Library size={10} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                     <span className="text-xs truncate" style={{ color: 'var(--text-primary)', fontWeight: active ? 600 : 500 }}>{b.name}</span>
