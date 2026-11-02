@@ -276,14 +276,25 @@ function ParticipantAvatar({ icon, color, small, agentType }: { icon: IconName; 
   const size = small ? 10 : 13;
   // CLI 参与者优先显示该 Agent 自己的图标（与「会话模式」同一口径）；
   // 兜底是 Bot 而不是泛化图标 —— 具体挑哪种是调用方的事，这里只保证"有自己的图标就不含糊"
-  const agentIcon = icon === 'agent' && agentType ? getTheme(agentType).icon : undefined;
+  const theme = icon === 'agent' && agentType ? getTheme(agentType) : undefined;
+  const agentIcon = theme?.icon;
+  // 图片图标（file:/http）自带底板，直接按「会话模式」的消息头像渲染；再套一层圆形底色就是双层。
+  // Emoji / 文本图标没有底板，仍保留圆形底色作为底衬。
+  const isImageIcon = Boolean(agentIcon && (agentIcon.startsWith('file:') || agentIcon.startsWith('http://') || agentIcon.startsWith('https://')));
+  if (isImageIcon) {
+    return (
+      <div className={`${small ? 'w-5 h-5' : 'w-7 h-7'} shrink-0 flex items-center justify-center`}>
+        <AgentIcon icon={agentIcon} size={small ? 16 : 22} accentColor={theme?.color} fallback={<FallbackIcon size={size} />} />
+      </div>
+    );
+  }
   return (
     <div
       className={`${small ? 'w-5 h-5' : 'w-7 h-7'} rounded-full shrink-0 flex items-center justify-center overflow-hidden`}
       style={{ backgroundColor: `${color}22`, color }}
     >
       {agentIcon
-        ? <AgentIcon icon={agentIcon} size={small ? 12 : 16} accentColor={agentType ? getTheme(agentType).color : undefined} fallback={<FallbackIcon size={size} />} />
+        ? <AgentIcon icon={agentIcon} size={small ? 12 : 16} accentColor={theme?.color} fallback={<FallbackIcon size={size} />} />
         : <FallbackIcon size={size} />}
     </div>
   );

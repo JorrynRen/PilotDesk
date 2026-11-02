@@ -330,10 +330,12 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
           )}
         </div>
 
-        {/* 卡片容器：用户消息取 w-fit —— 宽度跟随内容，但底部操作键行也是它的 flex 子项，
-            会被 items-stretch 拉到同宽，于是气泡自然"最窄不小于操作键宽度"；
+        {/* 卡片容器：用户消息取 w-fit —— 宽度跟随内容。
+            这里必须是 items-end 而不是 items-stretch：底部操作键行也是这里的 flex 子项，
+            一旦拉伸对齐，短气泡会被操作键宽度撑开（表现为"最小宽度"），悬停时还会再跳一次。
+            右对齐后气泡宽度恒等于自身内容宽度，操作键行允许比气泡更宽、向左延伸。
             助手 / 系统消息仍整行，内容直接撑满容器（不再有气泡底色与内边距）。 */}
-        <div className={isUser ? 'flex flex-col items-stretch w-fit max-w-full' : 'w-full'}>
+        <div className={isUser ? 'flex flex-col items-end w-fit max-w-full' : 'w-full'}>
           {isUser ? (
             <div className="message-bubble-user rounded-xl px-3.5 py-2.5 min-w-0 break-all" style={{ backgroundColor: 'var(--accent)', color: '#fff', ...highlightStyle }}>
               {isEditing ? (
