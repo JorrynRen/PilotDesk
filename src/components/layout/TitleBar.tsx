@@ -406,11 +406,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             <div className="w-px h-4 mx-0.5" style={{ backgroundColor: 'var(--border)' }} />
             <button
               onClick={onBack || onOpenSettings}
-              className="pd-btn p-1.5 rounded transition-colors hover:opacity-80"
-              style={{ color: 'var(--text-secondary)' }}
+              className="pd-btn flex items-center justify-center shrink-0 rounded-lg transition-colors text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              style={{ width: 32, height: 32, padding: 0 }}
               title={t('titleBar.back', '返回')}
             >
-              <ArrowLeft size={17} />
+              <ArrowLeft size={18} />
             </button>
             <span className="text-[13px] font-medium pointer-events-none truncate" style={{ color: 'var(--text-primary)' }}>{titleText || t('titleBar.settings', '设置')}</span>
             {statusHint && statusHint.state !== 'idle' && (
@@ -449,13 +449,17 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                     key={seg.key}
                     ref={(el) => { segRefs.current[index] = el; }}
                     onClick={() => onModeChange(seg.key as ViewMode)}
-                    className="relative z-10 flex items-center justify-center gap-2 rounded-md transition-colors"
+                    className={`relative z-10 flex items-center justify-center gap-2 rounded-md transition-colors ${
+                      isActive
+                        ? ''
+                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                    }`}
                     style={{
                       // 一级 tab 要比页内按钮（28px）明显高一档：32px + 13px 字 + 16px 图标
                       padding: '6px 11px',
                       fontSize: 13,
                       lineHeight: '20px',
-                      color: isActive ? '#fff' : 'var(--text-secondary)',
+                      color: isActive ? '#fff' : undefined,
                       fontWeight: isActive ? 600 : 500,
                     }}
                     title={seg.title}
@@ -496,14 +500,16 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                   <button
                     key={asset.key}
                     onClick={asset.onClick}
-                    className="relative flex items-center gap-1.5 rounded-lg transition-colors"
+                    className={`relative flex items-center gap-1.5 rounded-lg transition-colors ${
+                      isActive
+                        ? 'bg-[var(--accent-light)] text-[var(--accent)]'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                    }`}
                     style={{
                       padding: '6px 10px',
                       fontSize: 12,
                       lineHeight: '18px',
-                      color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
                       fontWeight: isActive ? 600 : 500,
-                      backgroundColor: isActive ? 'var(--accent-light)' : 'transparent',
                     }}
                     title={asset.title}
                   >
@@ -541,7 +547,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                     <button
                       key={t_.id}
                       onClick={() => { setActiveCustomTab(t_.id); onModeChange('custom'); }}
-                      className="flex items-center gap-1 shrink-0 transition-colors"
+                      className={`flex items-center gap-1 shrink-0 transition-colors ${
+                        isActive
+                          ? 'bg-[var(--accent-light)] text-[var(--accent)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
+                      }`}
                       style={{
                         padding: '3px 9px',
                         fontSize: 11,
@@ -549,8 +559,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                         borderRadius: 999,
                         border: '1px solid',
                         borderColor: isActive ? 'transparent' : 'var(--border)',
-                        backgroundColor: isActive ? 'var(--accent-light)' : 'transparent',
-                        color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
                       }}
                       title={t_.url}
                     >
@@ -568,7 +576,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 onChange={(id) => openCustomTab(id)}
                 groups={customTabGroups}
                 placeholder={t('titleBar.customTabs.more', '更多')}
-                size="sm"
+                // md（34）与顶栏其余控件的放大后尺寸同档；sm 的 28 会显得像页内工具按钮
+                size="md"
                 className="shrink-0"
                 style={{ alignSelf: 'center' }}
                 panelMinWidth={180}
@@ -712,7 +721,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
           {onToggleRightPanel && (
             <button
               onClick={onToggleRightPanel}
-              className="flex items-center justify-center shrink-0 rounded-lg transition-colors hover:bg-[var(--bg-tertiary)]"
+              className={`flex items-center justify-center shrink-0 rounded-lg transition-colors ${
+                rightPanelOpen
+                  ? 'bg-[var(--accent-light)] text-[var(--accent)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
               style={{
                 width: 32,
                 height: 32,
@@ -720,8 +733,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 padding: 0,
                 border: 'none',
                 borderRadius: 8,
-                color: rightPanelOpen ? 'var(--accent)' : 'var(--text-secondary)',
-                background: rightPanelOpen ? 'var(--accent-light)' : 'transparent',
               }}
               title={rightPanelOpen ? t('titleBar.sidebar.close', '关闭侧边栏') : t('titleBar.sidebar.open', '打开侧边栏')}
             >
@@ -732,7 +743,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
           {onOpenMarket && (
             <button
               onClick={onOpenMarket}
-              className="relative flex items-center justify-center shrink-0 rounded-lg transition-colors hover:bg-[var(--bg-tertiary)]"
+              className={`relative flex items-center justify-center shrink-0 rounded-lg transition-colors ${
+                marketOpen
+                  ? 'bg-[var(--accent-light)] text-[var(--accent)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
               style={{
                 width: 32,
                 height: 32,
@@ -740,8 +755,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 padding: 0,
                 border: 'none',
                 borderRadius: 8,
-                color: marketOpen ? 'var(--accent)' : 'var(--text-secondary)',
-                background: marketOpen ? 'var(--accent-light)' : 'transparent',
               }}
               title={marketOpen
                 ? t('titleBar.market.back', '资源市集：点击返回主界面')
@@ -755,7 +768,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
           {onOpenInspirations && (
             <button
               onClick={onOpenInspirations}
-              className="relative flex items-center justify-center shrink-0 rounded-lg transition-colors hover:bg-[var(--bg-tertiary)]"
+              className={`relative flex items-center justify-center shrink-0 rounded-lg transition-colors ${
+                inspirationsOpen
+                  ? 'bg-[var(--accent-light)] text-[var(--accent)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
               style={{
                 width: 32,
                 height: 32,
@@ -763,8 +780,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 padding: 0,
                 border: 'none',
                 borderRadius: 8,
-                color: inspirationsOpen ? 'var(--accent)' : 'var(--text-secondary)',
-                background: inspirationsOpen ? 'var(--accent-light)' : 'transparent',
               }}
               title={inspirationsOpen
                 ? t('titleBar.inspirations.back', '灵感库：点击返回主界面')
@@ -777,7 +792,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
           {onOpenSettings && (
             <button
               onClick={onOpenSettings}
-              className="flex items-center justify-center shrink-0 rounded-lg transition-colors hover:bg-[var(--bg-tertiary)]"
+              className={`flex items-center justify-center shrink-0 rounded-lg transition-colors ${
+                settingsOpen
+                  ? 'bg-[var(--accent-light)] text-[var(--accent)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
               style={{
                 width: 32,
                 height: 32,
@@ -785,8 +804,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 padding: 0,
                 border: 'none',
                 borderRadius: 8,
-                color: settingsOpen ? 'var(--accent)' : 'var(--text-secondary)',
-                background: settingsOpen ? 'var(--accent-light)' : 'transparent',
               }}
               title={t('titleBar.settings', '设置')}
             >
@@ -797,7 +814,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               这样在"有模式开关"与"只剩铃铛"（编辑器页）的路由下渲染完全一致。 */}
           <button
             onClick={() => setNotificationOpen(!notificationOpen)}
-            className="relative flex items-center justify-center shrink-0 rounded-lg transition-colors hover:bg-[var(--bg-tertiary)]"
+            className={`relative flex items-center justify-center shrink-0 rounded-lg transition-colors ${
+              notificationOpen
+                ? 'bg-[var(--accent-light)] text-[var(--accent)]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+            }`}
             style={{
               width: 32,
               height: 32,
@@ -805,8 +826,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               padding: 0,
               border: 'none',
               borderRadius: 8,
-              color: notificationOpen ? 'var(--accent)' : 'var(--text-secondary)',
-              background: notificationOpen ? 'var(--accent-light)' : 'transparent',
             }}
             title={unreadCount > 0
               ? t('titleBar.notifications.unread', `通知中心（${unreadCount} 条未读）`, { count: unreadCount })
@@ -839,35 +858,32 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         />
 
         {/* Window controls：32×32 **正方形** + 8px 圆角 + 彼此 4px 间距。
-            原先做的是 32×满高（48px）的竖长条、hover 时整条铺灰 —— 在 48px 高的顶栏里显得又长又重。
-            图标改用 currentColor（颜色挂在按钮上）：原先图标写死 `text-secondary`，导致"关闭"的
-            `hover:text-white` 只变了底色、图标仍是灰的，hover 状态看起来是坏的。
+            原先做的是 32×满高（48px）的竖长条、hover 时整条铺灰 —— 在 52px 高的顶栏里显得又长又重。
+            颜色挂在按钮上（class 而非内联 style）：内联 color 会压掉 `hover:text-*`，
+            曾导致"关闭"的 hover 只变了底色、图标仍是灰的。
             shrink-0：窗口控制永不被分段控件挤压。 */}
         {tauriReady && (
           <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={handleMinimize}
-              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-black/5"
-              style={{ color: 'var(--text-secondary)' }}
+              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               title={t('titleBar.window.minimize', '最小化')}
             >
-              <Minus size={13} />
+              <Minus size={16} />
             </button>
             <button
               onClick={handleToggleMaximize}
-              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-black/5"
-              style={{ color: 'var(--text-secondary)' }}
+              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               title={isMaximized ? t('titleBar.window.restore', '还原') : t('titleBar.window.maximize', '最大化')}
             >
-              {isMaximized ? <Copy size={11} /> : <Square size={11} />}
+              {isMaximized ? <Copy size={14} /> : <Square size={14} />}
             </button>
             <button
               onClick={handleClose}
-              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
-              style={{ color: 'var(--text-secondary)' }}
+              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors text-[var(--text-secondary)] hover:bg-red-500 hover:text-white"
               title={t('titleBar.window.close', '关闭')}
             >
-              <X size={13} />
+              <X size={16} />
             </button>
           </div>
         )}
