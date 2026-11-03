@@ -328,11 +328,6 @@ const ATTRACT_RADIUS = 32;
 /** 选中描边的空隙与宽度（**屏幕像素**，不随节点大小与缩放变化） */
 const RING_GAP_PX = 3;
 const RING_STROKE_PX = 2;
-/**
- * 高亮环上的水波纹最大外扩半径（屏幕像素）。
- * 光晕环本身只有节点外 5px 左右，波纹需要比它大一圈才看得出"往外荡"。
- */
-const RING_RIPPLE_PX = 26;
 /** 节点"眨眼"的角频率（rad/s）与亮度起伏幅度 —— 这两个是**默认值**，用户可在左栏拉动条里改 */
 const TWINKLE_SPEED = 1.7;
 const TWINKLE_AMP = 0.3;
@@ -526,15 +521,11 @@ const RING_VERT = `
   uniform float uNodeWorld;
   uniform float uGapPx;
   uniform float uStrokePx;
-  uniform float uRipplePx;
   varying float vPx;
-  varying float vNodePx;
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     float pxPerWorld = uScale / max(1.0, -mv.z);
-    vNodePx = uNodeWorld * pxPerWorld;
-    // 精灵要盖住"静态环 + 外扩水波纹"：否则波纹扩到精灵边界就被裁掉
-    gl_PointSize = clamp(vNodePx + 2.0 * (uGapPx + uStrokePx + uRipplePx), 8.0, 480.0);
+    gl_PointSize = clamp(uNodeWorld * pxPerWorld + 2.0 * uGapPx + uStrokePx, 4.0, 320.0);
     vPx = gl_PointSize;
     gl_Position = projectionMatrix * mv;
   }
@@ -542,39 +533,19 @@ const RING_VERT = `
 const RING_FRAG = `
   uniform vec3 uColor;
   uniform float uStrokePx;
-  uniform float uGapPx;
-  uniform float uRipplePx;
-  uniform float uTime;
-  uniform float uMotion;
   varying float vPx;
-  varying float vNodePx;
   // 同 POINT_FRAG：自定义着色器要自己做线性 → sRGB（uColor 是 Color 转出来的线性值）
   vec3 linearToSRGB(vec3 c) {
     vec3 s = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
     return mix(c * 12.92, s, step(vec3(0.0031308), c));
   }
-  // 像素单位的环带：centerPx 为中心半径，halfW 为半宽（边缘抗锯齿）
-  float band(float r, float centerPx, float halfW) {
-    return 1.0 - smoothstep(0.0, max(halfW, 0.35), abs(r - centerPx));
-  }
   void main() {
     vec2 d = gl_PointCoord * 2.0 - 1.0;
-    if (dot(d, d) > 1.0) discard;
-    float rpx = length(d) * vPx * 0.5;
-    float nodeR = vNodePx * 0.5;
-    // ① 静态高亮环：贴节点外缘，宽度固定
-    float a = band(rpx, nodeR + uGapPx + uStrokePx * 0.5, uStrokePx * 0.5);
-    // ② 水波纹：两圈错开半周期，从高亮环向外扩散、越远越淡
-    if (uMotion > 0.5) {
-      for (int i = 0; i < 2; i++) {
-        float prog = fract(uTime * 0.2 + float(i) * 0.5);
-        float centerPx = nodeR + uGapPx + uRipplePx * prog;
-        float halfW = uStrokePx * 0.5 * (1.0 - 0.45 * prog);
-        a = max(a, band(rpx, centerPx, halfW) * (1.0 - prog) * (1.0 - prog) * 0.75);
-      }
-    }
-    if (a <= 0.005) discard;
-    gl_FragColor = vec4(linearToSRGB(uColor), a);
+    float r = length(d);
+    // 把"固定像素宽"换算成 [0,1] 的半径区间：环的外径是 vPx 像素
+    float inner = 1.0 - 2.0 * uStrokePx / max(vPx, 1.0);
+    if (r > 1.0 || r < inner) discard;
+    gl_FragColor = vec4(linearToSRGB(uColor), 1.0);
   }
 `;
 /* ────────────────────────── Three.js 现场 ────────────────────────── */
@@ -943,14 +914,11 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         uNodeWorld: { value: 4 },
         uGapPx: { value: RING_GAP_PX },
         uStrokePx: { value: RING_STROKE_PX },
-        uRipplePx: { value: RING_RIPPLE_PX },
-        uTime: { value: 0 },
-        uMotion: { value: 1 },
         uColor: { value: new THREE.Color(0x2563eb) },
       },
       vertexShader: RING_VERT,
       fragmentShader: RING_FRAG,
-      transparent: true, // 水波纹要靠 alpha 渐隐，必须走混合
+      transparent: false,
       depthWrite: false,
       depthTest: false, // 永远看得见：这是"选中反馈"，不该被别的节点挡住
     });
@@ -1372,7 +1340,6 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
       if (ctx.motion) {
         controls.update(); // ③ 相机环绕（`autoRotate` 由动效 effect 打开）
         ctx.mat.uniforms.uTime.value = now / 1000; // ④ 节点"眨眼"
-        ctx.ringMat.uniforms.uTime.value = now / 1000; // ⑤ 选中环水波纹
         ctx.dirty = true;
       }
       // ⑤ 本帧"手抖"：只在动效开、且没有补间在抢相机的时候加（渲染与拾取都用这个位姿，才不会错位）
@@ -1429,7 +1396,6 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
     // 光设它、不设 `autoRotate`，`controls.update()` 什么都不会转（曾经就这么错过一次）。
     ctx.controls.autoRotate = motionOn;
     ctx.mat.uniforms.uTwinkle.value = motionOn ? 1 : 0;
-    ctx.ringMat.uniforms.uMotion.value = motionOn ? 1 : 0;
     ctx.dirty = true;
   }, [motionOn]);
 
