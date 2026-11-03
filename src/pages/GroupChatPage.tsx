@@ -994,7 +994,7 @@ function GroupChatIntro() {
         <div className="flex flex-col gap-1.5">
           <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>要点提示</div>
           <ul className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>· 想点名某位参与者时，在输入框输入 @角色名 即可；不点名则由主持人自动调度；参与者每条发言会自动标注立场（支持 / 反对 / 中立），便于对比各方观点；</li>
+            <li>· 想点名某位参与者时，在输入框输入 @角色名 即可；不点名则由主持人自动调度；</li>
             <li>· 需要调整方向时，直接输入消息即可被主持人重新编排；手动「结束」后发送新消息可重启该会话；</li>
             <li>· 参与者包括云端模型与本地 CLI Agent（CLI Agent 使用自身能力执行，不占用内置工具）。</li>
           </ul>
