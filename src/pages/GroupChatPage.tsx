@@ -2462,23 +2462,11 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                   backgroundColor: currentRoomId === r.id ? 'var(--border)' : 'transparent',
                   border: '1px solid var(--border)',
                   alignItems: 'stretch',
+                  // 选中标识：左边框加粗成主题色（与知识库列表同一做法），
+                  // 颜色随圆角走并在拐角处汇入描边，只延伸到约 45°。
+                  ...(currentRoomId === r.id ? { borderLeft: '3px solid var(--accent)', paddingLeft: 10 } : {}),
                 }}
               >
-                {/* 选中标识：主题色左侧竖条，并沿卡片圆角向内延伸（整体呈「[」形）。
-                    用 inset box-shadow 画 —— 跟随 border-radius 在左上/左下自然拐弯；
-                    放在独立元素上，避免被全局 `button:hover` 的 box-shadow 覆盖。 */}
-                {currentRoomId === r.id && (
-                  <span
-                    aria-hidden
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      borderRadius: 'calc(var(--radius-lg) - 1px)',
-                      boxShadow: 'inset 3px 0 0 var(--accent)',
-                      pointerEvents: 'none',
-                    }}
-                  />
-                )}
                 <div className="flex items-center gap-1.5 text-xs pr-4" style={{ color: 'var(--text-primary)' }}>
                   <Users size={11} className="shrink-0" />
                   <span className="truncate">{r.title}</span>

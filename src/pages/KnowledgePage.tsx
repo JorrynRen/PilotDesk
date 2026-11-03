@@ -168,25 +168,13 @@ export function KnowledgePage() {
                     // 未选中 = 透明（卡片描边另给）。
                     backgroundColor: active ? 'var(--border)' : 'transparent',
                     border: '1px solid var(--border)',
+                    // 选中标识：直接把左边框加粗成主题色（参考「卡片左侧色条」做法）。
+                    // 颜色会跟着卡片圆角走、并在圆角处自然汇入上下描边，延伸只到约 45°；
+                    // 不再用 inset 阴影 —— 那种做法会沿上下边各铺满一个圆角半径（11px），显得过长。
+                    // paddingLeft 由 12 降到 10，抵消 3px 边框比 1px 多的 2px，内容不位移。
+                    ...(active ? { borderLeft: '3px solid var(--accent)', paddingLeft: 10 } : {}),
                   }}
                 >
-                  {/* 选中标识：主题色左侧竖条，并沿卡片圆角向内延伸（整体呈「[」形）。
-                      用 inset box-shadow 画 —— 它会跟随 border-radius 在左上/左下自然拐弯；
-                      放在独立元素而不是按钮自身，避免被全局 `button:hover` 的 box-shadow 覆盖。
-                      （背景渐变会被圆角裁掉首尾，延伸感因此出不来，已弃用。） */}
-                  {active && (
-                    <span
-                      aria-hidden
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        // 卡片是 border-box 圆角 12px，内缘即 11px，竖条要贴内缘画才不会压到描边
-                        borderRadius: 'calc(var(--radius-lg) - 1px)',
-                        boxShadow: 'inset 3px 0 0 var(--accent)',
-                        pointerEvents: 'none',
-                      }}
-                    />
-                  )}
                   <div className="flex items-center gap-1.5 min-w-0">
                     <Library size={10} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                     <span className="text-xs truncate" style={{ color: 'var(--text-primary)', fontWeight: active ? 600 : 500 }}>{b.name}</span>
