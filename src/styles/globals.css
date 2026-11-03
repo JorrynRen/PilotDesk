@@ -1323,50 +1323,33 @@ button:disabled:hover {
 }
 
 /*
- * 水波纹层：同心圆环从盘心依次向外扩散、渐隐。
- * 只动 transform + opacity —— 合成器动画、零重绘，与漂移层同一套原则。
- * 放 4 个环、每 3s 起一环、单环 12s，得到连续但缓慢的水面荡漾感。
+ * 流动层（偏心亮弧）：绕盘面中心缓慢自转 —— 盘面朝向不变，只有盘内亮纹在流动。
+ * 亮弧是透明渐变，旋转不会露出边界；纯 transform，合成器动画、零重绘。
  */
-@keyframes pd-sky-ripple {
-  0% {
-    transform: scale(0.12);
-    opacity: 0;
+@keyframes pd-arc-swirl {
+  from {
+    transform: rotate(0deg);
   }
-  14% {
-    opacity: 1;
-  }
-  72% {
-    opacity: 0.4;
-  }
-  100% {
-    transform: scale(1.05);
-    opacity: 0;
+  to {
+    transform: rotate(360deg);
   }
 }
 
-.pd-graph-sky-ripple {
+.pd-graph-sky-arc {
   position: absolute;
-  /* 与银河带同尺寸（画布 -20%），环不会被元素边界切出直边 */
   inset: -20%;
   pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  will-change: transform;
 }
 
-.pd-graph-sky-ripple span {
-  position: absolute;
-  width: 56%;
-  height: 56%;
-  border-radius: 50%;
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  box-shadow: 0 0 24px rgba(99, 102, 241, 0.1);
-  opacity: 0;
+.pd-motion .pd-graph-sky-arc {
+  animation: pd-arc-swirl 26s linear infinite;
 }
 
-.pd-motion .pd-graph-sky-ripple span {
-  animation: pd-sky-ripple 12s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
-  will-change: transform, opacity;
+/* 第二条亮弧：反向 + 更慢，与主亮弧形成差速，看起来像两条旋臂 */
+.pd-motion .pd-graph-sky-arc-alt {
+  animation-duration: 52s;
+  animation-direction: reverse;
 }
 
 /* ═══════════════════════════════════════════════════
