@@ -176,6 +176,8 @@ function GeneralSettings() {
   const [maxMemoryEntries, setMaxMemoryEntries] = useState(500);
   const [autoRunNotify, setAutoRunNotify] = useState(isAutoRunNotifyEnabled());
   const [streamIdleSecs, setStreamIdleSecs] = useState(90);
+  // 时间感知（时钟锚点）：缺省开启；'0'/'false'/'off' 视为用户显式关闭
+  const [clockAnchorEnabled, setClockAnchorEnabled] = useState(true);
 
   // 本地能力不设限：并发 / 子流程深度只受技术硬上限约束（不再是档位配额）
   const CONCURRENCY_HARD_MAX = 30;
@@ -205,6 +207,11 @@ function GeneralSettings() {
       try {
         const idle = await invoke<string | null>('get_app_setting', { key: 'api_stream_idle_secs' });
         if (idle && !Number.isNaN(parseInt(idle))) setStreamIdleSecs(parseInt(idle));
+      } catch { /* ignore */ }
+      try {
+        const clock = await invoke<string | null>('get_app_setting', { key: 'clock_anchor_enabled' });
+        const off = clock != null && ['0', 'false', 'off'].includes(clock.trim().toLowerCase());
+        setClockAnchorEnabled(!off);
       } catch { /* ignore */ }
     })();
   }, []);
@@ -253,6 +260,17 @@ function GeneralSettings() {
     try {
       await invoke('set_app_setting', { key: 'api_stream_idle_secs', value: clamped.toString() });
     } catch { /* ignore */ }
+  };
+
+  /** 时间感知开关：立即持久化，下一轮请求生效；保存失败回滚按钮状态。 */
+  const handleClockAnchorToggle = async () => {
+    const next = !clockAnchorEnabled;
+    setClockAnchorEnabled(next);
+    try {
+      await invoke('set_app_setting', { key: 'clock_anchor_enabled', value: next ? '1' : '0' });
+    } catch {
+      setClockAnchorEnabled(!next);
+    }
   };
 
   const handlePickWorkspace = async () => {
@@ -441,6 +459,36 @@ function GeneralSettings() {
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           定时或事件触发的工作流启动时，在通知中心留一条提醒。手动运行不提醒（本身已有即时反馈）；
           同一工作流 1 分钟内多次触发只提醒一次。
+        </p>
+      </SettingsSection>
+
+      {/* 时间感知（时钟锚点）：控制是否向模型注入本轮真实时间 */}
+      <SettingsSection title="时间感知（时钟锚点）">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleClockAnchorToggle}
+            className="relative rounded-full transition-colors shrink-0"
+            style={{
+              width: 36,
+              height: 20,
+              backgroundColor: clockAnchorEnabled ? '#22c55e' : 'var(--bg-field)',
+              border: '1px solid var(--border)',
+            }}
+            title={clockAnchorEnabled ? '点击关闭' : '点击开启'}
+          >
+            <div
+              className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
+              style={{ left: clockAnchorEnabled ? '18px' : '2px' }}
+            />
+          </button>
+          <span className="text-xs" style={{ color: clockAnchorEnabled ? '#22c55e' : 'var(--text-tertiary)' }}>
+            {clockAnchorEnabled ? '已开启' : '已关闭'}
+          </span>
+        </div>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          开启时，每轮请求会向模型注入本机真实时间（含时区与星期），用于正确处理「今天 / 最近 N 天 / 上周」等相对时间。
+          关闭后模型只能依赖自身训练时间或宿主 Agent 自带的时间信息，可能误判日期。
+          切换后下一轮生效；时间信息只进入模型上下文，不影响历史消息与界面展示。
         </p>
       </SettingsSection>
 

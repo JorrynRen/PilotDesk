@@ -1674,6 +1674,29 @@ impl RoomRuntime {
         Ok(self.pool.get()?)
     }
 
+    /// 本轮统一时间锚点：全局「时间感知」开关开启时取当前真实时钟，关闭时返回空串。
+    /// 每轮只取一次，主持人、参与者、执行者共用同一个值；读取失败回退开启（保持原有行为）。
+    fn round_clock_anchor(&self) -> String {
+        let enabled = self
+            .conn()
+            .map(|conn| crate::commands::app_settings::load_clock_anchor_enabled(&conn))
+            .unwrap_or(true);
+        if enabled {
+            crate::utils::current_clock_cn()
+        } else {
+            String::new()
+        }
+    }
+
+    /// 把锚点拼在正文前：锚点为空（时间感知关闭）时直接返回正文，避免产生前导空行。
+    fn with_round_clock(clock: &str, body: &str) -> String {
+        if clock.is_empty() {
+            body.to_string()
+        } else {
+            format!("{}\n\n{}", clock, body)
+        }
+    }
+
     async fn run(mut self) {
         log::info!("[GroupChat] 房间 Actor 启动: {}", self.room_id);
         self.emit(GroupChatEvent::started(&self.room_id));
@@ -2249,12 +2272,13 @@ impl RoomRuntime {
 
         // 记录用户 @ 指定的参与者，供本轮下一发言者选择消费。
         self.pending_mention = mention.filter(|m| !m.is_empty()).map(|m| m.to_string());
-        // 记录用户最新指令（v3.4ap：拼接当前真实时钟锚点），供 Director 选人/审阅时优先服务
-        // 用户最新要求，并正确处理相对时间表达。仅作用于 LLM 上下文，不影响落库原文与展示。
+        // 记录用户最新指令（受「时间感知」开关控制：开启时拼接当前真实时钟锚点），供 Director
+        // 选人/审阅时优先服务用户最新要求，并正确处理相对时间表达。仅作用于 LLM 上下文，
+        // 不影响落库原文与展示。
         // 本轮统一时钟锚点：只在这里取一次，主持人、参与者、执行者此后共用同一个值，
         // 从根上消除"各自取时导致的时间不一致"。
-        self.round_clock = crate::utils::current_clock_cn();
-        self.last_user_directive = format!("{}\n\n{}", self.round_clock, content);
+        self.round_clock = self.round_clock_anchor();
+        self.last_user_directive = Self::with_round_clock(&self.round_clock, content);
         user_msg
     }
 
@@ -2291,13 +2315,15 @@ impl RoomRuntime {
         // v3.4at：初始目标不再直接复制用户消息原文——由阶段A（目标确认门）先理解整理、
         // 按需向用户确认后，topic 才落位为主持人整理后的总目标。用户原文由消息历史/记忆承载。
 
-        // 用户消息拼接当前真实时钟锚点（v3.4ap）：Director 编排（意图分类/kickoff/replan）
-        // 处理"今天/最近N天"等相对时间时以真实时钟为准。仅作用于编排链路，不影响落库与展示。
-        // 兜底：极端情况下（指令未经 `persist_user_directive` 进入）仍取一次，保证不缺锚点
+        // 用户消息拼接当前真实时钟锚点（受「时间感知」开关控制）：Director 编排
+        // （意图分类/kickoff/replan）处理"今天/最近N天"等相对时间时以真实时钟为准。
+        // 仅作用于编排链路，不影响落库与展示。
+        // 兜底：极端情况下（指令未经 `persist_user_directive` 进入）仍取一次；
+        // 开关关闭时取到空串，后续拼接不产生前导空行。
         if self.round_clock.is_empty() {
-            self.round_clock = crate::utils::current_clock_cn();
+            self.round_clock = self.round_clock_anchor();
         }
-        let content_llm = format!("{}\n\n{}", self.round_clock, content);
+        let content_llm = Self::with_round_clock(&self.round_clock, content);
         let content: &str = &content_llm;
 
         // 意图判定：首轮/目标变更 → 全量编排；refine → 对账式重排（可删减/重分配/新增）。
@@ -5506,8 +5532,8 @@ impl RoomRuntime {
             self.rules.reset();
         } else {
             // 确认回复同样开启新一轮：刷新锚点，后续主持人/参与者共用
-            self.round_clock = crate::utils::current_clock_cn();
-            let content_llm = format!("{}\n\n{}", self.round_clock, reply_content);
+            self.round_clock = self.round_clock_anchor();
+            let content_llm = Self::with_round_clock(&self.round_clock, reply_content);
             self.last_user_directive = content_llm.clone();
             self.after_user_directive(&content_llm, &resp_msg).await;
         }

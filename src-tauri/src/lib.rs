@@ -473,15 +473,16 @@ async fn agent_send_message_with_config(
         .await;
     }
 
-    // ── CLI / ACP 会话：本轮输入同样前置真实时钟锚点 ──
-    // 与 API 路径共用 `with_clock_anchor`（同一个实现、同一种格式）：时钟只进本轮送入
-    // 模型的内容，不写库、不回放历史，因此不区分接入方式、也不区分 Agent 身份。
-    let message = crate::utils::with_clock_anchor(&message);
-
-    // ── CLI Agent 路径（原有逻辑）──
+    // ── CLI / ACP 会话：时钟锚点按全局开关决定；关闭时本轮正文原样发送（不带标签）──
+    // 宿主按自身回合结构区分用户消息，`<user_request>` 在 CLI/ACP 链路没有边界语义。
+    // 时钟只进本轮送入模型的内容，不写库、不回放历史。
     let conn = state
         .get_conn()
         .map_err(|e| format!("数据库连接失败: {}", e))?;
+    let include_clock = crate::commands::app_settings::load_clock_anchor_enabled(&conn);
+    let message = crate::utils::with_clock_anchor(&message, include_clock);
+
+    // ── CLI Agent 路径（原有逻辑）──
     // `agent_session_id` 缺省时以库为准：调用方可能持有一份过期的会话副本
     // （典型场景：刚导入宿主会话——绑定只写进了库，前端内存里还是空）。此时若按
     // 缺省值走 `session/new`，既丢掉上下文，回传的新 id 还会把原绑定覆盖掉。
@@ -1747,8 +1748,9 @@ async fn run_api_agent_body(
     if !file_note.is_empty() {
         user_body.push_str(&file_note);
     }
-    // 统一走 `with_clock_anchor`：时钟锚点与 `<user_request>` 边界的唯一实现
-    let user_content = crate::utils::with_clock_anchor(&user_body);
+    // API 会话：`<user_request>` 边界恒有，时钟按全局开关追加
+    let include_clock = crate::commands::app_settings::load_clock_anchor_enabled(&conn);
+    let user_content = crate::utils::wrap_user_request(&user_body, include_clock);
     messages.push(ChatMessage::user_with_images(&user_content, images));
 
     // 5.1 滑动窗口兜底（跳过 system/summary，仅处理超长单条消息）

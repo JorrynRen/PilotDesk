@@ -49,6 +49,22 @@ pub fn load_stream_idle_secs(conn: &rusqlite::Connection) -> u64 {
     }
 }
 
+/// 时间感知（时钟锚点）开关：缺省启用（'1'）；置 '0'（兼容 'false'/'off'）即用户显式关闭。
+/// 关闭后不再向模型注入当前真实时间，API 会话仍保留 `<user_request>` 边界标签，
+/// CLI / ACP 会话则整体原样发送（不产生标签）。
+pub const CLOCK_ANCHOR_ENABLED_KEY: &str = "clock_anchor_enabled";
+
+/// 读取时间感知开关：缺省、读取失败、非法值一律回退开启（保持原有行为）。
+pub fn load_clock_anchor_enabled(conn: &rusqlite::Connection) -> bool {
+    match get_setting(conn, CLOCK_ANCHOR_ENABLED_KEY) {
+        Ok(Some(v)) => !matches!(
+            v.trim().to_lowercase().as_str(),
+            "0" | "false" | "off"
+        ),
+        _ => true,
+    }
+}
+
 /// 「按作用域禁用技能」配置键（值为此文件的 `SkillScopeDisabled` JSON）。
 ///
 /// 语义（P2-2b 阶段一）：该禁用集只决定技能目录**是否向模型披露**
@@ -118,6 +134,8 @@ const SETTING_DEFAULTS: &[(&str, &str)] = &[
     (crate::api_agent::memory_intent::SETTING_ENABLED, "1"),
     // 意图路由请求超时（秒）：与 DEFAULT_ROUTE_TIMEOUT_SECS 同值。
     (crate::api_agent::memory_intent::SETTING_TIMEOUT_SECS, "4"),
+    // 时间感知（时钟锚点）：缺省启用。
+    (CLOCK_ANCHOR_ENABLED_KEY, "1"),
 ];
 
 /// 返回某设置的代码默认值（未登记键返回 None）。
@@ -202,6 +220,24 @@ mod tests {
         delete_setting(&conn, SKILL_SCOPE_DISABLED_KEY).unwrap();
         let loaded = load_skill_scope_disabled(&conn);
         assert!(loaded.session.is_empty() && loaded.groupchat.is_empty());
+    }
+
+    /// 时间感知开关：缺省开启、兼容三种关闭写法、其余值一律回退开启。
+    #[test]
+    fn clock_anchor_enabled_default_and_off_values() {
+        let conn = mem_conn();
+        // 键缺失 → 开启（保持原有时间感知行为）。
+        assert!(load_clock_anchor_enabled(&conn));
+        // 显式关闭的三种兼容写法。
+        for v in ["0", "false", "off", " FALSE "] {
+            set_setting(&conn, CLOCK_ANCHOR_ENABLED_KEY, v).unwrap();
+            assert!(!load_clock_anchor_enabled(&conn), "value={v} 应视为关闭");
+        }
+        // 其余值（含空串、非法值）一律回退开启。
+        for v in ["1", "", "nonsense"] {
+            set_setting(&conn, CLOCK_ANCHOR_ENABLED_KEY, v).unwrap();
+            assert!(load_clock_anchor_enabled(&conn), "value={v} 应视为开启");
+        }
     }
 
     /// 两平面判定：DB 无值/等于默认 → 默认；用户改值 → 自定义；未登记默认的键落库即自定义。

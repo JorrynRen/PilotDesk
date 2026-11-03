@@ -60,20 +60,67 @@ pub fn current_clock_cn() -> String {
     )
 }
 
-/// 给**本轮用户输入**前置真实时钟锚点，并标出本轮指令边界。
+/// 给**本轮用户输入**前置真实时钟锚点（可选），并标出本轮指令边界。
 ///
-/// 全仓唯一的注入实现：API 会话、CLI 会话、ACP 会话都走这里，因此任何接入方式看到的
-/// “现在”都来自同一处、同一格式，不再按场景各拼一份。
+/// 用于 CLI / ACP 会话：宿主按自身回合结构区分用户消息，`<user_request>` 在链路里没有
+/// 边界语义；关闭时间感知时**整体原样返回**（不追加时钟、也不追加标签），避免多轮对话里
+/// 往宿主历史累积大量无用标签。
 ///
 /// 只用于送入模型的本轮输入，**不得写库、也不得回放历史**：历史里带实时时钟会让同一条
 /// 逻辑消息随秒漂移、破坏前缀缓存（群聊记忆层已因同一原因撤掉渲染期注入）。
-pub fn with_clock_anchor(body: &str) -> String {
-    format!(
-        "{}\n\n<user_request>\n{}\n</user_request>",
-        current_clock_cn(),
-        body
-    )
+pub fn with_clock_anchor(body: &str, include_clock: bool) -> String {
+    if include_clock {
+        format!(
+            "{}\n\n<user_request>\n{}\n</user_request>",
+            current_clock_cn(),
+            body
+        )
+    } else {
+        body.to_string()
+    }
+}
+
+/// API 会话的本轮用户输入：`<user_request>` 边界**恒有**，时钟按开关追加。
+///
+/// API 链路的历史消息以原文回放、不带任何标记，唯一带标签的就是本轮请求；标签因此不可
+/// 随开关移除，否则模型会把历史里已处理过的指令当成新一轮请求。
+pub fn wrap_user_request(body: &str, include_clock: bool) -> String {
+    let envelope = format!("<user_request>\n{}\n</user_request>", body);
+    if include_clock {
+        format!("{}\n\n{}", current_clock_cn(), envelope)
+    } else {
+        envelope
+    }
 }
 pub mod market;
 pub mod process;
 pub mod platform;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// API 会话：`<user_request>` 边界恒有，时钟按开关追加。
+    #[test]
+    fn wrap_user_request_keeps_envelope_when_clock_off() {
+        let body = "修复登录问题";
+        let without_clock = wrap_user_request(body, false);
+        assert!(!without_clock.contains("【当前真实时钟】"));
+        assert_eq!(without_clock, "<user_request>\n修复登录问题\n</user_request>");
+
+        let with_clock = wrap_user_request(body, true);
+        assert!(with_clock.contains("【当前真实时钟】"));
+        assert!(with_clock.contains("<user_request>\n修复登录问题\n</user_request>"));
+    }
+
+    /// CLI / ACP 会话：关闭时整体原样（不带标签）；开启时维持「时钟 + 标签」。
+    #[test]
+    fn with_clock_anchor_returns_body_verbatim_when_clock_off() {
+        let body = "修复登录问题";
+        assert_eq!(with_clock_anchor(body, false), body);
+
+        let with_clock = with_clock_anchor(body, true);
+        assert!(with_clock.contains("【当前真实时钟】"));
+        assert!(with_clock.contains("<user_request>\n修复登录问题\n</user_request>"));
+    }
+}
