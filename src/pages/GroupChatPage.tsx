@@ -984,7 +984,7 @@ function GroupChatIntro() {
         <div className="flex flex-col gap-1.5">
           <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>快速开始</div>
           <ol className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>1. 点击左上角圆桌列表顶部的「+」，填写圆桌标题与目标（可直接粘贴需求），选择主持人模型与参与者（可留空由主持人自动组建）；</li>
+            <li>1. 点击左上角圆桌列表顶部的「+」，填写圆桌标题与目标，选择主持人模型与参与者（可留空由主持人自动组建）；</li>
             <li>2. 主持人理解目标后自动编排任务与议程，有歧义时会向你发起确认（确认项可多选、可选填补充内容）；</li>
             <li>3. 讨论进行中可直接发送消息插话/调整方向，主持人/其他参与者的推理与工具调用可在「实时活动」与思维链中查看；</li>
             <li>4. 产物统一写入右侧面板指定的产物目录；任务结束后可导出为工作流复用。</li>
@@ -994,7 +994,7 @@ function GroupChatIntro() {
         <div className="flex flex-col gap-1.5">
           <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>要点提示</div>
           <ul className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>· 发言需先声明「立场：支持 / 反对 / 中立」；提及参与者一律使用 [@id]；</li>
+            <li>· 想点名某位参与者时，在输入框输入 @角色名 即可；不点名则由主持人自动调度；参与者每条发言会自动标注立场（支持 / 反对 / 中立），便于对比各方观点；</li>
             <li>· 需要调整方向时，直接输入消息即可被主持人重新编排；手动「结束」后发送新消息可重启该会话；</li>
             <li>· 参与者包括云端模型与本地 CLI Agent（CLI Agent 使用自身能力执行，不占用内置工具）。</li>
           </ul>
