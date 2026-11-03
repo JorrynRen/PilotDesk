@@ -138,7 +138,7 @@ function readBackdropPref(): BackdropPref {
  *   · dim    ：会漂移的**细尘**。想无限滚动只能平铺，所以 tile 故意做得很小、点很密
  *              （120 / 240 两种周期，每 tile 8~18 颗 0.4~1.3px 微粒）。密度足够高时
  *              看到的是噪点，不是格子。
- *   · nebula ：**银河带**。外晕 + 盘面 + 内侧亮带 + 偏心亮弧 + 亮核（全部是平滑椭圆，
+ *   · nebula ：**银河带**。外晕 + 盘面 + 内侧亮带 + 亮核（全部是平滑椭圆，
  *              不出现点状亮斑），再叠一个 24°~34° 的随机倾角，看起来就是一条斜着铺开的
  *              银河，节点正好落在盘面中央。配合 CSS 的 opacity + scale 循环做"呼吸"。
  *   · bright ：亮星，**不平铺、也不漂移**。每颗星铺满整块单独定位，位置真正随机；
@@ -148,8 +148,7 @@ function makeSkyStyle(): {
   dim: CSSProperties;
   bright: CSSProperties;
   nebula: CSSProperties;
-  arc: CSSProperties;
-  arc2: CSSProperties;
+  ripple: CSSProperties;
   nebulaTilt: number;
 } {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
@@ -169,7 +168,7 @@ function makeSkyStyle(): {
   addDust(240, 16, 0.35, 0.8);
   addDust(SKY_DRIFT_PX, 34, 0.4, 1);
 
-  // ── 银河带：外晕 + 盘面 + 内侧亮带 + 偏心亮弧 + 亮核 ──
+  // ── 银河带：外晕 + 盘面 + 内侧亮带 + 亮核 ──
   //
   // 盘面是一条很扁的椭圆（横 44% / 纵 15% 是**半径**），圆心略随机；倾角交给外层 wrapper，
   // 取值范围 24°~34°：太小看不出"盘"的透视，太大就要更多余量。
@@ -210,28 +209,15 @@ function makeSkyStyle(): {
   ];
 
   /**
-   * 流动层：偏心亮弧。**单独成层**，绕盘面中心缓慢旋转 —— 盘面朝向（倾角）保持不动，
-   * 只有盘内这一条亮纹在绕中心流动，视觉上像旋臂在转。
-   *
-   * 为什么不做整条盘面的旋转：那会让倾角全程变化（经过水平/竖直），并且更陡时这一层
-   * 会在画布角上被裁出缺角线。亮弧本身是透明渐变，旋转不会露出任何边界。
+   * 水波纹层：**贴银河盘面亮环**向外扩散，而不是另铺一层与盘面无关的整块圆环。
+   * 与盘面共用同一个中心与椭圆 `radius()`，所以透视、倾角完全一致；
+   * 剖面是一条窄亮带（峰值 72%），扩起来就像水面上一圈圈荡开的涟漪。
    */
-  // 亮弧要**明显在动**：圆心离盘心远一点（8%~12%），自身收小一点，
-  // 这样旋转时看到的是"亮块在绕着中心走"，而不是一条对称的椭圆在原地微微转。
-  const arcCenter = `${(cx + rand(8, 12)).toFixed(1)}% ${(cy + rand(-4, 4)).toFixed(1)}%`;
-  const arc: CSSProperties = {
-    backgroundImage: `radial-gradient(${radius(18, 7)} at ${arcCenter}, ${RING.map(([at, f]) => stop(f, at)).join(', ')})`,
-    backgroundSize: '100% 100%',
-    backgroundRepeat: 'no-repeat',
-  };
-
-  /**
-   * 第二条亮弧：更细、更长、更淡，**反向且更慢**地绕中心转（两条差速 = 旋臂感）。
-   * 圆心偏在盘面另一侧，避免与第一条同步重叠。
-   */
-  const arc2Center = `${(cx - rand(8, 12)).toFixed(1)}% ${(cy + rand(-4, 4)).toFixed(1)}%`;
-  const arc2: CSSProperties = {
-    backgroundImage: `radial-gradient(${radius(22, 6)} at ${arc2Center}, ${RING.map(([at, f]) => stop(f * 0.7, at)).join(', ')})`,
+  const RIPPLE_BAND: Array<[number, number]> = [
+    [0, 0], [52, 0], [62, 0.22], [72, 1], [80, 0.4], [90, 0.08], [100, 0],
+  ];
+  const ripple: CSSProperties = {
+    backgroundImage: `radial-gradient(${radius(46, 18)} at ${center}, ${RIPPLE_BAND.map(([at, f]) => stop(f, at)).join(', ')})`,
     backgroundSize: '100% 100%',
     backgroundRepeat: 'no-repeat',
   };
@@ -257,8 +243,7 @@ function makeSkyStyle(): {
       backgroundRepeat: 'repeat',
     },
     nebula,
-    arc,
-    arc2,
+    ripple,
     // 倾角避开两端：太接近 0° 或 90° 都看不出"盘面"的透视，24°~34° 最像倾斜的银河
     nebulaTilt: (Math.random() < 0.5 ? -1 : 1) * rand(24, 34),
     bright: {
@@ -2050,10 +2035,16 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               aria-hidden
               style={{ transform: `rotate(${sky.nebulaTilt.toFixed(1)}deg)` }}
             >
-              <div className="pd-graph-sky-nebula" style={sky.nebula} />
-              {/* 流动层：两条偏心亮弧差速反向旋转（盘面朝向不变） */}
-              <div className="pd-graph-sky-arc" style={sky.arc} />
-              <div className="pd-graph-sky-arc pd-graph-sky-arc-alt" style={sky.arc2} />
+              <div className="pd-graph-sky-nebula" style={sky.nebula}>
+                {/* 水波纹：三圈贴盘面亮环的涟漪，错相位连续外扩（替代原先几乎看不见的旋臂自转） */}
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className="pd-graph-sky-ripple"
+                    style={{ ...sky.ripple, animationDelay: `${(i * 3).toFixed(1)}s` }}
+                  />
+                ))}
+              </div>
             </div>
 
             {/* 静态层：亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}

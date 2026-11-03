@@ -1323,33 +1323,37 @@ button:disabled:hover {
 }
 
 /*
- * 流动层（偏心亮弧）：绕盘面中心缓慢自转 —— 盘面朝向不变，只有盘内亮纹在流动。
- * 亮弧是透明渐变，旋转不会露出边界；纯 transform，合成器动画、零重绘。
+ * 水波纹层（贴银河盘面亮环）：三圈窄亮环各自缩放外扩、渐隐。
+ * 椭圆图形由 JS 生成（与盘面同中心、同透视、同倾角），这里只动 transform + opacity，
+ * 合成器动画、零重绘。
  */
-@keyframes pd-arc-swirl {
-  from {
-    transform: rotate(0deg);
+@keyframes pd-galaxy-ripple {
+  0% {
+    transform: scale(0.55);
+    opacity: 0;
   }
-  to {
-    transform: rotate(360deg);
+  12% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.34;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
   }
 }
 
-.pd-graph-sky-arc {
+.pd-graph-sky-ripple {
   position: absolute;
-  inset: -20%;
+  inset: 0;
   pointer-events: none;
-  will-change: transform;
+  opacity: 0;
 }
 
-.pd-motion .pd-graph-sky-arc {
-  animation: pd-arc-swirl 26s linear infinite;
-}
-
-/* 第二条亮弧：反向 + 更慢，与主亮弧形成差速，看起来像两条旋臂 */
-.pd-motion .pd-graph-sky-arc-alt {
-  animation-duration: 52s;
-  animation-direction: reverse;
+.pd-motion .pd-graph-sky-ripple {
+  animation: pd-galaxy-ripple 9s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+  will-change: transform, opacity;
 }
 
 /* ═══════════════════════════════════════════════════
