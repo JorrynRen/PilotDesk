@@ -13,7 +13,7 @@ interface Props {
   variant: 'mini' | 'full';
   selectedId?: string | null;
   onSelect?: (task: GroupChatTask) => void;
-  onOpenFull?: () => void;
+  onOpenFull?: (task: GroupChatTask) => void;
   /** 全屏图的缩放倍数（0.5–2.0）；缩略图不使用。 */
   scale?: number;
 }
@@ -128,11 +128,11 @@ export function TaskDependencyGraph({ tasks, variant, selectedId, onSelect, onOp
             role="button"
             tabIndex={0}
             aria-label={`T${task.taskNo} ${task.description}，${phase === 'finished' ? '已结束' : phase === 'running' ? '执行中' : phase === 'ready' ? '就绪' : '等待'}`}
-            onClick={() => (compact ? onOpenFull?.() : onSelect?.(task))}
+            onClick={() => (compact ? onOpenFull?.(task) : onSelect?.(task))}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                if (compact) onOpenFull?.();
+                if (compact) onOpenFull?.(task);
                 else onSelect?.(task);
               }
             }}

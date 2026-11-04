@@ -1736,7 +1736,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   }, []);
 
   /** 打开拓扑浮层：重置缩放与最大化，避免上次状态残留。 */
-  const openGraph = useCallback(() => {
+  const openGraph = useCallback((task?: GroupChatTask) => {
+    setGraphSelectedId(task?.id ?? null);
     setGraphScale(1);
     setGraphMaximized(false);
     setGraphDetailWidth(260);
@@ -3231,7 +3232,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       type="button"
                       className="flex items-center gap-0.5 transition-colors hover:opacity-80"
                       style={{ color: 'var(--accent)' }}
-                      onClick={openGraph}
+                      onClick={() => openGraph()}
                       title="打开依赖拓扑图"
                     >
                       <Maximize2 size={9} />
