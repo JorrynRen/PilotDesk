@@ -5743,11 +5743,12 @@ impl RoomRuntime {
             // 重置收敛计数，避免确认后过早收敛。
             self.rules.reset();
         } else {
-            // 确认回复同样开启新一轮：刷新锚点，后续主持人/参与者共用
+            // 确认回复同样开启新一轮：刷新锚点，后续主持人/参与者共用。
             self.round_clock = self.round_clock_anchor();
-            let content_llm = Self::with_round_clock(&self.round_clock, reply_content);
-            self.last_user_directive = content_llm.clone();
-            self.after_user_directive(&content_llm, &resp_msg).await;
+            self.last_user_directive = Self::with_round_clock(&self.round_clock, reply_content);
+            // 只把回复原文交给编排链路：after_user_directive 内部会统一拼接时钟锚点，
+            // 若这里再传已拼接的 content_llm，会在提示词/提示消息里出现两遍时间锚点。
+            self.after_user_directive(reply_content, &resp_msg).await;
         }
     }
 
