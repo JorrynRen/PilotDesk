@@ -1514,8 +1514,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [roomHistory, setRoomHistory] = useState<RoomHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyUndoingId, setHistoryUndoingId] = useState<number | null>(null);
-  /** 右侧面板当前 tab：讨论（参与者/立场/任务）或文件历史。 */
-  const [rightTab, setRightTab] = useState<'overview' | 'stances' | 'files'>('overview');
+  /** 右侧面板当前 tab：讨论（产物目录/参与者）、立场、任务、文件。 */
+  const [rightTab, setRightTab] = useState<'overview' | 'stances' | 'tasks' | 'files'>('overview');
   /** 立场快照条目展开集合（participantId → 展开）。默认折叠只显示一行。 */
   const [expandedStances, setExpandedStances] = useState<Set<string>>(() => new Set());
   /** 任务条目展开集合（taskId → 展开）。默认折叠只显示一行。 */
@@ -2890,7 +2890,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         )}
       </main>
 
-      {/* ── 右：讨论（参与者 + 立场 + 任务） / 文件历史（tab 切换）；显隐由外层折叠按钮控制 ── */}
+      {/* ── 右：讨论（产物目录 + 参与者）/ 立场 / 任务 / 文件，tab 切换；显隐由外层折叠按钮控制 ── */}
       {rightPanelOpen && (
         <aside
           className="w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg"
@@ -2899,7 +2899,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           // 这样右栏整块与会话页右栏一致，也不会因为正文填 --bg-primary 而看着像"露底"。
           style={{ backgroundColor: 'var(--bg-side)' }}
         >
-        {/* Tab 切换栏：讨论 / 文件历史（h-10 与消息窗口顶部栏、左栏列表头部等高） */}
+        {/* Tab 切换栏：讨论 / 立场 / 任务 / 文件（h-10 与消息窗口顶部栏、左栏列表头部等高） */}
         <div
           className="flex h-10 shrink-0"
           // 面板级标题行：与右栏同底色（不填色），只靠 1px 下边框分隔 —— 对齐会话页右栏的 header
@@ -2907,26 +2907,24 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         >
           <button
             onClick={() => setRightTab('overview')}
-            className="px-3 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
+            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
             style={{
               color: rightTab === 'overview' ? 'var(--accent)' : 'var(--text-secondary)',
               borderBottom: rightTab === 'overview' ? '2px solid var(--accent)' : '2px solid transparent',
             }}
-            title="参与者 / 产物目录 / 任务"
+            title="产物目录 / 参与者"
           >
-            <Users size={11} />
             讨论
           </button>
           <button
             onClick={() => setRightTab('stances')}
-            className="px-3 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
+            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
             style={{
               color: rightTab === 'stances' ? 'var(--accent)' : 'var(--text-secondary)',
               borderBottom: rightTab === 'stances' ? '2px solid var(--accent)' : '2px solid transparent',
             }}
             title="参与者立场快照"
           >
-            <Scale size={11} />
             立场
             {stances.length > 0 && (
               <span
@@ -2938,16 +2936,34 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             )}
           </button>
           <button
+            onClick={() => setRightTab('tasks')}
+            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
+            style={{
+              color: rightTab === 'tasks' ? 'var(--accent)' : 'var(--text-secondary)',
+              borderBottom: rightTab === 'tasks' ? '2px solid var(--accent)' : '2px solid transparent',
+            }}
+            title="总目标 / 子任务与依赖拓扑"
+          >
+            任务
+            {tasks.length > taskStats.finished && (
+              <span
+                className="px-1 rounded-full text-[9px] leading-[14px]"
+                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+              >
+                {tasks.length - taskStats.finished}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setRightTab('files')}
-            className="px-3 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
+            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
             style={{
               color: rightTab === 'files' ? 'var(--accent)' : 'var(--text-secondary)',
               borderBottom: rightTab === 'files' ? '2px solid var(--accent)' : '2px solid transparent',
             }}
             title="当前圆桌文件修改历史"
           >
-            <History size={11} />
-            文件历史
+            文件
             {!historyLoading && fileHistoryEnabled && roomHistory.length > 0 && (
               <span
                 className="px-1 rounded-full text-[9px] leading-[14px]"
@@ -3015,6 +3031,50 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           </>
         ) : rightTab === 'overview' ? (
           <>
+            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
+              <Folder size={10} style={{ color: 'var(--accent)' }} />
+              产物目录
+            </div>
+            {/* 正文不填色（右栏底色即为分组底），标题行与其余分组标题一致用 bg-tertiary */}
+            <div className="px-3 py-2 flex flex-col gap-1.5 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={outputDirDraft}
+                  onChange={(e) => setOutputDirDraft(e.target.value)}
+                  placeholder="产物统一落盘目录（绝对路径）"
+                  className="flex-1 min-w-0 rounded-md px-2 py-1 text-[10px] outline-none"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                />
+                <button
+                  type="button"
+                  className="px-2 py-1 rounded-md text-[10px] shrink-0"
+                  style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
+                  onClick={async () => {
+                    const sel = await openDialog({ directory: true, multiple: false, title: '选择产物目录' });
+                    if (typeof sel === 'string') setOutputDirDraft(sel);
+                  }}
+                >
+                  选择
+                </button>
+                <button
+                  className="px-2 py-1 rounded-md text-[10px] shrink-0"
+                  style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
+                  onClick={async () => {
+                    const v = outputDirDraft.trim();
+                    if (currentRoomId && v !== (currentRoom?.outputDir ?? '')) {
+                      await setRoomOutputDir(v);
+                    }
+                  }}
+                >
+                  保存
+                </button>
+              </div>
+              <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+                当前：{currentRoom?.outputDir || '（目标理解阶段由主持人命名于 <工作目录>/outputs/ 下）'}；所有参与者产物统一写入该目录。
+              </span>
+            </div>
+
             <div className="px-3 py-2 text-[10px] font-medium flex items-center justify-between shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <span className="flex items-center gap-1"><Users size={10} style={{ color: 'var(--accent)' }} />席位 ({participants.length})</span>
               {currentRoomId && (
@@ -3034,10 +3094,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 每人用量暂不做：后端只按"房间 + 模型"聚合（见 RoomUsageBar），要按席位得先补聚合。
                 ⚠️ 状态守卫：房间非运行（已暂停/结束/中止）时即使 currentSpeaker/执行中任务未及时清空，
                 也不点亮呼吸点。 */}
-            <div
-              className="p-2 flex flex-col gap-1 shrink-0 overflow-y-auto"
-              style={{ maxHeight: '190px', borderBottom: '1px solid var(--border)' }}
-            >
+            <div className="p-2 flex-1 min-h-0 flex flex-col gap-1 overflow-y-auto pd-scroll-stable">
               {participants.length === 0 && (
                 <div className="px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                   暂无席位
@@ -3099,51 +3156,9 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 );
               })}
             </div>
-
-            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
-              <Folder size={10} style={{ color: 'var(--accent)' }} />
-              产物目录
-            </div>
-            {/* 正文不填色（右栏底色即为分组底），标题行与其余分组标题一致用 bg-tertiary */}
-            <div className="px-3 py-2 flex flex-col gap-1.5 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={outputDirDraft}
-                  onChange={(e) => setOutputDirDraft(e.target.value)}
-                  placeholder="产物统一落盘目录（绝对路径）"
-                  className="flex-1 min-w-0 rounded-md px-2 py-1 text-[10px] outline-none"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
-                />
-                <button
-                  type="button"
-                  className="px-2 py-1 rounded-md text-[10px] shrink-0"
-                  style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-                  onClick={async () => {
-                    const sel = await openDialog({ directory: true, multiple: false, title: '选择产物目录' });
-                    if (typeof sel === 'string') setOutputDirDraft(sel);
-                  }}
-                >
-                  选择
-                </button>
-                <button
-                  className="px-2 py-1 rounded-md text-[10px] shrink-0"
-                  style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-                  onClick={async () => {
-                    const v = outputDirDraft.trim();
-                    if (currentRoomId && v !== (currentRoom?.outputDir ?? '')) {
-                      await setRoomOutputDir(v);
-                    }
-                  }}
-                >
-                  保存
-                </button>
-              </div>
-              <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
-                当前：{currentRoom?.outputDir || '（目标理解阶段由主持人命名于 <工作目录>/outputs/ 下）'}；所有参与者产物统一写入该目录。
-              </span>
-            </div>
-
+          </>
+        ) : rightTab === 'tasks' ? (
+          <>
             <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <ListTodo size={10} style={{ color: 'var(--accent)' }} />
               子任务

@@ -22,8 +22,10 @@ export function TaskGraphViewport({ scale, onScaleChange, className, style, chil
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
   const anchorRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number; ratio: number } | null>(null);
-  const dragRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number; active: boolean } | null>(null);
   const suppressClickRef = useRef(false);
+  const cleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => cleanupRef.current?.(), []);
 
   // React 的 onWheel 在部分版本以 passive 方式注册，preventDefault 会失效；必须原生监听。
   useEffect(() => {
@@ -63,43 +65,51 @@ export function TaskGraphViewport({ scale, onScaleChange, className, style, chil
     el.scrollTop = (anchor.scrollTop + anchor.y) * anchor.ratio - anchor.y;
   }, [scale]);
 
+  // 只在判定为拖动后才接管指针；不提前 setPointerCapture，否则 click 会被重定向到容器，节点点击失效。
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.button !== 1) return;
     const el = viewportRef.current;
     if (!el) return;
     if (e.button === 1) e.preventDefault();
-    dragRef.current = { x: e.clientX, y: e.clientY, scrollLeft: el.scrollLeft, scrollTop: el.scrollTop, active: false };
-    el.setPointerCapture(e.pointerId);
-  };
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = el.scrollLeft;
+    const startTop = el.scrollTop;
+    let active = false;
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    const el = viewportRef.current;
-    if (!drag || !el) return;
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
-    if (!drag.active && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
-    drag.active = true;
-    el.scrollLeft = drag.scrollLeft - dx;
-    el.scrollTop = drag.scrollTop - dy;
-    el.style.cursor = 'grabbing';
-  };
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!active && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+      active = true;
+      el.scrollLeft = startLeft - dx;
+      el.scrollTop = startTop - dy;
+      el.style.cursor = 'grabbing';
+      ev.preventDefault();
+    };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    const el = viewportRef.current;
-    dragRef.current = null;
-    if (el) {
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
       el.style.cursor = '';
-      el.releasePointerCapture?.(e.pointerId);
-    }
-    // 拖动结束后吞掉本次 click，避免误选中节点；下一轮事件循环恢复。
-    if (drag?.active) {
-      suppressClickRef.current = true;
-      window.setTimeout(() => {
-        suppressClickRef.current = false;
-      }, 0);
-    }
+      cleanupRef.current = null;
+    };
+
+    const onUp = () => {
+      const wasActive = active;
+      cleanup();
+      // 拖动结束后吞掉本次 click，避免误选中节点；下一轮事件循环恢复。
+      if (wasActive) {
+        suppressClickRef.current = true;
+        window.setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 0);
+      }
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    cleanupRef.current = cleanup;
   };
 
   return (
@@ -108,9 +118,6 @@ export function TaskGraphViewport({ scale, onScaleChange, className, style, chil
       className={`overflow-auto ${className ?? ''}`}
       style={{ cursor: 'grab', ...style }}
       onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
       onClickCapture={(e) => {
         if (!suppressClickRef.current) return;
         suppressClickRef.current = false;
