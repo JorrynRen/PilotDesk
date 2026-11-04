@@ -1525,6 +1525,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [graphOpen, setGraphOpen] = useState(false);
   /** 拓扑浮层中选中的任务（null=使用默认选中：执行中 → 失败 → 首个）。 */
   const [graphSelectedId, setGraphSelectedId] = useState<string | null>(null);
+  /** 拓扑缩放（仅全屏图；0.5–2.0）。 */
+  const [graphScale, setGraphScale] = useState(1);
+  /** 拓扑浮层是否最大化。 */
+  const [graphMaximized, setGraphMaximized] = useState(false);
   /** 任务人工干预弹窗（null=关闭）：新增子任务 / 修改依赖。 */
   const [showAddTask, setShowAddTask] = useState(false);
   const [depsTask, setDepsTask] = useState<GroupChatTask | null>(null);
@@ -1728,14 +1732,23 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     });
   }, []);
 
+  /** 打开拓扑浮层：重置缩放与最大化，避免上次状态残留。 */
+  const openGraph = useCallback(() => {
+    setGraphScale(1);
+    setGraphMaximized(false);
+    setGraphOpen(true);
+  }, []);
+
+  const closeGraph = useCallback(() => setGraphOpen(false), []);
+
   useEffect(() => {
     if (!graphOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setGraphOpen(false);
+      if (e.key === 'Escape') closeGraph();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [graphOpen]);
+  }, [graphOpen, closeGraph]);
 
   /** 多选态：勾选若干条群聊消息 → 作为**一段对话**交给 AI 整理成知识（状态机与选择条见 MessageSelection） */
   const { selectMode, selectedIds, enter: enterSelectMode, exit: exitSelectMode, clear: clearSelection, toggle: toggleSelect } = useMessageSelection();
@@ -3141,7 +3154,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 新增
               </button>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
+            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-2 space-y-1.5 pd-scroll-stable">
               {/* 目标锚点：主持人阶段 A 整理后的总目标（折叠一行 / 展开含补充约束），避免子任务脱离目标 */}
               <div className="px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                 <button
@@ -3174,12 +3187,11 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 )}
               </div>
 
-              {/* 派生展示态统计：已结束（异常数单独提示，避免"已结束"掩盖失败） */}
+              {/* 派生展示态统计：异常数不再单列（任务卡拉红+红点已表达），但异常时"已结束"数字变红，避免完全隐形 */}
               {tasks.length > 0 && (
                 <div className="px-1 flex flex-wrap items-center gap-x-1.5 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
                   <span style={{ color: taskStats.abnormal > 0 ? 'var(--status-danger)' : 'var(--text-secondary)' }}>
                     已结束 {taskStats.finished}
-                    {taskStats.abnormal > 0 ? `（异常 ${taskStats.abnormal}）` : ''}
                   </span>
                   <span>·</span>
                   <span>执行中 {taskStats.running}</span>
@@ -3190,23 +3202,23 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 </div>
               )}
 
-              {/* 依赖概览：缩略拓扑（原始状态着色），点击放大进入全屏浮层 */}
+              {/* 子任务预览：缩略拓扑（原始状态着色），点击放大进入全屏浮层 */}
               {tasks.length >= 3 && (
                 <div className="px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                   <div className="flex items-center justify-between mb-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
-                    <span>依赖概览</span>
+                    <span>子任务预览</span>
                     <button
                       type="button"
                       className="flex items-center gap-0.5 transition-colors hover:opacity-80"
                       style={{ color: 'var(--accent)' }}
-                      onClick={() => setGraphOpen(true)}
+                      onClick={openGraph}
                       title="打开依赖拓扑图"
                     >
                       <Maximize2 size={9} />
                       放大
                     </button>
                   </div>
-                  <TaskDependencyGraph tasks={tasks} variant="mini" onOpenFull={() => setGraphOpen(true)} />
+                  <TaskDependencyGraph tasks={tasks} variant="mini" onOpenFull={openGraph} />
                 </div>
               )}
 
@@ -3246,17 +3258,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 >
                   <div className="flex items-start gap-1.5">
                     <span className="font-medium shrink-0" style={{ color: 'var(--text-secondary)' }}>T{t.taskNo}</span>
-                    <span className={`flex-1 ${expanded ? 'break-words' : 'truncate'}`}>{renderMentions(t.description, mentionMap)}</span>
-                    <span className="ml-1 px-1 rounded shrink-0 text-[9px] leading-4" style={phaseStyle} title={abnormalKind ? `原始状态：${TASK_STATUS_LABEL[t.status]}` : undefined}>
-                      {TASK_PHASE_LABEL[phase]}
-                    </span>
-                    {abnormalKind && (
-                      <span
-                        className="mt-1 w-1.5 h-1.5 rounded-full shrink-0"
-                        style={{ backgroundColor: abnormalKind === 'danger' ? 'var(--status-danger)' : 'var(--status-warning)' }}
-                        title={`原始状态：${TASK_STATUS_LABEL[t.status]}`}
-                      />
-                    )}
+                    <span className={`flex-1 min-w-0 ${expanded ? 'break-words' : 'truncate'}`}>{renderMentions(t.description, mentionMap)}</span>
                     <ChevronDown
                       size={10}
                       className="mt-0.5 shrink-0 transition-transform"
@@ -3267,28 +3269,41 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                     <span className="truncate" style={{ color: 'var(--text-tertiary)' }}>
                       {t.assignee ? displayNameOf(t.assignee) : '未指派'}
                     </span>
-                    {(deps.length > 0 || dependents.length > 0) && (
-                      <div className="flex items-center gap-1 shrink-0 text-[9px]">
-                        {deps.length > 0 && (
-                          <span
-                            className="px-1 rounded"
-                            style={{
-                              color: depAbnormal ? 'var(--status-danger)' : depReady ? 'var(--status-success)' : 'var(--text-tertiary)',
-                              border: `1px solid ${depAbnormal ? 'var(--status-danger)' : depReady ? 'var(--status-success)' : 'var(--border)'}`,
-                            }}
-                            title={depAbnormal ? '存在失败/跳过/中止的前置，本任务会被自动跳过' : '前置依赖'}
-                          >
-                            ← {taskNosText(deps.map((d) => d.taskNo))}
-                          </span>
-                        )}
-                        {dependents.length > 0 && (
-                          <span className="px-1 rounded" style={{ color: 'var(--text-tertiary)', border: '1px solid var(--border)' }} title="依赖本任务的后续任务">
-                            → {taskNosText(dependents.map((d) => d.taskNo))}
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    <span
+                      className="px-1 rounded shrink-0 text-[9px] leading-4 flex items-center gap-1"
+                      style={phaseStyle}
+                      title={abnormalKind ? `原始状态：${TASK_STATUS_LABEL[t.status]}` : undefined}
+                    >
+                      {abnormalKind && (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: abnormalKind === 'danger' ? 'var(--status-danger)' : 'var(--status-warning)' }}
+                        />
+                      )}
+                      {TASK_PHASE_LABEL[phase]}
+                    </span>
                   </div>
+                  {(deps.length > 0 || dependents.length > 0) && (
+                    <div className="flex flex-wrap items-center gap-1 mt-1 text-[9px]">
+                      {deps.length > 0 && (
+                        <span
+                          className="px-1 rounded max-w-full break-words"
+                          style={{
+                            color: depAbnormal ? 'var(--status-danger)' : depReady ? 'var(--status-success)' : 'var(--text-tertiary)',
+                            border: `1px solid ${depAbnormal ? 'var(--status-danger)' : depReady ? 'var(--status-success)' : 'var(--border)'}`,
+                          }}
+                          title={depAbnormal ? '存在失败/跳过/中止的前置，本任务会被自动跳过' : '前置依赖'}
+                        >
+                          ← {taskNosText(deps.map((d) => d.taskNo))}
+                        </span>
+                      )}
+                      {dependents.length > 0 && (
+                        <span className="px-1 rounded max-w-full break-words" style={{ color: 'var(--text-tertiary)', border: '1px solid var(--border)' }} title="依赖本任务的后续任务">
+                          → {taskNosText(dependents.map((d) => d.taskNo))}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {expanded && (
                     <div className="mt-1 pt-1 space-y-0.5 text-[9px] leading-relaxed break-words" style={{ borderTop: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
                       <div>状态：{TASK_STATUS_LABEL[t.status] ?? t.status}</div>
@@ -3298,7 +3313,6 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       {(t.startedAt || t.completedAt) && (
                         <div>时间：{t.startedAt ? formatTime(t.startedAt) : '—'} → {t.completedAt ? formatTime(t.completedAt) : '进行中'}</div>
                       )}
-                      {t.resultSummary && <div>结果：{t.resultSummary}</div>}
                       {t.error && <div style={{ color: 'var(--status-danger)' }}>错误：{t.error}</div>}
                       {(t.status === 'discussing' || t.status === 'pending') && (
                         <div className="flex items-center gap-1 pt-0.5">
@@ -3338,29 +3352,68 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             {/* ── 依赖拓扑全屏浮层：图承担 7 种原始状态，右侧详情栏显示任务明细 ── */}
             {graphOpen && createPortal(
               <div
-                className="fixed inset-0 z-[80] flex items-center justify-center p-6"
+                className={`fixed inset-0 z-[80] flex ${graphMaximized ? '' : 'items-center justify-center p-6'}`}
                 style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}
-                onClick={() => setGraphOpen(false)}
+                onClick={closeGraph}
               >
                 <div
-                  className="w-full max-w-5xl rounded-xl flex flex-col overflow-hidden"
-                  style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', maxHeight: '88vh' }}
+                  className={`w-full flex flex-col overflow-hidden ${graphMaximized ? 'max-w-none rounded-none' : 'max-w-5xl rounded-xl'}`}
+                  style={{
+                    backgroundColor: 'var(--bg-primary)',
+                    border: '1px solid var(--border)',
+                    maxHeight: graphMaximized ? '100vh' : '88vh',
+                    height: graphMaximized ? '100vh' : undefined,
+                  }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="px-4 py-2.5 flex items-center justify-between shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
-                    <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                  <div className="px-4 py-2.5 flex items-center justify-between gap-2 shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium min-w-0" style={{ color: 'var(--text-secondary)' }}>
                       <GitBranch size={11} style={{ color: 'var(--accent)' }} />
                       依赖拓扑
                       <span className="text-[10px] font-normal" style={{ color: 'var(--text-tertiary)' }}>{tasks.length} 个任务</span>
                     </div>
-                    <button
-                      className="p-1 rounded transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-tertiary)' }}
-                      onClick={() => setGraphOpen(false)}
-                      title="关闭（Esc）"
-                    >
-                      <X size={13} />
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        className="px-1.5 rounded transition-colors hover:opacity-80"
+                        style={{ color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
+                        onClick={() => setGraphScale((s) => Math.max(0.5, Number((s - 0.2).toFixed(1))))}
+                        title="缩小"
+                      >
+                        −
+                      </button>
+                      <button
+                        className="px-1 rounded tabular-nums transition-colors hover:opacity-80 text-[10px]"
+                        style={{ color: 'var(--text-secondary)' }}
+                        onClick={() => setGraphScale(1)}
+                        title="重置为 100%"
+                      >
+                        {Math.round(graphScale * 100)}%
+                      </button>
+                      <button
+                        className="px-1.5 rounded transition-colors hover:opacity-80"
+                        style={{ color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
+                        onClick={() => setGraphScale((s) => Math.min(2, Number((s + 0.2).toFixed(1))))}
+                        title="放大"
+                      >
+                        +
+                      </button>
+                      <button
+                        className="p-1 rounded transition-colors hover:opacity-80"
+                        style={{ color: 'var(--text-tertiary)' }}
+                        onClick={() => setGraphMaximized((v) => !v)}
+                        title={graphMaximized ? '还原窗口' : '最大化'}
+                      >
+                        <Maximize2 size={12} />
+                      </button>
+                      <button
+                        className="p-1 rounded transition-colors hover:opacity-80"
+                        style={{ color: 'var(--text-tertiary)' }}
+                        onClick={closeGraph}
+                        title="关闭（Esc）"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
                   </div>
                   <div className="px-4 py-2 flex items-center gap-x-2 gap-y-1 flex-wrap shrink-0 text-[9px]" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
                     <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--status-success)' }} />完成</span>
@@ -3380,11 +3433,12 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       <TaskDependencyGraph
                         tasks={tasks}
                         variant="full"
+                        scale={graphScale}
                         selectedId={selectedGraphTask?.id ?? null}
                         onSelect={(task) => setGraphSelectedId(task.id)}
                       />
                     </div>
-                    <div className="w-[220px] shrink-0 overflow-y-auto rounded-lg p-3 text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+                    <div className="w-[260px] shrink-0 overflow-y-auto rounded-lg p-3 text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
                       {selectedGraphTask ? (
                         <>
                           <div className="flex items-center justify-between gap-1 mb-1.5">
@@ -3417,15 +3471,22 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                             {(selectedGraphTask.startedAt || selectedGraphTask.completedAt) && (
                               <div>时间：{selectedGraphTask.startedAt ? formatTime(selectedGraphTask.startedAt) : '—'} → {selectedGraphTask.completedAt ? formatTime(selectedGraphTask.completedAt) : '进行中'}</div>
                             )}
-                            {selectedGraphTask.resultSummary && <div className="break-words">结果：{selectedGraphTask.resultSummary}</div>}
                             {selectedGraphTask.error && <div className="break-words" style={{ color: 'var(--status-danger)' }}>错误：{selectedGraphTask.error}</div>}
                           </div>
+                          {selectedGraphTask.resultSummary && (
+                            <div className="mt-2">
+                              <div className="mb-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>执行结果</div>
+                              <div className="pd-task-detail-markdown" style={{ color: 'var(--text-secondary)' }}>
+                                <MarkdownRenderer content={selectedGraphTask.resultSummary} />
+                              </div>
+                            </div>
+                          )}
                           <div className="flex flex-wrap items-center gap-1 mt-2">
                             <button
                               className="px-1.5 rounded transition-colors hover:opacity-80"
                               style={{ color: 'var(--accent)', border: '1px solid var(--accent)' }}
                               onClick={() => {
-                                setGraphOpen(false);
+                                closeGraph();
                                 focusTaskCard(selectedGraphTask.id);
                               }}
                             >
@@ -3437,7 +3498,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                                   className="px-1.5 rounded transition-colors hover:opacity-80"
                                   style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
                                   onClick={() => {
-                                    setGraphOpen(false);
+                                    closeGraph();
                                     setDepsTask(selectedGraphTask);
                                   }}
                                 >
@@ -3447,7 +3508,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                                   className="px-1.5 rounded transition-colors hover:opacity-80"
                                   style={{ color: 'var(--status-warning)', border: '1px solid var(--border)' }}
                                   onClick={() => {
-                                    setGraphOpen(false);
+                                    closeGraph();
                                     void handleSkipTask(selectedGraphTask);
                                   }}
                                 >

@@ -1577,6 +1577,48 @@ textarea {
   margin: 2px 0;
 }
 
+/* 圆桌拓扑详情栏（260px 窄栏）内的 Markdown 执行结果：
+   标题/代码块/表格/图片必须收敛，避免撑破详情栏或产生横向溢出。 */
+.pd-task-detail-markdown .pilotdesk-markdown {
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.pd-task-detail-markdown .pilotdesk-markdown > * + * {
+  margin-top: 6px;
+}
+.pd-task-detail-markdown .pilotdesk-markdown h1,
+.pd-task-detail-markdown .pilotdesk-markdown h2,
+.pd-task-detail-markdown .pilotdesk-markdown h3,
+.pd-task-detail-markdown .pilotdesk-markdown h4 {
+  font-size: 11px;
+  font-weight: 600;
+  margin: 8px 0 4px;
+}
+.pd-task-detail-markdown .pilotdesk-markdown code {
+  font-size: 10px;
+}
+.pd-task-detail-markdown .pilotdesk-markdown pre {
+  overflow-x: auto;
+  padding: 6px;
+  border-radius: 6px;
+}
+.pd-task-detail-markdown .pilotdesk-markdown img,
+.pd-task-detail-markdown .pilotdesk-markdown video {
+  max-width: 100%;
+  height: auto;
+}
+.pd-task-detail-markdown .pilotdesk-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.pd-task-detail-markdown .pilotdesk-markdown ol,
+.pd-task-detail-markdown .pilotdesk-markdown ul {
+  padding-left: 1.2em;
+  margin: 4px 0;
+}
+
 /* ═══════════════════════════════════════════════════
    Virtual Console — xterm scrollbar hidden
    Scrollback navigation via mouse wheel only.

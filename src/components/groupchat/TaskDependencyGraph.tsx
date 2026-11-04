@@ -14,6 +14,8 @@ interface Props {
   selectedId?: string | null;
   onSelect?: (task: GroupChatTask) => void;
   onOpenFull?: () => void;
+  /** 全屏图的缩放倍数（0.5–2.0）；缩略图不使用。 */
+  scale?: number;
 }
 
 function nodePaint(status: TaskStatus, phase: TaskPhase) {
@@ -40,7 +42,7 @@ function nodePaint(status: TaskStatus, phase: TaskPhase) {
   }
 }
 
-export function TaskDependencyGraph({ tasks, variant, selectedId, onSelect, onOpenFull }: Props) {
+export function TaskDependencyGraph({ tasks, variant, selectedId, onSelect, onOpenFull, scale = 1 }: Props) {
   const rawArrowId = useId();
   const arrowId = `pd-task-graph-arrow-${rawArrowId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -62,15 +64,22 @@ export function TaskDependencyGraph({ tasks, variant, selectedId, onSelect, onOp
   const compact = variant === 'mini';
   const fontSize = compact ? 11 : 11;
   const paddingX = compact ? 6 : 10;
+  // 节点尺寸有上限：不再让 SVG 拉满容器，否则任务很少时节点会被放大到失真。
+  // 缩略图固定 1.35 倍上限；全屏图按 scale 缩放，超过 1 时允许溢出滚动。
+  const renderedWidth = compact ? layout.width * 1.35 : layout.width * scale;
 
   return (
     <svg
       viewBox={`0 0 ${layout.width} ${layout.height}`}
-      width="100%"
-      height="auto"
       role="img"
       aria-label={`子任务依赖图，共 ${tasks.length} 个任务`}
-      style={{ display: 'block' }}
+      style={{
+        display: 'block',
+        width: renderedWidth,
+        maxWidth: compact || scale <= 1 ? '100%' : 'none',
+        height: 'auto',
+        margin: '0 auto',
+      }}
     >
       <defs>
         <marker
