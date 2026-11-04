@@ -3,7 +3,7 @@ import {
   Users, Plus, Bot, User, Sparkles, Send, Pause, Play, Square,
   Radio, Paperclip, Scale, ListTodo, CheckCircle, XCircle, AlertCircle, Download, Copy, Trash2, Folder,
   ImagePlus, FileText, X, Clock, Flag, Save, Undo2, Loader2, History, ChevronDown,
-  SkipForward, GitBranch, CheckSquare,
+  SkipForward, GitBranch, CheckSquare, Maximize2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -12,6 +12,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { useNavigate } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import { useGroupChatStore } from '../stores/groupChatStore';
 import { confirmDialog } from '../stores/confirmStore';
 import { useApiProviderStore } from '../stores/apiProviderStore';
@@ -24,6 +25,15 @@ import { MarkdownRenderer } from '../components/message/MarkdownRenderer';
 import { AgentIcon } from '../components/common/AgentIcon';
 import { collapseBlankLines, tightenListGaps } from '../components/message/markdownText';
 import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
+import { TaskDependencyGraph } from '../components/groupchat/TaskDependencyGraph';
+import {
+  TASK_PHASE_LABEL,
+  depTasksOf,
+  directDependentsOf,
+  parseDepIndices,
+  taskPhase,
+  taskPhaseStats,
+} from '../utils/taskGraph';
 import { RepoStatusBar } from '../components/panels/RepoStatusBar';
 import { ConfirmationCard } from '../components/confirmation/ConfirmationCard';
 import { parseConfirmation } from '../components/confirmation/confirmationUtils';
@@ -82,24 +92,8 @@ const FALLBACK_COLORS = ['#3b82f6', '#f59e0b', '#ef4444', '#10b981', '#8b5cf6', 
 // ── 任务依赖工具（人工干预共用）──
 //
 // `dependsOn` 存的是**任务数组下标**（按 taskNo 升序，与后端 `list_tasks` 同序），不是任务 id：
-// 展示、编辑与提交都要经这里换算，避免把下标当 id 传给后端（后端按 id 解析，会直接报错）。
-
-/** 解析 dependsOn 下标数组（脏数据一律按空依赖处理，不抛错中断渲染）。 */
-function parseDepIndices(task: GroupChatTask): number[] {
-  try {
-    const parsed: unknown = JSON.parse(task.dependsOn || '[]');
-    return Array.isArray(parsed) ? parsed.filter((n): n is number => typeof n === 'number') : [];
-  } catch {
-    return [];
-  }
-}
-
-/** 前置任务（展示/编辑用）。 */
-function depTasksOf(task: GroupChatTask, tasks: GroupChatTask[]): GroupChatTask[] {
-  return parseDepIndices(task)
-    .map((i) => tasks[i])
-    .filter((t): t is GroupChatTask => !!t);
-}
+// 展示、编辑与提交都要经 `parseDepIndices` / `depTasksOf`（utils/taskGraph）换算，
+// 避免把下标当 id 传给后端（后端按 id 解析，会直接报错）。
 
 /** 直接/间接受该任务影响的后续任务：跳过前置会让它们因"前置未成功"被调度跳过，需在确认前说清。 */
 function dependentTasksOf(task: GroupChatTask, tasks: GroupChatTask[]): GroupChatTask[] {
@@ -1525,6 +1519,12 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [expandedStances, setExpandedStances] = useState<Set<string>>(() => new Set());
   /** 任务条目展开集合（taskId → 展开）。默认折叠只显示一行。 */
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(() => new Set());
+  /** 总目标锚点展开（折叠时单行截断）。 */
+  const [goalExpanded, setGoalExpanded] = useState(false);
+  /** 依赖拓扑全屏浮层。 */
+  const [graphOpen, setGraphOpen] = useState(false);
+  /** 拓扑浮层中选中的任务（null=使用默认选中：执行中 → 失败 → 首个）。 */
+  const [graphSelectedId, setGraphSelectedId] = useState<string | null>(null);
   /** 任务人工干预弹窗（null=关闭）：新增子任务 / 修改依赖。 */
   const [showAddTask, setShowAddTask] = useState(false);
   const [depsTask, setDepsTask] = useState<GroupChatTask | null>(null);
@@ -1693,6 +1693,49 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   }, [attachments]);
 
   const currentRoom = rooms.find((r) => r.id === currentRoomId) ?? null;
+
+  // ── 子任务面板：派生展示态 / 目标锚点 / 依赖拓扑 ──
+  const taskStats = useMemo(() => taskPhaseStats(tasks), [tasks]);
+
+  /** 阶段 A 目标整理后的补充约束（JSON 数组；脏数据静默忽略）。 */
+  const goalNotes = useMemo<string[]>(() => {
+    try {
+      const parsed: unknown = JSON.parse(currentRoom?.goalNotes || '[]');
+      return Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === 'string') : [];
+    } catch {
+      return [];
+    }
+  }, [currentRoom?.goalNotes]);
+
+  /** 拓扑浮层默认选中：执行中 → 失败 → 首个任务。 */
+  const selectedGraphTask = useMemo(() => {
+    if (graphSelectedId) {
+      const hit = tasks.find((t) => t.id === graphSelectedId);
+      if (hit) return hit;
+    }
+    return tasks.find((t) => t.status === 'running') ?? tasks.find((t) => t.status === 'failed') ?? tasks[0] ?? null;
+  }, [tasks, graphSelectedId]);
+
+  /** 从拓扑回到列表：展开目标卡片并滚动到可见位置。 */
+  const focusTaskCard = useCallback((taskId: string) => {
+    setExpandedTasks((prev) => {
+      const next = new Set(prev);
+      next.add(taskId);
+      return next;
+    });
+    requestAnimationFrame(() => {
+      document.getElementById(`gc-task-${taskId}`)?.scrollIntoView({ block: 'nearest' });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!graphOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setGraphOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [graphOpen]);
 
   /** 多选态：勾选若干条群聊消息 → 作为**一段对话**交给 AI 整理成知识（状态机与选择条见 MessageSelection） */
   const { selectMode, selectedIds, enter: enterSelectMode, exit: exitSelectMode, clear: clearSelection, toggle: toggleSelect } = useMessageSelection();
@@ -3099,6 +3142,74 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               </button>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
+              {/* 目标锚点：主持人阶段 A 整理后的总目标（折叠一行 / 展开含补充约束），避免子任务脱离目标 */}
+              <div className="px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                <button
+                  type="button"
+                  className="w-full flex items-start gap-1 text-left"
+                  onClick={() => setGoalExpanded((v) => !v)}
+                  title={goalExpanded ? '收起目标' : '展开目标全文'}
+                >
+                  <span className="shrink-0 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>目标</span>
+                  <span
+                    className={`flex-1 text-[10px] leading-snug ${goalExpanded ? 'break-words' : 'truncate'}`}
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    {currentRoom?.topic || '目标理解中…'}
+                  </span>
+                  {(currentRoom?.topic || goalNotes.length > 0) && (
+                    <ChevronDown
+                      size={9}
+                      className="mt-0.5 shrink-0 transition-transform"
+                      style={{ color: 'var(--text-tertiary)', transform: goalExpanded ? 'rotate(180deg)' : 'none' }}
+                    />
+                  )}
+                </button>
+                {goalExpanded && goalNotes.length > 0 && (
+                  <ul className="mt-1 pl-3 space-y-0.5 text-[9px] leading-snug list-disc" style={{ color: 'var(--text-tertiary)' }}>
+                    {goalNotes.map((note, i) => (
+                      <li key={i} className="break-words">{note}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* 派生展示态统计：已结束（异常数单独提示，避免"已结束"掩盖失败） */}
+              {tasks.length > 0 && (
+                <div className="px-1 flex flex-wrap items-center gap-x-1.5 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <span style={{ color: taskStats.abnormal > 0 ? 'var(--status-danger)' : 'var(--text-secondary)' }}>
+                    已结束 {taskStats.finished}
+                    {taskStats.abnormal > 0 ? `（异常 ${taskStats.abnormal}）` : ''}
+                  </span>
+                  <span>·</span>
+                  <span>执行中 {taskStats.running}</span>
+                  <span>·</span>
+                  <span>就绪 {taskStats.ready}</span>
+                  <span>·</span>
+                  <span>等待 {taskStats.waiting}</span>
+                </div>
+              )}
+
+              {/* 依赖概览：缩略拓扑（原始状态着色），点击放大进入全屏浮层 */}
+              {tasks.length >= 3 && (
+                <div className="px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                  <div className="flex items-center justify-between mb-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+                    <span>依赖概览</span>
+                    <button
+                      type="button"
+                      className="flex items-center gap-0.5 transition-colors hover:opacity-80"
+                      style={{ color: 'var(--accent)' }}
+                      onClick={() => setGraphOpen(true)}
+                      title="打开依赖拓扑图"
+                    >
+                      <Maximize2 size={9} />
+                      放大
+                    </button>
+                  </div>
+                  <TaskDependencyGraph tasks={tasks} variant="mini" onOpenFull={() => setGraphOpen(true)} />
+                </div>
+              )}
+
               {tasks.length === 0 && (
                 <div className="px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                   暂无任务
@@ -3106,9 +3217,28 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               )}
               {tasks.map((t) => {
                 const expanded = expandedTasks.has(t.id);
+                const phase = taskPhase(t, tasks);
+                const deps = depTasksOf(t, tasks);
+                const dependents = directDependentsOf(t, tasks);
+                // 前置异常（失败/跳过/中止）会导致本任务被调度跳过，徽标必须转红，不能只显示"等待"
+                const depAbnormal = deps.some((d) => d.status === 'failed' || d.status === 'skipped' || d.status === 'aborted');
+                const depReady = deps.length > 0 && deps.every((d) => d.status === 'success');
+                const abnormalKind: 'danger' | 'warning' | null =
+                  t.status === 'failed' ? 'danger' : (t.status === 'skipped' || t.status === 'aborted') ? 'warning' : null;
+                const phaseStyle: CSSProperties =
+                  phase === 'running'
+                    ? { color: 'var(--accent)', backgroundColor: 'var(--accent-light)' }
+                    : abnormalKind === 'danger'
+                      ? { color: 'var(--status-danger)', backgroundColor: 'var(--status-danger-bg)' }
+                      : abnormalKind === 'warning'
+                        ? { color: 'var(--status-warning)', backgroundColor: 'var(--status-warning-bg)' }
+                        : phase === 'ready'
+                          ? { color: 'var(--status-success)', backgroundColor: 'var(--status-success-bg)' }
+                          : { color: 'var(--text-tertiary)', border: '1px solid var(--border)' };
                 return (
                 <div
                   key={t.id}
+                  id={`gc-task-${t.id}`}
                   className="px-2 py-1.5 rounded-lg text-[10px] cursor-pointer transition-colors"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
                   onClick={() => toggleTask(t.id)}
@@ -3117,50 +3247,61 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                   <div className="flex items-start gap-1.5">
                     <span className="font-medium shrink-0" style={{ color: 'var(--text-secondary)' }}>T{t.taskNo}</span>
                     <span className={`flex-1 ${expanded ? 'break-words' : 'truncate'}`}>{renderMentions(t.description, mentionMap)}</span>
+                    <span className="ml-1 px-1 rounded shrink-0 text-[9px] leading-4" style={phaseStyle} title={abnormalKind ? `原始状态：${TASK_STATUS_LABEL[t.status]}` : undefined}>
+                      {TASK_PHASE_LABEL[phase]}
+                    </span>
+                    {abnormalKind && (
+                      <span
+                        className="mt-1 w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ backgroundColor: abnormalKind === 'danger' ? 'var(--status-danger)' : 'var(--status-warning)' }}
+                        title={`原始状态：${TASK_STATUS_LABEL[t.status]}`}
+                      />
+                    )}
                     <ChevronDown
                       size={10}
                       className="mt-0.5 shrink-0 transition-transform"
                       style={{ color: 'var(--text-tertiary)', transform: expanded ? 'rotate(180deg)' : 'none' }}
                     />
                   </div>
-                  <div className="flex items-center justify-between mt-1">
+                  <div className="flex items-center justify-between gap-1 mt-1">
                     <span className="truncate" style={{ color: 'var(--text-tertiary)' }}>
                       {t.assignee ? displayNameOf(t.assignee) : '未指派'}
                     </span>
-                    <span
-                      className="ml-1 px-1 rounded shrink-0"
-                      style={{
-                        backgroundColor:
-                          t.status === 'success' ? 'var(--status-success-bg)'
-                          : t.status === 'failed' ? 'var(--status-danger-bg)'
-                          : t.status === 'skipped' ? 'var(--status-warning-bg)'
-                          : t.status === 'running' ? 'var(--accent-light)'
-                          : 'var(--bg-tertiary)',
-                        color:
-                          t.status === 'success' ? 'var(--status-success)'
-                          : t.status === 'failed' ? 'var(--status-danger)'
-                          : t.status === 'skipped' ? 'var(--status-warning)'
-                          : t.status === 'running' ? 'var(--accent)'
-                          : 'var(--text-tertiary)',
-                      }}
-                    >
-                      {TASK_STATUS_LABEL[t.status] ?? t.status}
-                    </span>
+                    {(deps.length > 0 || dependents.length > 0) && (
+                      <div className="flex items-center gap-1 shrink-0 text-[9px]">
+                        {deps.length > 0 && (
+                          <span
+                            className="px-1 rounded"
+                            style={{
+                              color: depAbnormal ? 'var(--status-danger)' : depReady ? 'var(--status-success)' : 'var(--text-tertiary)',
+                              border: `1px solid ${depAbnormal ? 'var(--status-danger)' : depReady ? 'var(--status-success)' : 'var(--border)'}`,
+                            }}
+                            title={depAbnormal ? '存在失败/跳过/中止的前置，本任务会被自动跳过' : '前置依赖'}
+                          >
+                            ← {taskNosText(deps.map((d) => d.taskNo))}
+                          </span>
+                        )}
+                        {dependents.length > 0 && (
+                          <span className="px-1 rounded" style={{ color: 'var(--text-tertiary)', border: '1px solid var(--border)' }} title="依赖本任务的后续任务">
+                            → {taskNosText(dependents.map((d) => d.taskNo))}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {expanded && (t.resultSummary || t.error) && (
-                    <div className="mt-1 leading-relaxed break-words" style={{ color: 'var(--text-tertiary)' }}>
-                      {t.resultSummary ?? t.error}
-                    </div>
-                  )}
-                  {(depTasksOf(t, tasks).length > 0 || t.status === 'discussing' || t.status === 'pending') && (
-                    <div className="flex items-center justify-between gap-1 mt-1">
-                      <span className="truncate" style={{ color: 'var(--text-tertiary)' }}>
-                        {depTasksOf(t, tasks).length > 0
-                          ? `依赖 ${taskNosText(depTasksOf(t, tasks).map((d) => d.taskNo))}`
-                          : ''}
-                      </span>
+                  {expanded && (
+                    <div className="mt-1 pt-1 space-y-0.5 text-[9px] leading-relaxed break-words" style={{ borderTop: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
+                      <div>状态：{TASK_STATUS_LABEL[t.status] ?? t.status}</div>
+                      {deps.length > 0 && (
+                        <div>前置：{deps.map((d) => `T${d.taskNo} ${TASK_STATUS_LABEL[d.status] ?? d.status}`).join('、')}</div>
+                      )}
+                      {(t.startedAt || t.completedAt) && (
+                        <div>时间：{t.startedAt ? formatTime(t.startedAt) : '—'} → {t.completedAt ? formatTime(t.completedAt) : '进行中'}</div>
+                      )}
+                      {t.resultSummary && <div>结果：{t.resultSummary}</div>}
+                      {t.error && <div style={{ color: 'var(--status-danger)' }}>错误：{t.error}</div>}
                       {(t.status === 'discussing' || t.status === 'pending') && (
-                        <div className="flex items-center gap-1 shrink-0">
+                        <div className="flex items-center gap-1 pt-0.5">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -3193,6 +3334,138 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 );
               })}
             </div>
+
+            {/* ── 依赖拓扑全屏浮层：图承担 7 种原始状态，右侧详情栏显示任务明细 ── */}
+            {graphOpen && createPortal(
+              <div
+                className="fixed inset-0 z-[80] flex items-center justify-center p-6"
+                style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}
+                onClick={() => setGraphOpen(false)}
+              >
+                <div
+                  className="w-full max-w-5xl rounded-xl flex flex-col overflow-hidden"
+                  style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', maxHeight: '88vh' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-4 py-2.5 flex items-center justify-between shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                      <GitBranch size={11} style={{ color: 'var(--accent)' }} />
+                      依赖拓扑
+                      <span className="text-[10px] font-normal" style={{ color: 'var(--text-tertiary)' }}>{tasks.length} 个任务</span>
+                    </div>
+                    <button
+                      className="p-1 rounded transition-colors hover:opacity-80"
+                      style={{ color: 'var(--text-tertiary)' }}
+                      onClick={() => setGraphOpen(false)}
+                      title="关闭（Esc）"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                  <div className="px-4 py-2 flex items-center gap-x-2 gap-y-1 flex-wrap shrink-0 text-[9px]" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--status-success)' }} />完成</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--accent)' }} />执行中</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--status-danger)' }} />失败</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--status-warning)' }} />跳过</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--text-tertiary)' }} />中止</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full border" style={{ borderColor: 'var(--accent)' }} />讨论中</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full border" style={{ borderColor: 'var(--border)' }} />待执行</span>
+                    <span className="flex items-center gap-1">
+                      角标：就绪 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--status-success)' }} />
+                      / 等待 <span className="w-1.5 h-1.5 rounded-full border" style={{ borderColor: 'var(--text-tertiary)' }} />
+                    </span>
+                  </div>
+                  <div className="flex-1 min-h-0 flex gap-3 p-4 overflow-hidden">
+                    <div className="flex-1 min-w-0 overflow-auto rounded-lg p-2" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                      <TaskDependencyGraph
+                        tasks={tasks}
+                        variant="full"
+                        selectedId={selectedGraphTask?.id ?? null}
+                        onSelect={(task) => setGraphSelectedId(task.id)}
+                      />
+                    </div>
+                    <div className="w-[220px] shrink-0 overflow-y-auto rounded-lg p-3 text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+                      {selectedGraphTask ? (
+                        <>
+                          <div className="flex items-center justify-between gap-1 mb-1.5">
+                            <span className="font-medium" style={{ color: 'var(--text-primary)' }}>T{selectedGraphTask.taskNo}</span>
+                            <span
+                              className="px-1 rounded text-[9px]"
+                              style={{
+                                color:
+                                  selectedGraphTask.status === 'failed' ? 'var(--status-danger)'
+                                  : selectedGraphTask.status === 'skipped' ? 'var(--status-warning)'
+                                  : selectedGraphTask.status === 'success' ? 'var(--status-success)'
+                                  : selectedGraphTask.status === 'running' ? 'var(--accent)'
+                                  : 'var(--text-tertiary)',
+                                border: '1px solid var(--border)',
+                              }}
+                            >
+                              {TASK_STATUS_LABEL[selectedGraphTask.status] ?? selectedGraphTask.status}
+                            </span>
+                          </div>
+                          <div className="mb-1.5 leading-relaxed break-words" style={{ color: 'var(--text-primary)' }}>
+                            {selectedGraphTask.description}
+                          </div>
+                          <div className="space-y-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                            <div>负责人：{selectedGraphTask.assignee ? displayNameOf(selectedGraphTask.assignee) : '未指派'}</div>
+                            <div className="break-words">
+                              前置：{depTasksOf(selectedGraphTask, tasks).length > 0
+                                ? depTasksOf(selectedGraphTask, tasks).map((d) => `T${d.taskNo} ${TASK_STATUS_LABEL[d.status] ?? d.status}`).join('、')
+                                : '无'}
+                            </div>
+                            {(selectedGraphTask.startedAt || selectedGraphTask.completedAt) && (
+                              <div>时间：{selectedGraphTask.startedAt ? formatTime(selectedGraphTask.startedAt) : '—'} → {selectedGraphTask.completedAt ? formatTime(selectedGraphTask.completedAt) : '进行中'}</div>
+                            )}
+                            {selectedGraphTask.resultSummary && <div className="break-words">结果：{selectedGraphTask.resultSummary}</div>}
+                            {selectedGraphTask.error && <div className="break-words" style={{ color: 'var(--status-danger)' }}>错误：{selectedGraphTask.error}</div>}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1 mt-2">
+                            <button
+                              className="px-1.5 rounded transition-colors hover:opacity-80"
+                              style={{ color: 'var(--accent)', border: '1px solid var(--accent)' }}
+                              onClick={() => {
+                                setGraphOpen(false);
+                                focusTaskCard(selectedGraphTask.id);
+                              }}
+                            >
+                              回到列表
+                            </button>
+                            {(selectedGraphTask.status === 'discussing' || selectedGraphTask.status === 'pending') && (
+                              <>
+                                <button
+                                  className="px-1.5 rounded transition-colors hover:opacity-80"
+                                  style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                                  onClick={() => {
+                                    setGraphOpen(false);
+                                    setDepsTask(selectedGraphTask);
+                                  }}
+                                >
+                                  修改依赖
+                                </button>
+                                <button
+                                  className="px-1.5 rounded transition-colors hover:opacity-80"
+                                  style={{ color: 'var(--status-warning)', border: '1px solid var(--border)' }}
+                                  onClick={() => {
+                                    setGraphOpen(false);
+                                    void handleSkipTask(selectedGraphTask);
+                                  }}
+                                >
+                                  跳过
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <span style={{ color: 'var(--text-tertiary)' }}>暂无可展示的任务</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )}
           </>
         ) : (
           <>

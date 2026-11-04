@@ -1,0 +1,175 @@
+import { useId, useMemo, useState } from 'react';
+import type { GroupChatTask, TaskStatus } from '../../types/groupchat';
+import {
+  buildTaskGraph,
+  FULL_GRAPH_METRICS,
+  MINI_GRAPH_METRICS,
+  taskPhase,
+  type TaskPhase,
+} from '../../utils/taskGraph';
+
+interface Props {
+  tasks: GroupChatTask[];
+  variant: 'mini' | 'full';
+  selectedId?: string | null;
+  onSelect?: (task: GroupChatTask) => void;
+  onOpenFull?: () => void;
+}
+
+function nodePaint(status: TaskStatus, phase: TaskPhase) {
+  switch (status) {
+    case 'success':
+      return { fill: 'var(--status-success-bg)', stroke: 'var(--status-success)', dash: undefined, opacity: 1 };
+    case 'failed':
+      return { fill: 'var(--status-danger-bg)', stroke: 'var(--status-danger)', dash: undefined, opacity: 1 };
+    case 'skipped':
+      return { fill: 'var(--status-warning-bg)', stroke: 'var(--status-warning)', dash: '4 3', opacity: 1 };
+    case 'aborted':
+      return { fill: 'var(--bg-tertiary)', stroke: 'var(--text-tertiary)', dash: '4 3', opacity: 0.72 };
+    case 'running':
+      return { fill: 'var(--accent-light)', stroke: 'var(--accent)', dash: undefined, opacity: 1 };
+    case 'discussing':
+      return { fill: 'var(--bg-tertiary)', stroke: 'var(--accent)', dash: '3 3', opacity: 1 };
+    default:
+      return {
+        fill: 'var(--bg-tertiary)',
+        stroke: phase === 'ready' ? 'var(--accent)' : 'var(--border)',
+        dash: undefined,
+        opacity: 1,
+      };
+  }
+}
+
+export function TaskDependencyGraph({ tasks, variant, selectedId, onSelect, onOpenFull }: Props) {
+  const rawArrowId = useId();
+  const arrowId = `pd-task-graph-arrow-${rawArrowId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const metrics = variant === 'mini' ? MINI_GRAPH_METRICS : FULL_GRAPH_METRICS;
+  const layout = useMemo(() => buildTaskGraph(tasks, metrics), [tasks, metrics]);
+
+  const relatedIds = useMemo(() => {
+    if (!hoveredId) return null;
+    const ids = new Set<string>([hoveredId]);
+    layout.edges.forEach((edge) => {
+      if (edge.fromTaskId === hoveredId) ids.add(edge.toTaskId);
+      if (edge.toTaskId === hoveredId) ids.add(edge.fromTaskId);
+    });
+    return ids;
+  }, [hoveredId, layout.edges]);
+
+  if (layout.nodes.length === 0) return null;
+
+  const compact = variant === 'mini';
+  const fontSize = compact ? 11 : 11;
+  const paddingX = compact ? 6 : 10;
+
+  return (
+    <svg
+      viewBox={`0 0 ${layout.width} ${layout.height}`}
+      width="100%"
+      height="auto"
+      role="img"
+      aria-label={`子任务依赖图，共 ${tasks.length} 个任务`}
+      style={{ display: 'block' }}
+    >
+      <defs>
+        <marker
+          id={arrowId}
+          viewBox="0 0 8 8"
+          refX="7"
+          refY="4"
+          markerWidth="8"
+          markerHeight="8"
+          markerUnits="userSpaceOnUse"
+          orient="auto"
+        >
+          <path d="M1 1 L7 4 L1 7 Z" fill="var(--text-tertiary)" />
+        </marker>
+      </defs>
+      {layout.edges.map((edge) => {
+        const active = hoveredId !== null && (edge.fromTaskId === hoveredId || edge.toTaskId === hoveredId);
+        return (
+          <path
+            key={`${edge.fromTaskId}-${edge.toTaskId}`}
+            d={edge.d}
+            fill="none"
+            stroke={active ? 'var(--accent)' : 'var(--border)'}
+            strokeWidth={active ? 2 : 1.2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            markerEnd={`url(#${arrowId})`}
+            style={{ opacity: hoveredId && !active ? 0.35 : 1, transition: 'opacity 120ms ease, stroke 120ms ease' }}
+          />
+        );
+      })}
+      {layout.nodes.map((node) => {
+        const task = node.task;
+        const phase = taskPhase(task, tasks);
+        const paint = nodePaint(task.status, phase);
+        const dim = relatedIds !== null && !relatedIds.has(task.id);
+        const selected = selectedId === task.id;
+        const showPhaseMark = phase === 'ready' || phase === 'waiting';
+        const label = compact || task.description.length <= 9
+          ? task.description
+          : `${task.description.slice(0, 9)}…`;
+        return (
+          <g
+            key={task.id}
+            transform={`translate(${node.x},${node.y})`}
+            role="button"
+            tabIndex={0}
+            aria-label={`T${task.taskNo} ${task.description}，${phase === 'finished' ? '已结束' : phase === 'running' ? '执行中' : phase === 'ready' ? '就绪' : '等待'}`}
+            onClick={() => (compact ? onOpenFull?.() : onSelect?.(task))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (compact) onOpenFull?.();
+                else onSelect?.(task);
+              }
+            }}
+            onMouseEnter={() => setHoveredId(task.id)}
+            onMouseLeave={() => setHoveredId(null)}
+            onFocus={() => setHoveredId(task.id)}
+            onBlur={() => setHoveredId(null)}
+            style={{ cursor: 'pointer', opacity: dim ? 0.5 : 1, transition: 'opacity 120ms ease' }}
+          >
+            <rect
+              width={node.width}
+              height={node.height}
+              rx={compact ? 4 : 7}
+              fill={paint.fill}
+              stroke={selected ? 'var(--accent)' : paint.stroke}
+              strokeWidth={selected ? 2 : 1}
+              strokeDasharray={paint.dash}
+              style={{ opacity: paint.opacity }}
+            />
+            <text
+              x={paddingX}
+              y={compact ? node.height / 2 + 4 : 20}
+              fill="var(--text-secondary)"
+              fontSize={fontSize}
+              style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontWeight: 500 }}
+            >
+              T{task.taskNo}
+            </text>
+            {!compact && (
+              <text x={paddingX} y={38} fill="var(--text-primary)" fontSize={fontSize}>
+                {label}
+              </text>
+            )}
+            {showPhaseMark && (
+              <circle
+                cx={node.width - (compact ? 6 : 9)}
+                cy={compact ? 6 : 9}
+                r={compact ? 2.5 : 3}
+                fill={phase === 'ready' ? 'var(--status-success)' : 'var(--bg-primary)'}
+                stroke={phase === 'ready' ? 'var(--status-success)' : 'var(--text-tertiary)'}
+                strokeWidth={1}
+              />
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
