@@ -3331,9 +3331,13 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       {deps.length > 0 && (
                         <div>前置：{deps.map((d) => `T${d.taskNo} ${TASK_STATUS_LABEL[d.status] ?? d.status}`).join('、')}</div>
                       )}
-                      {(t.startedAt || t.completedAt) && (
-                        <div>时间：{t.startedAt ? formatTime(t.startedAt) : '—'} → {t.completedAt ? formatTime(t.completedAt) : '进行中'}</div>
-                      )}
+                      {t.startedAt && t.completedAt ? (
+                        <div>时间：{formatTime(t.startedAt)} → {formatTime(t.completedAt)}</div>
+                      ) : t.completedAt ? (
+                        <div>完成于 {formatTime(t.completedAt)}</div>
+                      ) : t.startedAt ? (
+                        <div>开始于 {formatTime(t.startedAt)} · 进行中</div>
+                      ) : null}
                       {t.error && <div style={{ color: 'var(--status-danger)' }}>错误：{t.error}</div>}
                       {(t.status === 'discussing' || t.status === 'pending') && (
                         <div className="flex items-center gap-1 pt-0.5">
@@ -3519,9 +3523,13 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                                 ? depTasksOf(selectedGraphTask, tasks).map((d) => `T${d.taskNo} ${TASK_STATUS_LABEL[d.status] ?? d.status}`).join('、')
                                 : '无'}
                             </div>
-                            {(selectedGraphTask.startedAt || selectedGraphTask.completedAt) && (
-                              <div>时间：{selectedGraphTask.startedAt ? formatTime(selectedGraphTask.startedAt) : '—'} → {selectedGraphTask.completedAt ? formatTime(selectedGraphTask.completedAt) : '进行中'}</div>
-                            )}
+                            {selectedGraphTask.startedAt && selectedGraphTask.completedAt ? (
+                              <div>时间：{formatTime(selectedGraphTask.startedAt)} → {formatTime(selectedGraphTask.completedAt)}</div>
+                            ) : selectedGraphTask.completedAt ? (
+                              <div>完成于 {formatTime(selectedGraphTask.completedAt)}</div>
+                            ) : selectedGraphTask.startedAt ? (
+                              <div>开始于 {formatTime(selectedGraphTask.startedAt)} · 进行中</div>
+                            ) : null}
                             {selectedGraphTask.error && <div className="break-words" style={{ color: 'var(--status-danger)' }}>错误：{selectedGraphTask.error}</div>}
                           </div>
                           {selectedGraphTask.resultSummary && (
