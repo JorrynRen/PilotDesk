@@ -166,6 +166,8 @@ export interface CreateGroupChatRoomInput {
   allowAutoCli: number;
   /** 房间统一产物目录（绝对路径；缺省空=运行时回退 <工作目录>/outputs/<房间标题>/） */
   outputDir?: string;
+  /** 同层任务执行并行上限（1-4，缺省 2；仅影响执行阶段，讨论仍按顺序） */
+  maxParallel?: number;
 }
 
 // 事件 payload（对应后端 groupchat-event 单通道）

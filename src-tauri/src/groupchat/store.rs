@@ -191,6 +191,20 @@ pub fn update_room_output_dir(
     Ok(())
 }
 
+/// 更新房间的同层任务执行并行上限（`max_parallel`，1-4）。
+/// 执行阶段每波重新读取该值，因此运行中修改只影响下一波次。
+pub fn update_room_max_parallel(
+    conn: &Connection,
+    room_id: &str,
+    max_parallel: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE groupchat_rooms SET max_parallel = ?1, updated_at = ?2 WHERE id = ?3",
+        params![max_parallel, crate::utils::now(), room_id],
+    )?;
+    Ok(())
+}
+
 /// 更新房间的「讨论轮次参考预算」（`max_rounds`）。仅作参考刻度，不做硬上限判定。
 /// `n <= 0` 表示**不设预算**（前端只显示已讨论轮次，不显示分母）。
 pub fn update_room_round_budget(

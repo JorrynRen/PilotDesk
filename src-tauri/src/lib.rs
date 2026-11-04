@@ -2904,6 +2904,7 @@ pub fn run() {
             commands::groupchat::groupchat_respond_confirmation,
             commands::groupchat::groupchat_set_director,
             commands::groupchat::groupchat_set_output_dir,
+            commands::groupchat::groupchat_set_max_parallel,
             commands::groupchat::groupchat_pause,
             commands::groupchat::groupchat_resume,
             commands::groupchat::groupchat_abort,

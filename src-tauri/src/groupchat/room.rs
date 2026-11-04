@@ -4945,7 +4945,18 @@ impl RoomRuntime {
             .iter()
             .map(|t| serde_json::from_str::<Vec<usize>>(&t.depends_on).unwrap_or_default())
             .collect();
-        let max_parallel = self.room.max_parallel.max(1) as usize;
+        // 并行上限：每波从 DB 重读，运行中修改只影响下一波次（不改正在执行的波）。
+        let max_parallel = {
+            let from_db = self
+                .pool
+                .get()
+                .ok()
+                .and_then(|conn| store::get_room(&conn, &self.room_id).ok().flatten())
+                .map(|r| r.max_parallel);
+            from_db
+                .unwrap_or(self.room.max_parallel)
+                .clamp(1, 4) as usize
+        };
 
         // 下标 -> 最终状态（依赖检查用，下标与 tasks 数组一致）
         let mut final_status: Vec<String> = tasks.iter().map(|t| t.status.clone()).collect();
@@ -5027,24 +5038,35 @@ impl RoomRuntime {
             // 每任务一条"实质产出进展"通道：AgentLoop 每完成一轮有产出的迭代即 try_send，
             // 汇聚端据此重置停滞秒表（区分长任务正常推进与真停滞，有产出不误杀）。
             let mut progress_rxs = Vec::with_capacity(wave.len());
+            // 同波次执行者占用表：仅用于轮询兜底去重（显式 assignee 仍按用户/主持人指派）。
+            let mut used_assignees: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for &idx in &wave {
                 // 依赖感知跳过：任一前置非 success → skipped，不再无意义执行
                 let dep_blocked = deps[idx]
                     .iter()
                     .any(|&d| d >= final_status.len() || final_status[d] != "success");
 
-                // 首次执行者：优先 Director 指派的 assignee，否则轮询兜底
-                let initial_assignee = tasks[idx]
+                // 首次执行者：优先 Director 指派的 assignee；缺省时轮询，且同波次内避开已占用的执行者，
+                // 避免默认轮询把并发的多个任务派给同一个 Agent。
+                let assigned = tasks[idx]
                     .assignee
                     .clone()
                     .map(|id| normalize_participant_ref(&id))
-                    .filter(|id| self.participants.contains_key(id))
-                    .or_else(|| {
-                        self.executor_order
-                            .get(idx % self.executor_order.len().max(1))
-                            .cloned()
-                    })
-                    .or_else(|| self.executor_order.first().cloned());
+                    .filter(|id| self.participants.contains_key(id));
+                let initial_assignee = match assigned {
+                    Some(id) => Some(id),
+                    None => self
+                        .executor_order
+                        .iter()
+                        .find(|id| !used_assignees.contains(*id))
+                        .cloned()
+                        .or_else(|| self.executor_order.get(idx % self.executor_order.len().max(1)).cloned())
+                        .or_else(|| self.executor_order.first().cloned()),
+                };
+                if let Some(id) = &initial_assignee {
+                    used_assignees.insert(id.clone());
+                }
 
                 let mut task = tasks[idx].clone();
                 if !dep_blocked {

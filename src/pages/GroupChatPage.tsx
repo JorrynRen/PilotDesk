@@ -331,6 +331,8 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
   const [allowAutoCli, setAllowAutoCli] = useState(true);
   // 房间统一产物目录（绝对路径；空=运行时回退 <工作目录>/outputs/<房间标题>/）。
   const [outputDir, setOutputDir] = useState('');
+  // 同层任务执行并行上限（1-4，缺省 2；仅影响执行阶段）。
+  const [maxParallel, setMaxParallel] = useState(2);
 
   useEffect(() => {
     fetchProviders();
@@ -434,6 +436,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
       directorId: 'director',
       allowAutoCli: allowAutoCli ? 1 : 0,
       outputDir: outputDir.trim() || undefined,
+      maxParallel,
     };
 
     try {
@@ -622,6 +625,30 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
               )}
             </div>
           ))}
+        </div>
+
+        <div className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+          <div className="flex items-center justify-between">
+            <span>并行任务数</span>
+            <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-primary)' }}>{maxParallel}</span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={4}
+            step={1}
+            value={maxParallel}
+            onChange={(e) => setMaxParallel(Number(e.target.value))}
+            className="w-full"
+            style={{ accentColor: 'var(--accent)' }}
+          />
+          <div className="flex justify-between text-[9px] tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+            <span>1</span>
+            <span>4</span>
+          </div>
+          <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+            同层任务执行并行，讨论仍按顺序进行
+          </span>
         </div>
 
         {error && (
@@ -1487,7 +1514,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     messagesLoading, loadingEarlier, totalMessages, loadEarlierMessages,
     loadRooms, selectRoom, sendMessage, deleteRoom, removeParticipant,
     respondConfirmation, pause, resume, abort, exportWorkflow,
-    setRoomOutputDir, actorAlive, roomsActorAlive,
+    setRoomOutputDir, setRoomMaxParallel, actorAlive, roomsActorAlive,
     skipTask, addTask, updateTaskDeps, previewTaskDeps, promoteWorkflow,
   } = useGroupChatStore();
 
@@ -1497,6 +1524,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [showCreate, setShowCreate] = useState(false);
   // 房间统一产物目录编辑草稿（随当前房间同步；保存后写入房间配置并广播）。
   const [outputDirDraft, setOutputDirDraft] = useState('');
+  // 执行并行上限编辑草稿（随当前房间同步；松手后保存，当前波次不受影响）。
+  const [parallelDraft, setParallelDraft] = useState(2);
   const [showAdd, setShowAdd] = useState(false);
   const [exporting, setExporting] = useState(false);
   /** 「转为可运行工作流」进行中（落库 + 跳转编辑器前禁止重复点击）。 */
@@ -1779,6 +1808,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   if (dirDraftSyncKey !== dirDraftKey) {
     setDirDraftSyncKey(dirDraftKey);
     setOutputDirDraft(currentRoom?.outputDir ?? '');
+    setParallelDraft(currentRoom?.maxParallel ?? 2);
   }
 
   const participantById = useMemo(() => {
@@ -3082,6 +3112,28 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
                 当前：{currentRoom?.outputDir || '（目标理解阶段由主持人命名于 <工作目录>/outputs/ 下）'}；所有参与者产物统一写入该目录。
               </span>
+            </div>
+
+            <div className="px-3 py-2 flex items-center gap-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+              <span className="text-[9px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>执行并行上限</span>
+              <input
+                type="range"
+                min={1}
+                max={4}
+                step={1}
+                value={parallelDraft}
+                disabled={!currentRoomId}
+                onChange={(e) => setParallelDraft(Number(e.target.value))}
+                onPointerUp={() => {
+                  if (parallelDraft !== (currentRoom?.maxParallel ?? 2)) void setRoomMaxParallel(parallelDraft);
+                }}
+                onKeyUp={() => {
+                  if (parallelDraft !== (currentRoom?.maxParallel ?? 2)) void setRoomMaxParallel(parallelDraft);
+                }}
+                className="flex-1 min-w-0"
+                style={{ accentColor: 'var(--accent)' }}
+              />
+              <span className="text-[10px] tabular-nums shrink-0" style={{ color: 'var(--text-primary)' }}>{parallelDraft}</span>
             </div>
 
             <div className="px-3 py-2 text-[10px] font-medium flex items-center justify-between shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>

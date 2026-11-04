@@ -28,6 +28,9 @@ pub struct CreateRoomInput {
     /// 房间统一产物目录（绝对路径；缺省空=运行时回退 `<工作目录>/outputs/<房间标题>/`）
     #[serde(default)]
     pub output_dir: String,
+    /// 同层任务执行并行上限（1-4，缺省 2）。
+    #[serde(default)]
+    pub max_parallel: Option<i64>,
 }
 
 fn default_allow_auto_cli() -> i64 {
@@ -96,7 +99,8 @@ pub fn groupchat_create_room(
         strategy: "round_robin".into(),
         // 讨论轮次参考预算：0 = 不设，由主持人在任务编排（kickoff）时按复杂度估算给出。
         max_rounds: 0,
-        max_parallel: 2,
+        // 同层任务执行并行上限（房间级，1-4；讨论阶段不受影响）
+        max_parallel: input.max_parallel.unwrap_or(2).clamp(1, 4),
         director_id: Some(input.director_id.clone()),
         current_task_id: None,
         created_at: now,
@@ -287,6 +291,19 @@ pub fn groupchat_set_output_dir(
     if let Some(handle) = registry.get(&room_id) {
         handle.send(RoomCommand::SetOutputDir(output_dir));
     }
+    Ok(store::get_room(&conn, &room_id)?
+        .ok_or_else(|| AppError::NotFound("房间不存在".to_string()))?)
+}
+
+#[tauri::command]
+pub fn groupchat_set_max_parallel(
+    state: State<'_, DbState>,
+    room_id: String,
+    max_parallel: i64,
+) -> Result<Room, String> {
+    let conn = state.get_conn()?;
+    let v = max_parallel.clamp(1, 4);
+    store::update_room_max_parallel(&conn, &room_id, v)?;
     Ok(store::get_room(&conn, &room_id)?
         .ok_or_else(|| AppError::NotFound("房间不存在".to_string()))?)
 }

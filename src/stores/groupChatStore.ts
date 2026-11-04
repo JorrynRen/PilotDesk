@@ -379,6 +379,18 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
     }));
   },
 
+  setRoomMaxParallel: async (maxParallel: number) => {
+    const roomId = get().currentRoomId;
+    if (!roomId) return;
+    const room = await invoke<GroupChatRoom>('groupchat_set_max_parallel', {
+      roomId,
+      maxParallel: Math.min(4, Math.max(1, Math.round(maxParallel))),
+    });
+    set((s) => ({
+      rooms: s.rooms.map((r) => (r.id === roomId ? { ...r, maxParallel: room.maxParallel } : r)),
+    }));
+  },
+
   exportWorkflow: async () => {
     const roomId = get().currentRoomId;
     if (!roomId) throw new Error('未选择圆桌');
