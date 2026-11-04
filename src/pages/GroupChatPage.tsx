@@ -26,6 +26,7 @@ import { AgentIcon } from '../components/common/AgentIcon';
 import { collapseBlankLines, tightenListGaps } from '../components/message/markdownText';
 import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
 import { TaskDependencyGraph } from '../components/groupchat/TaskDependencyGraph';
+import { TaskGraphViewport } from '../components/groupchat/TaskGraphViewport';
 import {
   TASK_PHASE_LABEL,
   depTasksOf,
@@ -1529,6 +1530,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [graphScale, setGraphScale] = useState(1);
   /** 拓扑浮层是否最大化。 */
   const [graphMaximized, setGraphMaximized] = useState(false);
+  /** 拓扑详情栏宽度（仅本次浮层内生效，不持久化）。 */
+  const [graphDetailWidth, setGraphDetailWidth] = useState(260);
   /** 任务人工干预弹窗（null=关闭）：新增子任务 / 修改依赖。 */
   const [showAddTask, setShowAddTask] = useState(false);
   const [depsTask, setDepsTask] = useState<GroupChatTask | null>(null);
@@ -1736,6 +1739,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const openGraph = useCallback(() => {
     setGraphScale(1);
     setGraphMaximized(false);
+    setGraphDetailWidth(260);
     setGraphOpen(true);
   }, []);
 
@@ -3428,8 +3432,13 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       / 等待 <span className="w-1.5 h-1.5 rounded-full border" style={{ borderColor: 'var(--text-tertiary)' }} />
                     </span>
                   </div>
-                  <div className="flex-1 min-h-0 flex gap-3 p-4 overflow-hidden">
-                    <div className="flex-1 min-w-0 overflow-auto rounded-lg p-2" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                  <div className="flex-1 min-h-0 flex gap-2 p-4 overflow-hidden">
+                    <TaskGraphViewport
+                      scale={graphScale}
+                      onScaleChange={setGraphScale}
+                      className="flex-1 min-w-0 rounded-lg p-2"
+                      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                    >
                       <TaskDependencyGraph
                         tasks={tasks}
                         variant="full"
@@ -3437,8 +3446,33 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                         selectedId={selectedGraphTask?.id ?? null}
                         onSelect={(task) => setGraphSelectedId(task.id)}
                       />
-                    </div>
-                    <div className="w-[260px] shrink-0 overflow-y-auto rounded-lg p-3 text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+                    </TaskGraphViewport>
+                    <div
+                      className="w-1 shrink-0 rounded cursor-col-resize transition-colors"
+                      style={{ backgroundColor: 'var(--border)' }}
+                      title="拖动调整详情宽度"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        const startX = e.clientX;
+                        const startWidth = graphDetailWidth;
+                        const onMove = (ev: PointerEvent) => {
+                          const max = Math.min(480, window.innerWidth * 0.55);
+                          setGraphDetailWidth(Math.max(200, Math.min(max, startWidth - (ev.clientX - startX))));
+                        };
+                        const onUp = () => {
+                          window.removeEventListener('pointermove', onMove);
+                          window.removeEventListener('pointerup', onUp);
+                          document.body.style.userSelect = '';
+                        };
+                        window.addEventListener('pointermove', onMove);
+                        window.addEventListener('pointerup', onUp);
+                        document.body.style.userSelect = 'none';
+                      }}
+                    />
+                    <div
+                      className="min-w-0 shrink-0 overflow-y-auto rounded-lg p-3 text-[10px]"
+                      style={{ width: graphDetailWidth, backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+                    >
                       {selectedGraphTask ? (
                         <>
                           <div className="flex items-center justify-between gap-1 mb-1.5">
