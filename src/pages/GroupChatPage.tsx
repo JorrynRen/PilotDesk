@@ -2917,25 +2917,6 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             讨论
           </button>
           <button
-            onClick={() => setRightTab('stances')}
-            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
-            style={{
-              color: rightTab === 'stances' ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: rightTab === 'stances' ? '2px solid var(--accent)' : '2px solid transparent',
-            }}
-            title="参与者立场快照"
-          >
-            立场
-            {stances.length > 0 && (
-              <span
-                className="px-1 rounded-full text-[9px] leading-[14px]"
-                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
-              >
-                {stances.length}
-              </span>
-            )}
-          </button>
-          <button
             onClick={() => setRightTab('tasks')}
             className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
             style={{
@@ -2951,6 +2932,25 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
               >
                 {tasks.length - taskStats.finished}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setRightTab('stances')}
+            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
+            style={{
+              color: rightTab === 'stances' ? 'var(--accent)' : 'var(--text-secondary)',
+              borderBottom: rightTab === 'stances' ? '2px solid var(--accent)' : '2px solid transparent',
+            }}
+            title="参与者立场快照"
+          >
+            立场
+            {stances.length > 0 && (
+              <span
+                className="px-1 rounded-full text-[9px] leading-[14px]"
+                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+              >
+                {stances.length}
               </span>
             )}
           </button>
@@ -3158,6 +3158,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             </div>
           </>
         ) : rightTab === 'tasks' ? (
+          currentRoom ? (
           <>
             <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <ListTodo size={10} style={{ color: 'var(--accent)' }} />
@@ -3577,6 +3578,11 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               document.body,
             )}
           </>
+          ) : (
+            <div className="p-3 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+              尚未创建圆桌。创建圆桌后，这里会显示主持人整理的总目标、子任务与依赖拓扑。
+            </div>
+          )
         ) : (
           <>
             {/* ── 文件历史 tab：当前房间 write_file/edit_file 快照，可撤销，占满整栏 ── */}
