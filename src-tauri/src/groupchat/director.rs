@@ -179,9 +179,6 @@ pub struct ReviewOutcome {
     pub reason: String,
     /// next_action=confirm 时的确认请求。
     pub confirmation: Option<ConfirmationRequest>,
-    /// 主持人收口裁决（v3.4ao）：next_action=done 时，判定为"讨论中已被实质完成、执行阶段应跳过"的
-    /// discussing 任务 id 列表（主持人最终权威；产物/发言仅为裁决依据）。
-    pub completed_tasks: Vec<String>,
 }
 
 /// 立场预处理结果（LLM 从单次发言提取的归一化立场）。
@@ -1142,24 +1139,11 @@ impl Director {
         } else {
             None
         };
-        let completed_tasks = v["completed_tasks"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| {
-                        x.as_str()
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         Some(ReviewOutcome {
             summary,
             next_action,
             reason,
             confirmation,
-            completed_tasks,
         })
     }
 

@@ -3314,8 +3314,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 </div>
               )}
 
-              {/* 子任务预览：缩略拓扑（原始状态着色），点击放大进入全屏浮层 */}
-              {tasks.length >= 3 && (
+              {/* 子任务预览：缩略拓扑（原始状态着色），点击放大进入全屏浮层。
+                  只要有任务就渲染（不再限定 ≥3）：任务执行结果只能在放大拓扑图里查看，
+                  少于 3 个任务时若隐藏预览，就没有入口打开拓扑图。 */}
+              {tasks.length > 0 && (
                 <div className="px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                   <div className="flex items-center justify-between mb-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
                     <span>子任务预览</span>

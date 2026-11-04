@@ -85,6 +85,17 @@ export function deriveStage(content: string, kind: string): GroupChatStageExtra 
     if (m) return { stage: 'progress', body: content.slice(m[0].length) };
   }
   if (!content) return null;
+  // 执行阶段参与者回帖的「执行完成报告」本质是任务完成播报（kind=statement，而非 task_result），
+  // 标题形如 `## T3 执行完成报告`：按任务完成卡渲染，旧消息无需迁移。
+  const report = /^\s*(?:#{1,6}\s*)?(?:T\s*)?(\d{1,2})?\s*执行完成报告\s*\n/.exec(content);
+  if (report) {
+    return {
+      stage: 'task_result',
+      status: 'success',
+      taskNo: report[1] ? Number(report[1]) : undefined,
+      body: content.slice(report[0].length),
+    };
+  }
   const tool = /^\s*本轮工具裁决[^：:\n]*[：:]\s*/.exec(content);
   if (tool) {
     const items = parseToolDecisionLines(content.slice(tool[0].length)) ?? [];
@@ -106,11 +117,24 @@ export function deriveStage(content: string, kind: string): GroupChatStageExtra 
   return null;
 }
 
-/** 立场声明前缀：`【立场：支持】` / `立场：支持`，解析后正文不再重复展示该行。 */
+/** 立场声明：`【立场：支持】` / `立场：支持`，解析后正文不再重复展示该行。 */
 export function parseStance(content: string): { attitude: string; body: string } | null {
-  const m = /^\s*【?\s*立场\s*[:：]\s*(支持|反对|中立)\s*】?\s*/.exec(content);
+  // 模型偶尔会在声明前加一句过渡语和 `---` 分隔线（如「网络受限…」+ 分隔线 + 【立场：支持】），
+  // 因此在前 240 字内查找「独立成行」的声明，而不是只认正文首行。
+  const m = /【\s*立场\s*[:：]\s*(支持|反对|中立)\s*】|立场\s*[:：]\s*(支持|反对|中立)/.exec(
+    content.slice(0, 240),
+  );
   if (!m) return null;
-  return { attitude: m[1], body: content.slice(m[0].length) };
+  const lineStart = content.lastIndexOf('\n', m.index) + 1;
+  const nl = content.indexOf('\n', m.index);
+  const lineEnd = nl === -1 ? content.length : nl;
+  // 声明所在行若还夹着较多正文（如「综上，我的立场：支持方案A」），视为正文提及而非声明。
+  const rest = content.slice(lineStart, lineEnd).replace(m[0], '').replace(/[>*#\-|。：:\s]/g, '');
+  if (rest.length > 8) return null;
+  const attitude = m[1] ?? m[2];
+  const before = content.slice(0, lineStart).replace(/\s*---\s*$/, '').trim();
+  const after = content.slice(lineEnd).replace(/^\s*---\s*/, '').trim();
+  return { attitude, body: [before, after].filter(Boolean).join('\n\n') };
 }
 
 const STANCE_TONE: Record<string, string> = {
@@ -184,12 +208,27 @@ function StageTable({
   );
 }
 
+/**
+ * 区块标题：左侧强调竖条 + 深色加粗标题 + 右侧延伸分隔线。
+ * 调度卡里「新增参与者 / 角色分配 / 任务」等区块并排出现时，靠这条标题带拉开层次，
+ * 避免和表格表头、正文行混在一起。
+ */
 function Section({ label, children }: { label?: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
       {label && (
-        <div className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-          {label}
+        <div className="flex items-center gap-1.5">
+          <span
+            className="w-[2px] self-stretch rounded-sm shrink-0"
+            style={{ backgroundColor: 'var(--accent)' }}
+          />
+          <span
+            className="text-[10px] font-semibold tracking-wide whitespace-nowrap"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            {label}
+          </span>
+          <span className="flex-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
         </div>
       )}
       {children}

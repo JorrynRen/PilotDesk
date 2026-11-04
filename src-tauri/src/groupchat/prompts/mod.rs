@@ -242,7 +242,7 @@ pub mod blocks {
 
     pub const DIRECTOR_REVIEW: BlockSpec = block(
         "director.review",
-        "阶段D 评估：更新 L1 摘要 + 判定下一步（discuss/confirm/done）+ completed_tasks 裁决",
+        "阶段D 评估：更新 L1 摘要 + 判定下一步（discuss/confirm/done/replan）；任务完成状态由执行阶段写入",
         "flow.review",
         include_str!("blocks/director_review.prompt.md"),
     );

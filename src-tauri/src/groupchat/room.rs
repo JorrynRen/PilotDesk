@@ -1347,41 +1347,6 @@ fn sanitize_room_title(title: &str) -> String {
     crate::utils::paths::sanitize_dir_name(title, "room")
 }
 
-/// 收集任务在讨论阶段被执行/推进的证据摘要（v3.4ao）：仅作主持人裁决的**依据输入**，
-/// 最终是否跳过执行由 Director（review.completed_tasks）裁决。证据 = 负责人讨论发言
-/// 中携带的写盘类产物路径；无证据返回空串。
-fn discussion_artifacts_summary(pool: &DbPool, room_id: &str, task: &TaskRow) -> String {
-    let assignee = task.assignee.as_deref().unwrap_or("");
-    if assignee.is_empty() {
-        return String::new();
-    }
-    let Ok(conn) = pool.get() else {
-        return String::new();
-    };
-    let Ok(rows) = store::list_messages(&conn, room_id, None, None) else {
-        return String::new();
-    };
-    let mut paths: Vec<String> = Vec::new();
-    for m in rows {
-        if m.kind == "statement" && m.sender == assignee && !m.tool_calls.trim().is_empty() {
-            for a in extract_artifacts_from_tool_calls(&m.tool_calls) {
-                let p = match a.kind {
-                    ArtifactKind::File => format!("文件 {}", a.value),
-                    ArtifactKind::Url => format!("网络 {}", a.value),
-                };
-                if !paths.contains(&p) {
-                    paths.push(p);
-                }
-            }
-        }
-    }
-    if paths.is_empty() {
-        String::new()
-    } else {
-        format!("（讨论阶段已产出：{}）", paths.join("；"))
-    }
-}
-
 /// 用户输入物引用解析结果（v3.4an）：raw 为原文引用；resolved 为解析后的绝对路径/URL，
 /// None=未能确定性解析（注入层显式降级为"定位要求"，避免执行者臆测路径）。
 #[derive(Debug, Clone)]
@@ -4909,11 +4874,9 @@ impl RoomRuntime {
                     return true;
                 }
                 "done" => {
-                    // 主持人收口裁决（v3.4ao）：把主持裁决为"讨论中已实质完成"的任务置 success，
-                    // 执行阶段跳过（主持人最终权威，产物/发言仅作裁决依据）。
-                    if !review.completed_tasks.is_empty() {
-                        self.apply_completed_tasks(&review.completed_tasks).await;
-                    }
+                    // done 仅表示讨论阶段收敛、可转入执行；不再允许主持人把 discussing 任务直接置
+                    // success（否则执行阶段被跳过，任务状态/成果全部由主持人代写，执行人从未更新状态）。
+                    // 所有任务必须进入执行阶段，由执行者写终态与真实成果。
                     // done 连续 2 轮防抖收敛，避免单次误判。
                     if self.rules.should_converge(true) {
                         return false;
@@ -4922,32 +4885,6 @@ impl RoomRuntime {
                 _ => {
                     self.rules.should_converge(false);
                 }
-            }
-        }
-    }
-
-    /// 应用主持人收口裁决（v3.4aq）：`completed_tasks` 为任务编号（如 1、2 或 T1），
-    /// 匹配仍 discussing 的任务置 success，执行阶段跳过（主持人最终权威；产物/发言仅是其裁决依据）。
-    async fn apply_completed_tasks(&mut self, task_nos: &[String]) {
-        let conn = match self.conn() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
-            return;
-        };
-        for t in tasks {
-            let matched = task_nos.iter().any(|no| {
-                let no = no.trim().trim_start_matches(['T', 't']).trim();
-                no.parse::<i64>().ok() == Some(t.task_no)
-            });
-            if t.status == "discussing" && matched {
-                let mut nt = t.clone();
-                nt.status = "success".into();
-                nt.result_summary = Some("主持人裁决：讨论阶段已完成".to_string());
-                nt.completed_at = Some(crate::utils::now());
-                let _ = store::update_task(&conn, &nt);
-                self.emit(GroupChatEvent::task_updated(&self.room_id, nt));
             }
         }
     }
@@ -5615,7 +5552,10 @@ impl RoomRuntime {
         }
 
         // 执行结束：把执行结果回流到 L1 摘要，供后续结论/讨论使用。
-        self.refresh_summary().await;
+        // 只有全部任务已终态（主循环即将收尾、不会再审阅）时才需要这条摘要卡；
+        // 仍有后续层时，下一轮 discuss 的审阅会产出进度卡，此处静默更新记忆即可。
+        let show_card = self.all_tasks_terminal();
+        self.refresh_summary(show_card).await;
 
         false
     }
@@ -7029,8 +6969,6 @@ impl RoomRuntime {
     }
 
     fn build_task_manifest(&self) -> String {
-        let pool = self.pool.clone();
-        let room_id = self.room_id.clone();
         self.conn()
             .ok()
             .map(|c| store::list_tasks(&c, &self.room_id).unwrap_or_default())
@@ -7047,14 +6985,10 @@ impl RoomRuntime {
                 } else {
                     t.error.clone().unwrap_or_default()
                 };
-                // v3.4ao：discussing 任务附"讨论阶段执行证据"（主持人裁决依据，非判定本身）。
-                let evidence = if t.status == "discussing" {
-                    discussion_artifacts_summary(&pool, &room_id, t)
-                } else {
-                    String::new()
-                };
+                // 任务清单只陈述状态与结果，不再附「讨论阶段产出」证据：任务是否完成由执行阶段
+                // 的执行者写终态，不由主持人依据讨论发言裁决定稿。
                 format!(
-                    "T{}. [{}] {}（负责人：{}）{}{}",
+                    "T{}. [{}] {}（负责人：{}）{}",
                     t.task_no,
                     t.status,
                     t.description,
@@ -7064,7 +6998,6 @@ impl RoomRuntime {
                     } else {
                         format!(" - {}", detail)
                     },
-                    evidence
                 )
             })
             .collect::<Vec<_>>()
@@ -7098,7 +7031,10 @@ impl RoomRuntime {
     }
 
     /// 执行结果回流 L1 摘要：执行结束后把任务执行成果压缩进摘要，补异步并行反馈缺口。
-    async fn refresh_summary(&mut self) {
+    /// `show_card`：是否同时落一条可见的「进度-盘点」。只有本次执行已让全部任务进入终态
+    /// （主循环马上收尾、不会再有下一轮 discuss 审阅）时才需要展示；否则下一轮审阅会立刻产出
+    /// 内容几乎相同的进度卡，这里再发就是紧邻的第二条重复摘要。
+    async fn refresh_summary(&mut self, show_card: bool) {
         let director = match self.director.clone() {
             Some(d) => d,
             None => return,
@@ -7122,11 +7058,12 @@ impl RoomRuntime {
         if review.summary.is_empty() {
             return;
         }
-        // 本次执行没有让摘要发生变化时，不重复落「进度-盘点」（否则与上一条内容完全相同）。
-        if review.summary == self.memory.summary() {
+        // 摘要与当前 L1 完全一致（本次执行没有改变进度）时只保留记忆、不落卡。
+        let unchanged = review.summary == self.memory.summary();
+        self.memory.set_summary(&review.summary);
+        if !show_card || unchanged {
             return;
         }
-        self.memory.set_summary(&review.summary);
         let director_sender = self.director_sender();
         let summary_msg = self
             .persist_message(
