@@ -196,7 +196,9 @@ export function ConfirmationCard({
           <span className="ml-auto text-[10px] opacity-80 shrink-0">{countdown}s</span>
         )}
       </div>
-      <div className="p-3 flex flex-col gap-2" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+      {/* 正文用卡片档 --bg-raised，控件用 --bg-field：二者必须分属不同层级，
+          否则控件与卡片底色同为 tertiary 会糊成一片、看不出可输入区域 */}
+      <div className="p-3 flex flex-col gap-2" style={{ backgroundColor: 'var(--bg-raised)' }}>
         {confirmation.prompt && (
           <div className="text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{confirmation.prompt}</div>
         )}
@@ -231,7 +233,7 @@ export function ConfirmationCard({
                 disabled={locked}
                 placeholder={it.placeholder || '请输入'}
                 className="px-3 py-2 rounded-lg text-xs outline-none"
-                style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
               />
             ) : (
               <>
@@ -254,7 +256,7 @@ export function ConfirmationCard({
                   disabled={locked}
                   placeholder="请补充具体内容（提交后将作为该项回复）"
                   className="px-3 py-2 rounded-lg text-xs outline-none"
-                  style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                 />
               )}
               </>

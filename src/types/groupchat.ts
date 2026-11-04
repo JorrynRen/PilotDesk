@@ -69,6 +69,72 @@ export interface GroupChatMessage {
   timestamp: number;
 }
 
+/** 圆桌阶段消息的结构化条目（extra.stage 载荷的一部分）。 */
+export interface GroupChatStageRosterItem {
+  participant: string;
+  role?: string;
+  reason?: string;
+}
+
+export interface GroupChatStageRoleItem {
+  participant: string;
+  role?: string;
+  status?: string;
+  reason?: string;
+}
+
+export interface GroupChatStageTaskItem {
+  no: number;
+  description: string;
+  assignee?: string | null;
+  dependsOn?: number[];
+}
+
+export interface GroupChatStageRemovedItem {
+  no: number;
+  reason?: string;
+}
+
+export interface GroupChatStageReassignedItem {
+  no: number;
+  from?: string | null;
+  to?: string;
+}
+
+export interface GroupChatToolDecisionItem {
+  tool: string;
+  risk?: string;
+  allow?: boolean;
+  reason?: string;
+}
+
+/**
+ * 圆桌阶段消息载荷（消息 extra JSON）：`stage` 决定前端的标题与图标，
+ * 其余字段按需携带表格数据；旧消息无此载荷时按正文前缀降级渲染。
+ */
+export interface GroupChatStageExtra {
+  stage: string;
+  goal?: string;
+  digest?: string[];
+  questions?: string[];
+  notice?: string;
+  items?: GroupChatToolDecisionItem[];
+  roster?: GroupChatStageRosterItem[];
+  rosterRejected?: string[];
+  roles?: GroupChatStageRoleItem[];
+  tasks?: GroupChatStageTaskItem[];
+  removed?: GroupChatStageRemovedItem[];
+  reassigned?: GroupChatStageReassignedItem[];
+  speaker?: string;
+  speakerReason?: string;
+  workContent?: string | null;
+  taskId?: string;
+  taskNo?: number;
+  status?: string;
+  description?: string;
+  body?: string;
+}
+
 /** 结构化确认项（Director 生成，前端按 inputType 渲染对应控件）。 */
 export interface GroupChatConfirmationItem {
   id: string;

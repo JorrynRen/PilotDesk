@@ -542,6 +542,33 @@ struct ReplanApplication {
     removed: usize,
     reassigned: usize,
     added: Vec<TaskRow>,
+    /// 被级联删减的任务明细（供调度消息渲染表格）。
+    removed_items: Vec<serde_json::Value>,
+    /// 实际生效的负责人变更明细（供调度消息渲染表格）。
+    reassigned_items: Vec<serde_json::Value>,
+}
+
+/// 阶段消息的结构化载荷：`extra` = {"stage": "...", ...payload}。
+/// 前端按 stage 渲染统一标题（图标 + 标题 + 分隔线）与表格；content 仍保留纯文本供检索/降级。
+fn stage_extra(stage: &str, payload: serde_json::Value) -> String {
+    let mut obj = match payload {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    obj.insert(
+        "stage".to_string(),
+        serde_json::Value::String(stage.to_string()),
+    );
+    serde_json::Value::Object(obj).to_string()
+}
+
+/// 任务依赖索引（0 基绝对下标）→ 任务编号（与 task_no 对齐）。
+fn dep_task_nos(depends_on: &str) -> Vec<i64> {
+    serde_json::from_str::<Vec<usize>>(depends_on)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|i| (i + 1) as i64)
+        .collect()
 }
 
 /// 房间运行时与命令层共享的控制标志。
@@ -2905,8 +2932,16 @@ impl RoomRuntime {
                     "【目标理解】我已理解你的目标，以下信息需要与你确认后再开始编排：\n目标：{}\n{}待确认问题：\n{}",
                     current_goal, digest_line, questions_text
                 );
+                let extra = stage_extra(
+                    "goal",
+                    serde_json::json!({
+                        "goal": current_goal,
+                        "digest": resolved_acc,
+                        "questions": open_questions,
+                    }),
+                );
                 let msg = self
-                    .persist_message(
+                    .persist_message_extra(
                         &director_sender,
                         &[],
                         "director_notice",
@@ -2915,6 +2950,7 @@ impl RoomRuntime {
                         &[],
                         "",
                         &reasoning,
+                        &extra,
                     )
                     .await;
                 self.memory.apply_message(&msg, &self.all_participant_ids());
@@ -2939,7 +2975,7 @@ impl RoomRuntime {
                     task_id: String::new(),
                     title: "目标确认".to_string(),
                     // 确认请求 prompt 仅作简短引导；目标与待确认问题由 notice 承载。
-                    prompt: "请确认以上【目标理解】中的待确认问题，或直接补充说明（若已提供材料位置，主持人会先核验材料再判断）。".to_string(),
+                    prompt: "请确认以上「目标理解」中的待确认问题，或直接补充说明（若已提供材料位置，主持人会先核验材料再判断）。".to_string(),
                     reply_mode: "open".to_string(),
                     items,
                 };
@@ -3097,8 +3133,9 @@ impl RoomRuntime {
         } else {
             // 目标清晰：落【目标理解】notice 供用户可见可纠正，落位 topic 后直接编排。
             let notice = format!("【目标理解】我已理解你的目标：\n{}", goal);
+            let extra = stage_extra("goal", serde_json::json!({ "goal": goal }));
             let msg = self
-                .persist_message(
+                .persist_message_extra(
                     &director_sender,
                     &[],
                     "director_notice",
@@ -3107,6 +3144,7 @@ impl RoomRuntime {
                     &[],
                     "",
                     &clarify_reasoning,
+                    &extra,
                 )
                 .await;
             self.memory.apply_message(&msg, &self.all_participant_ids());
@@ -3227,6 +3265,8 @@ impl RoomRuntime {
         let mut role_map: HashMap<String, String> = HashMap::new();
         let mut rejected_roles: Vec<(String, String)> = Vec::new();
         let mut roster_lines: Vec<String> = Vec::new();
+        let mut roster_rows: Vec<serde_json::Value> = Vec::new();
+        let mut roster_rejected: Vec<String> = Vec::new();
         let roster_catalog = self.format_roster_catalog();
         let participant_failures = self.format_participant_failures();
         // 初始批量组建名册：不设单次数量上限，仅受房间剩余空位约束（注入空位避免超量提议浪费轮次）。
@@ -3283,9 +3323,26 @@ impl RoomRuntime {
                         "编排提示：以下参与者未获得角色分配，已按\"未分配\"兜底：{}",
                         names
                     );
+                    let role_rows: Vec<serde_json::Value> = missing_roles
+                        .iter()
+                        .map(|id| {
+                            serde_json::json!({
+                                "participant": id,
+                                "role": "未分配",
+                                "status": "unassigned",
+                            })
+                        })
+                        .collect();
+                    let extra = stage_extra(
+                        "schedule_roles",
+                        serde_json::json!({
+                            "notice": notice,
+                            "roles": role_rows,
+                        }),
+                    );
                     let director_sender = self.director_id.clone().unwrap_or_default();
                     let msg = self
-                        .persist_message(
+                        .persist_message_extra(
                             &director_sender,
                             &[],
                             "director_notice",
@@ -3294,6 +3351,7 @@ impl RoomRuntime {
                             &[],
                             "",
                             "",
+                            &extra,
                         )
                         .await;
                     self.memory.apply_message(&msg, &self.all_participant_ids());
@@ -3315,11 +3373,17 @@ impl RoomRuntime {
                             } else {
                                 format!("（原因：{}）", reason)
                             };
+                            roster_rows.push(serde_json::json!({
+                                "participant": c,
+                                "role": role,
+                                "reason": reason,
+                            }));
                             roster_lines
                                 .push(format!("- [@{}]（角色：{}）{}", c, role, reason_part));
                         }
                     }
                     for r in &rejected {
+                        roster_rejected.push(r.clone());
                         roster_lines.push(format!("- 拒绝：{}", r));
                     }
                 }
@@ -3403,12 +3467,53 @@ impl RoomRuntime {
                     }
                 }
                 let schedule_text = lines.join("\n");
+                let mut role_rows: Vec<serde_json::Value> = Vec::new();
+                let mut assigned: Vec<(&String, &String)> = role_map.iter().collect();
+                assigned.sort_by(|a, b| a.0.cmp(b.0));
+                for (pid, role) in assigned {
+                    if rejected_roles.iter().any(|(rp, _)| rp == pid) {
+                        continue;
+                    }
+                    role_rows.push(serde_json::json!({
+                        "participant": pid,
+                        "role": role,
+                        "status": "assigned",
+                    }));
+                }
+                for (pid, role) in &rejected_roles {
+                    role_rows.push(serde_json::json!({
+                        "participant": pid,
+                        "role": role,
+                        "status": "rejected",
+                        "reason": "协调类角色仅限 Director 持有",
+                    }));
+                }
+                let task_rows: Vec<serde_json::Value> = tasks
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "no": t.task_no,
+                            "description": t.description,
+                            "assignee": t.assignee,
+                            "dependsOn": dep_task_nos(&t.depends_on),
+                        })
+                    })
+                    .collect();
+                let extra = stage_extra(
+                    "schedule_tasks",
+                    serde_json::json!({
+                        "roster": roster_rows,
+                        "rosterRejected": roster_rejected,
+                        "roles": role_rows,
+                        "tasks": task_rows,
+                    }),
+                );
                 let director_sender = self
                     .director_id
                     .clone()
                     .unwrap_or_else(|| "director".to_string());
                 let schedule_msg = self
-                    .persist_message(
+                    .persist_message_extra(
                         &director_sender,
                         &[],
                         "task_assignment",
@@ -3417,6 +3522,7 @@ impl RoomRuntime {
                         &[],
                         "",
                         "",
+                        &extra,
                     )
                     .await;
                 self.emit(GroupChatEvent::message(&self.room_id, schedule_msg));
@@ -3521,6 +3627,8 @@ impl RoomRuntime {
         // 按需组建名册：讨论中发现缺角色时主持人自动补充（先落库 + 重建运行时，
         // 再应用对账操作/角色，确保 reassign/role 校验能命中新参与者）。
         let mut roster_lines: Vec<String> = Vec::new();
+        let mut roster_rows: Vec<serde_json::Value> = Vec::new();
+        let mut roster_rejected: Vec<String> = Vec::new();
         if !plan.new_participants.is_empty() {
             let (created, rejected) = self
                 .create_auto_participants(&plan.new_participants, MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
@@ -3535,10 +3643,16 @@ impl RoomRuntime {
                     } else {
                         format!("（原因：{}）", reason)
                     };
+                    roster_rows.push(serde_json::json!({
+                        "participant": c,
+                        "role": role,
+                        "reason": reason,
+                    }));
                     roster_lines.push(format!("- [@{}]（角色：{}）{}", c, role, reason_part));
                 }
             }
             for r in &rejected {
+                roster_rejected.push(r.clone());
                 roster_lines.push(format!("- 拒绝：{}", r));
             }
         }
@@ -3605,12 +3719,56 @@ impl RoomRuntime {
                     ));
                 }
             }
+            let mut role_rows: Vec<serde_json::Value> = Vec::new();
+            let mut assigned: Vec<(&String, &String)> = plan.roles.iter().collect();
+            assigned.sort_by(|a, b| a.0.cmp(b.0));
+            for (pid, role) in assigned {
+                if rejected_roles.iter().any(|(rp, _)| rp == pid) {
+                    continue;
+                }
+                role_rows.push(serde_json::json!({
+                    "participant": pid,
+                    "role": role,
+                    "status": "assigned",
+                }));
+            }
+            for (pid, role) in &rejected_roles {
+                role_rows.push(serde_json::json!({
+                    "participant": pid,
+                    "role": role,
+                    "status": "rejected",
+                    "reason": "协调类角色仅限 Director 持有",
+                }));
+            }
+            let task_rows: Vec<serde_json::Value> = app
+                .added
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "no": t.task_no,
+                        "description": t.description,
+                        "assignee": t.assignee,
+                        "dependsOn": dep_task_nos(&t.depends_on),
+                    })
+                })
+                .collect();
+            let extra = stage_extra(
+                "schedule_reconcile",
+                serde_json::json!({
+                    "roster": roster_rows,
+                    "rosterRejected": roster_rejected,
+                    "roles": role_rows,
+                    "removed": app.removed_items,
+                    "reassigned": app.reassigned_items,
+                    "tasks": task_rows,
+                }),
+            );
             let director_sender = self
                 .director_id
                 .clone()
                 .unwrap_or_else(|| "director".to_string());
             let msg = self
-                .persist_message(
+                .persist_message_extra(
                     &director_sender,
                     &[],
                     "task_assignment",
@@ -3619,6 +3777,7 @@ impl RoomRuntime {
                     &[],
                     "",
                     "",
+                    &extra,
                 )
                 .await;
             self.emit(GroupChatEvent::message(&self.room_id, msg));
@@ -3752,6 +3911,7 @@ impl RoomRuntime {
         let mut removed_sorted: Vec<usize> = removed.iter().copied().collect();
         removed_sorted.sort_unstable();
 
+        let mut removed_items: Vec<serde_json::Value> = Vec::new();
         for idx in &removed_sorted {
             let mut t = existing[*idx].clone();
             t.status = "aborted".into();
@@ -3761,6 +3921,10 @@ impl RoomRuntime {
                 .unwrap_or_else(|| "Director 重排判定冗余".to_string());
             t.error = Some(format!("已移除：{reason}"));
             t.completed_at = Some(crate::utils::now());
+            removed_items.push(serde_json::json!({
+                "no": t.task_no,
+                "reason": reason,
+            }));
             if let Ok(conn) = self.conn() {
                 let _ = store::update_task(&conn, &t);
             }
@@ -3768,12 +3932,18 @@ impl RoomRuntime {
         }
 
         // 3) 重分配（仅 discussing/pending/running，且未被级联删减；running 重派在指令中断执行重跑后生效）
+        let mut reassigned_items: Vec<serde_json::Value> = Vec::new();
         for (idx, new_assignee) in &reassigns {
             if removed.contains(idx) {
                 continue;
             }
             let mut t = existing[*idx].clone();
             if t.status == "discussing" || t.status == "pending" || t.status == "running" {
+                reassigned_items.push(serde_json::json!({
+                    "no": t.task_no,
+                    "from": t.assignee,
+                    "to": new_assignee,
+                }));
                 t.assignee = Some(new_assignee.clone());
                 if let Ok(conn) = self.conn() {
                     let _ = store::update_task(&conn, &t);
@@ -3838,8 +4008,10 @@ impl RoomRuntime {
 
         ReplanApplication {
             removed: removed.len(),
-            reassigned: reassigns.len(),
+            reassigned: reassigned_items.len(),
             added: new_tasks,
+            removed_items,
+            reassigned_items,
         }
     }
 
@@ -3942,9 +4114,52 @@ impl RoomRuntime {
                 ));
             }
         }
+        let mut role_rows: Vec<serde_json::Value> = Vec::new();
+        let mut assigned: Vec<(&String, &String)> = plan.roles.iter().collect();
+        assigned.sort_by(|a, b| a.0.cmp(b.0));
+        for (pid, role) in assigned {
+            if rejected_roles.iter().any(|(rp, _)| rp == pid) {
+                continue;
+            }
+            role_rows.push(serde_json::json!({
+                "participant": pid,
+                "role": role,
+                "status": "assigned",
+            }));
+        }
+        for (pid, role) in &rejected_roles {
+            role_rows.push(serde_json::json!({
+                "participant": pid,
+                "role": role,
+                "status": "rejected",
+                "reason": "协调类角色仅限 Director 持有",
+            }));
+        }
+        let task_rows: Vec<serde_json::Value> = app
+            .added
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "no": t.task_no,
+                    "description": t.description,
+                    "assignee": t.assignee,
+                    "dependsOn": dep_task_nos(&t.depends_on),
+                })
+            })
+            .collect();
+        let extra = stage_extra(
+            "schedule_roster",
+            serde_json::json!({
+                "notice": notice,
+                "roles": role_rows,
+                "removed": app.removed_items,
+                "reassigned": app.reassigned_items,
+                "tasks": task_rows,
+            }),
+        );
         let director_sender = self.director_sender();
         let msg = self
-            .persist_message(
+            .persist_message_extra(
                 &director_sender,
                 &[],
                 "task_assignment",
@@ -3953,6 +4168,7 @@ impl RoomRuntime {
                 &[],
                 "",
                 "",
+                &extra,
             )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, msg));
@@ -4278,10 +4494,27 @@ impl RoomRuntime {
                     for r in &rejected {
                         lines.push(format!("- 拒绝补充参与者：{}", r));
                     }
+                    let mut roster_rows: Vec<serde_json::Value> = Vec::new();
+                    for c in &created {
+                        let draft = dec.new_participants.iter().find(|p| p.id == *c);
+                        roster_rows.push(serde_json::json!({
+                            "participant": c,
+                            "role": draft.map(|p| p.system_role.clone()).unwrap_or_default(),
+                            "reason": draft.map(|p| p.reason.clone()).unwrap_or_default(),
+                        }));
+                    }
+                    let extra = stage_extra(
+                        "schedule_roster",
+                        serde_json::json!({
+                            "notice": "名册缺少必要角色/立场，已创建专用参与者（身份保持各自固定，不相互扮演）",
+                            "roster": roster_rows,
+                            "rosterRejected": rejected,
+                        }),
+                    );
                     let director_sender = self.director_sender();
                     let text = lines.join("\n");
                     let msg = self
-                        .persist_message(
+                        .persist_message_extra(
                             &director_sender,
                             &[],
                             "director_notice",
@@ -4290,6 +4523,7 @@ impl RoomRuntime {
                             &[],
                             "",
                             "",
+                            &extra,
                         )
                         .await;
                     self.emit(GroupChatEvent::message(&self.room_id, msg));
@@ -4335,8 +4569,16 @@ impl RoomRuntime {
                     Some(wc) => format!("{}\n\n本轮工作内容：{}", text, wc),
                     None => text,
                 };
+                let extra = stage_extra(
+                    "schedule_speaker",
+                    serde_json::json!({
+                        "speaker": speaker_norm,
+                        "speakerReason": dec.reason,
+                        "workContent": work_content,
+                    }),
+                );
                 let msg = self
-                    .persist_message(
+                    .persist_message_extra(
                         &director_sender,
                         &[],
                         "scheduling",
@@ -4345,6 +4587,7 @@ impl RoomRuntime {
                         &[],
                         "",
                         &director_reasoning,
+                        &extra,
                     )
                     .await;
                 // v3.4au：调度消息写入 GroupMemory（与 statement/用户消息一致）——调度承载本轮
@@ -4620,23 +4863,28 @@ impl RoomRuntime {
             );
 
             // 更新 L1 摘要（非空才落库，避免覆盖已有有效摘要）。
+            // 与上一轮完全一致说明本轮没有实质进展：只更新记忆，不重复落「进度-盘点」消息，
+            // 避免主持人连续输出两条同样的内容。
             if !review.summary.is_empty() {
+                let unchanged = review.summary == self.memory.summary();
                 self.memory.set_summary(&review.summary);
-                let director_sender = self.director_sender();
-                let review_reasoning = self.take_director_reasoning();
-                let summary_msg = self
-                    .persist_message(
-                        &director_sender,
-                        &[],
-                        "summary",
-                        None,
-                        &review.summary,
-                        &[],
-                        "",
-                        &review_reasoning,
-                    )
-                    .await;
-                self.emit(GroupChatEvent::message(&self.room_id, summary_msg));
+                if !unchanged {
+                    let director_sender = self.director_sender();
+                    let review_reasoning = self.take_director_reasoning();
+                    let summary_msg = self
+                        .persist_message(
+                            &director_sender,
+                            &[],
+                            "summary",
+                            None,
+                            &review.summary,
+                            &[],
+                            "",
+                            &review_reasoning,
+                        )
+                        .await;
+                    self.emit(GroupChatEvent::message(&self.room_id, summary_msg));
+                }
             }
 
             match review.next_action.as_str() {
@@ -4987,7 +5235,16 @@ impl RoomRuntime {
                                 .nth(1)
                                 .unwrap_or(&m.content)
                                 .to_string();
-                            map.entry(m.extra.clone())
+                            // 新消息的 extra 是阶段载荷 JSON（taskId 字段），旧消息为裸 task.id。
+                            let task_id = serde_json::from_str::<serde_json::Value>(&m.extra)
+                                .ok()
+                                .and_then(|v| {
+                                    v.get("taskId")
+                                        .and_then(|id| id.as_str())
+                                        .map(|id| id.to_string())
+                                })
+                                .unwrap_or_else(|| m.extra.clone());
+                            map.entry(task_id)
                                 .or_insert_with(|| (content, m.tool_calls.clone()));
                         }
                     }
@@ -6611,8 +6868,17 @@ impl RoomRuntime {
             .clone()
             .unwrap_or_else(|| self.user_id.clone());
         let task_result = report::to_task_result(task, result_content);
-        // extra 写入 task.id（v3.4an：供跨轮/重启后按 task_id 精确反查任务成果全文与工具调用链，
-        // 支撑后置任务的前置成果注入）。
+        // extra 同时承载任务 id（v3.4an：供跨轮/重启后按 task_id 精确反查任务成果全文，
+        // 支撑后置任务的前置成果注入）与阶段渲染载荷（按 status 渲染对应标题）。
+        // 成果全文仍在 content 里，不在此重复存储。
+        let extra = stage_extra(
+            "task_result",
+            serde_json::json!({
+                "taskId": task.id,
+                "status": task.status,
+                "taskNo": task.task_no,
+            }),
+        );
         let msg = self
             .persist_message_extra(
                 &sender,
@@ -6623,7 +6889,7 @@ impl RoomRuntime {
                 &[],
                 tool_calls,
                 "",
-                &task.id,
+                &extra,
             )
             .await;
         self.memory.apply_message(&msg, &self.all_participant_ids());
@@ -6643,6 +6909,21 @@ impl RoomRuntime {
             return;
         }
         let director_sender = self.director_sender();
+        let decision_rows: Vec<serde_json::Value> = records
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "tool": r.tool_name,
+                    "risk": r.risk.to_string(),
+                    "allow": r.allow,
+                    "reason": r.reason,
+                })
+            })
+            .collect();
+        let extra = stage_extra(
+            "tool_decision",
+            serde_json::json!({ "items": decision_rows }),
+        );
         let mut text = format!("本轮工具裁决（{} 项）：\n", records.len());
         for r in &records {
             text.push_str(&format!(
@@ -6658,7 +6939,7 @@ impl RoomRuntime {
             ));
         }
         let msg = self
-            .persist_message(
+            .persist_message_extra(
                 &director_sender,
                 &[],
                 "tool_decision",
@@ -6667,6 +6948,7 @@ impl RoomRuntime {
                 &[],
                 "",
                 "",
+                &extra,
             )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, msg));
@@ -6677,7 +6959,15 @@ impl RoomRuntime {
     /// 缓存友好（v3.5d）：转录按原始消息逐字回放（不再在渲染期注入实时时钟），头部省略
     /// 说明使用固定文案（不随被省略条数变化），避免同一历史前缀随秒/条数漂移导致整段 miss。
     fn build_review_transcript(&self, limit: usize) -> String {
-        let all = self.memory.all_messages();
+        // 进度摘要消息是审阅派生产物（经【已有进度摘要】单独注入），不进入讨论记录：
+        // 否则重启回放后主持人会在「最近讨论记录」里看到自己上一版【进度】，进而逐字复读，
+        // 表现为同一条「进度-盘点」连续输出两次。
+        let all: Vec<&MessageRow> = self
+            .memory
+            .all_messages()
+            .iter()
+            .filter(|m| m.kind != "summary")
+            .collect();
         let start = all.len().saturating_sub(limit);
         let mut out = String::new();
         if start > 0 {
@@ -6830,6 +7120,10 @@ impl RoomRuntime {
             return;
         };
         if review.summary.is_empty() {
+            return;
+        }
+        // 本次执行没有让摘要发生变化时，不重复落「进度-盘点」（否则与上一条内容完全相同）。
+        if review.summary == self.memory.summary() {
             return;
         }
         self.memory.set_summary(&review.summary);

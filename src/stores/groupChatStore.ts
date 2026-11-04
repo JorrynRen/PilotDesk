@@ -76,6 +76,8 @@ interface GroupChatStoreState {
   abort: () => Promise<void>;
   setDirector: (newDirectorId: string) => Promise<void>;
   setRoomOutputDir: (outputDir: string) => Promise<void>;
+  /** 同层任务执行并行上限（1-4），写库后对当前波次不生效、后续波次生效。 */
+  setRoomMaxParallel: (maxParallel: number) => Promise<void>;
   /** 任务级人工干预（跳过 / 追加新增 / 改依赖）。写库即对调度生效，变更由 task_updated 事件回流。 */
   skipTask: (taskId: string) => Promise<void>;
   addTask: (description: string, dependsOn: string[], assignee?: string | null) => Promise<void>;

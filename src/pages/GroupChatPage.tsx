@@ -27,6 +27,7 @@ import { collapseBlankLines, tightenListGaps } from '../components/message/markd
 import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
 import { TaskDependencyGraph } from '../components/groupchat/TaskDependencyGraph';
 import { TaskGraphViewport } from '../components/groupchat/TaskGraphViewport';
+import { StageNotice, StanceBadge, deriveStage, parseStance, parseStageExtra } from '../components/groupchat/StageNotice';
 import {
   TASK_PHASE_LABEL,
   depTasksOf,
@@ -1079,6 +1080,25 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
   const renderedConfirmation = confirmation
     ? { ...confirmation, prompt: renderMentions(confirmation.prompt, mentionMap) }
     : null;
+  // 阶段消息（目标理解/调度/进度/任务结果等）：优先用后端结构化载荷，旧消息按正文前缀降级，
+  // 统一渲染「图标 + 标题 + 分隔线 + 表格」而非普通消息文本。
+  const rawStage =
+    !isUser && !isConclusion && !renderedConfirmation
+      ? parseStageExtra(message.extra) ?? deriveStage(message.content, message.kind)
+      : null;
+  // 任务结果的结构化载荷只带状态与编号，成果全文仍在正文里：缺失 body 时按前缀剥离补全。
+  const stageBody =
+    rawStage?.stage === 'task_result' && !rawStage.body
+      ? deriveStage(message.content, message.kind)?.body
+      : rawStage?.body;
+  const stagePayload = rawStage
+    ? { ...rawStage, body: stageBody ? renderMentions(stageBody, mentionMap) : undefined }
+    : null;
+  // 立场声明：参与者每轮发言开头的固定声明改为气泡顶部徽标，避免高频大标题噪音。
+  const stance =
+    !isUser && !isConclusion && !stagePayload && message.kind === 'statement'
+      ? parseStance(message.content)
+      : null;
   return (
     <div className="flex justify-start px-4 py-1.5">
       {/* 用户消息整行镜像（flex-row-reverse）：头像移到右侧，内容列右对齐 —— 见下方 items-end */}
@@ -1098,7 +1118,7 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-[10px] font-medium truncate" style={{ color }}>{displayName}</span>
             <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-              {formatTime(message.timestamp)} · 第{message.round}轮
+              {formatDateTime(message.timestamp)} · 第{message.round}轮
             </span>
           </div>
           <div
@@ -1180,8 +1200,19 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
                     submittedText="已提交，等待主持人继续…"
                     openHint="需要你的决定，请直接在下方的输入框中回复。"
                   />
+                ) : stagePayload ? (
+                  <StageNotice
+                    payload={stagePayload}
+                    mentionMap={mentionMap}
+                    formatText={(t) => renderMentions(t, mentionMap)}
+                  />
                 ) : (
-                  <MarkdownRenderer content={renderedContent} />
+                  <>
+                    {stance && <StanceBadge attitude={stance.attitude} />}
+                    <MarkdownRenderer
+                      content={stance ? renderMentions(stance.body, mentionMap) : renderedContent}
+                    />
+                  </>
                 )}
               </>
             )}
