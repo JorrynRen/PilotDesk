@@ -4372,23 +4372,16 @@ impl RoomRuntime {
             let mut view = self.memory.build_view(&speaker, "", false, &self.user_id);
             // v3.4ao：主持人明确"派活"（讨论议题/执行指令）时优先注入本轮工作内容；
             // 未提供（用户 @ 指定/降级轮询）回退原"围绕任务发言与推进"语义。
-            view.task_context = match &work_content {
-                Some(wc) => {
-                    // v3.4aq：讨论轮（主持人要求发表意见/方案）注入强约束——所有指令经主持人
-                    // 统一发出 + 本轮不执行；执行轮（要求执行/修正/完成）正常指派。
-                    if Self::is_discussion_work(wc) {
-                        // v3.4aw 提示词资产化：讨论轮强约束模板位于
-                        // prompts/blocks/room_discussion_turn.prompt.md。
-                        super::prompts::render(
-                            super::prompts::blocks::ROOM_DISCUSSION_TURN.body,
-                            &super::prompts::PromptCtx::new().section("work_content", wc),
-                        )
-                    } else {
-                        format!("本轮主持人指派工作：{}", wc)
-                    }
-                }
-                None => self.build_speaker_task_context(&speaker),
+            // v3.4aw 后：讨论发言不承担执行（执行由 executor 独立路径完成），因此两条分支
+            // 都无条件注入讨论轮强约束，不再按主持人措辞关键词判定是否"讨论轮"。
+            let work: std::borrow::Cow<'_, str> = match &work_content {
+                Some(wc) => std::borrow::Cow::Borrowed(wc.as_str()),
+                None => std::borrow::Cow::Owned(self.build_speaker_task_context(&speaker)),
             };
+            view.task_context = super::prompts::render(
+                super::prompts::blocks::ROOM_DISCUSSION_TURN.body,
+                &super::prompts::PromptCtx::new().section("work_content", work.as_ref()),
+            );
             // v3.4ao：房间统一产物目录注入讨论发言视图。
             view.output_dir = self.output_dir.clone();
             // 注入参与者名册（id、显示名、角色），供 LLM 刻画 id ↔ 语义角色映射。
@@ -6764,21 +6757,6 @@ impl RoomRuntime {
             })
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    /// 判定主持人指派的工作是否为"讨论轮"（要求发表意见/方案，而非直接执行）。
-    /// 特征词命中任一即视为讨论轮；执行轮（执行/修正/完成）正常指派执行。
-    fn is_discussion_work(wc: &str) -> bool {
-        const DISCUSSION_MARKS: &[&str] = &[
-            "发表意见",
-            "方案",
-            "讨论",
-            "达成一致",
-            "意见",
-            "分工",
-            "暂不执行",
-        ];
-        DISCUSSION_MARKS.iter().any(|k| wc.contains(k))
     }
 
     /// 构建当前发言者被指派的任务上下文（讨论阶段注入 participant 视图，明确任务锚点）。
