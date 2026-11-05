@@ -248,4 +248,5 @@ export type GroupChatEvent =
   | { roomId: string; type: 'task_updated'; task: GroupChatTask }
   | { roomId: string; type: 'participant_updated' }
   | { roomId: string; type: 'output_dir_updated'; outputDir: string }
+  | { roomId: string; type: 'room_updated'; topic: string }
   | { roomId: string; type: 'finished' };

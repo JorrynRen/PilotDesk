@@ -461,6 +461,15 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         }));
         break;
       }
+      case 'room_updated': {
+        // 目标锚点（topic）已整理/补充/变更：同步房间列表，右侧面板「目标」实时更新。
+        set((s) => ({
+          rooms: s.rooms.map((r) =>
+            r.id === event.roomId ? { ...r, topic: event.topic } : r,
+          ),
+        }));
+        break;
+      }
       case 'output_dir_updated': {
         // 产物目录已在目标理解阶段确定/变更：同步房间列表，右侧面板动态显示当前值。
         set((s) => ({

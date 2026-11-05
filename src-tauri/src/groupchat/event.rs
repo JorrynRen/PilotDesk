@@ -38,6 +38,8 @@ pub struct GroupChatEvent {
     pub task: Option<TaskRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
 }
 
 impl GroupChatEvent {
@@ -56,6 +58,7 @@ impl GroupChatEvent {
             role: None,
             task: None,
             output_dir: None,
+            topic: None,
         }
     }
 
@@ -122,6 +125,13 @@ impl GroupChatEvent {
 
     pub fn finished(room_id: &str) -> Self {
         Self::new(room_id, "finished")
+    }
+
+    /// 房间目标锚点（topic）已整理/变更（前端据此实时刷新右侧面板的目标显示）。
+    pub fn room_updated(room_id: &str, topic: &str) -> Self {
+        let mut e = Self::new(room_id, "room_updated");
+        e.topic = Some(topic.to_string());
+        e
     }
 
     /// 产物目录已确定/变更（前端据此动态刷新右侧面板显示当前值）。

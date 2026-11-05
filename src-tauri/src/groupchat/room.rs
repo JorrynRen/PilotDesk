@@ -2666,7 +2666,8 @@ impl RoomRuntime {
             let _ = store::update_room_topic(&conn, &self.room_id, &new_topic);
         }
         self.room.topic = new_topic;
-        // 系统提示，目标扩展可追溯。
+        // 目标锚点变更后立即通知前端，避免右侧面板直到切房间才刷新。
+        self.emit(GroupChatEvent::room_updated(&self.room_id, &self.room.topic));
         let director_sender = self.director_sender();
         let sys_msg = self
             .persist_message(
@@ -2751,6 +2752,8 @@ impl RoomRuntime {
         self.room.topic = new_goal.to_string();
         self.room.goal_notes = "[]".to_string();
         self.memory = LayeredMemory::new(new_goal, "");
+        // 目标锚点变更后立即通知前端刷新右侧面板。
+        self.emit(GroupChatEvent::room_updated(&self.room_id, &self.room.topic));
 
         // 3) 发系统提示，目标变更可追溯。
         let director_sender = self.director_sender();
@@ -3131,6 +3134,8 @@ impl RoomRuntime {
             let _ = store::update_room_topic(&conn, &self.room_id, &topic);
         }
         self.room.topic = topic;
+        // 目标理解完成后立即通知前端，右侧面板「目标」无需切房即可更新。
+        self.emit(GroupChatEvent::room_updated(&self.room_id, &self.room.topic));
     }
 
     /// 主持人侦查（v3.5c B 层）：让主持人以工具方式核验材料/产物/工作区，为决策收集证据。
