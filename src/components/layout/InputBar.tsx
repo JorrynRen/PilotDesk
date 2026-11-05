@@ -1022,6 +1022,58 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       </div>
                     )}
 
+                    {/* 附件（二级）：图片 / 文件 —— 高频项放在模式之后第二位 */}
+                    <button
+                      onClick={() => setPlusSubmenu((v) => (v === 'attach' ? null : 'attach'))}
+                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                      style={{
+                        padding: '6px 8px',
+                        fontSize: 12,
+                        borderRadius: 7,
+                        color: attachCount > 0 ? 'var(--accent)' : 'var(--text-primary)',
+                      }}
+                    >
+                      <Paperclip size={12} style={{ flexShrink: 0 }} />
+                      <span className="flex-1">附件</span>
+                      {attachCount > 0 && <span>{attachCount} 个</span>}
+                      <ChevronDown
+                        size={11}
+                        style={{
+                          color: 'var(--text-secondary)',
+                          transform: plusSubmenu === 'attach' ? 'rotate(180deg)' : undefined,
+                        }}
+                      />
+                    </button>
+                    {plusSubmenu === 'attach' && (
+                      <div
+                        style={{
+                          paddingTop: 4,
+                          marginTop: 4,
+                          paddingBottom: 4,
+                          marginBottom: 4,
+                          borderTop: '1px solid var(--border)',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        <button
+                          onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickImages(); }}
+                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
+                        >
+                          <ImagePlus size={11} style={{ flexShrink: 0 }} />
+                          <span className="flex-1">选择图片{imageCount > 0 ? `（${imageCount}）` : ''}</span>
+                        </button>
+                        <button
+                          onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickFiles(); }}
+                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
+                        >
+                          <FileText size={11} style={{ flexShrink: 0 }} />
+                          <span className="flex-1">选择文件{fileCount > 0 ? `（${fileCount}）` : ''}</span>
+                        </button>
+                      </div>
+                    )}
+
                     {/* 技能：打开既有技能面板，Ctrl+K 仍可用 */}
                     <button
                       onClick={() => {
@@ -1051,55 +1103,6 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       <MemoryStick size={12} style={{ flexShrink: 0 }} />
                       <span className="flex-1">项目记忆</span>
                     </button>
-
-                    {/* 附件（二级）：图片 / 文件 */}
-                    <button
-                      onClick={() => setPlusSubmenu((v) => (v === 'attach' ? null : 'attach'))}
-                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                      style={{
-                        padding: '6px 8px',
-                        fontSize: 12,
-                        borderRadius: 7,
-                        color: attachCount > 0 ? 'var(--accent)' : 'var(--text-primary)',
-                      }}
-                    >
-                      <Paperclip size={12} style={{ flexShrink: 0 }} />
-                      <span className="flex-1">附件</span>
-                      {attachCount > 0 && <span>{attachCount} 个</span>}
-                      <ChevronDown
-                        size={11}
-                        style={{
-                          color: 'var(--text-secondary)',
-                          transform: plusSubmenu === 'attach' ? 'rotate(180deg)' : undefined,
-                        }}
-                      />
-                    </button>
-                    {plusSubmenu === 'attach' && (
-                      <div
-                        style={{
-                          paddingTop: 4,
-                          marginTop: 4,
-                          borderTop: '1px solid var(--border)',
-                        }}
-                      >
-                        <button
-                          onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickImages(); }}
-                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
-                        >
-                          <ImagePlus size={11} style={{ flexShrink: 0 }} />
-                          <span className="flex-1">选择图片{imageCount > 0 ? `（${imageCount}）` : ''}</span>
-                        </button>
-                        <button
-                          onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickFiles(); }}
-                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
-                        >
-                          <FileText size={11} style={{ flexShrink: 0 }} />
-                          <span className="flex-1">选择文件{fileCount > 0 ? `（${fileCount}）` : ''}</span>
-                        </button>
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
