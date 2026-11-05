@@ -1,9 +1,8 @@
 /**
- * 状态栏（左下角）的账号状态入口。
+ * 顶栏右侧的账号入口（头像）。
  *
- * 未登录 → 「登录」；已登录 → 昵称 + 等级徽章（紧凑，**不显示天数**）。
- * 账户信息、等级与到期（含剩余天数）、已解锁能力、升级入口都收进**弹层**，
- * 避免把状态栏挤成一长条。
+ * 未登录 → 登录图标按钮；已登录 → 24px 圆形首字母头像（昵称/等级/到期/能力/升级入口全收进弹层）。
+ * 顶栏高度足够撑起清晰的圆形头像，避免在 32px 状态栏里压成小图标。
  */
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -12,6 +11,12 @@ import { Loader2, LogIn, LogOut } from 'lucide-react';
 import { PlanBadge } from '../common/PlanBadge';
 import { capabilityLabel, useAccountStore } from '../../stores/accountStore';
 import { expiryText } from '../../utils/planText';
+
+/** 头像发起字母：昵称优先，其次邮箱，均无则用问号占位。 */
+function avatarInitial(nickname?: string | null, email?: string | null): string {
+  const source = (nickname || email || '').trim();
+  return source ? source.charAt(0).toUpperCase() : '?';
+}
 
 export function AccountStatusEntry() {
   const navigate = useNavigate();
@@ -40,7 +45,13 @@ export function AccountStatusEntry() {
   }, [open]);
 
   if (!loaded) {
-    return <span style={{ color: 'var(--text-tertiary)' }}>…</span>;
+    return (
+      <span
+        className="shrink-0 rounded-full"
+        style={{ width: 24, height: 24, alignSelf: 'center', backgroundColor: 'var(--bg-tertiary)' }}
+        aria-hidden
+      />
+    );
   }
 
   if (!account) {
@@ -48,12 +59,18 @@ export function AccountStatusEntry() {
       <button
         onClick={() => void login()}
         disabled={loggingIn}
-        className="pd-btn flex items-center gap-1 rounded transition-colors hover:opacity-80 p-0.5 disabled:opacity-60"
-        style={{ color: 'var(--text-secondary)', background: 'transparent' }}
+        className="flex items-center justify-center shrink-0 rounded-full transition-colors hover:opacity-80 disabled:opacity-60"
+        style={{
+          width: 24,
+          height: 24,
+          alignSelf: 'center',
+          color: 'var(--text-secondary)',
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border)',
+        }}
         title={loggingIn ? '请在浏览器中完成登录与授权' : '登录平台账号'}
       >
         {loggingIn ? <Loader2 size={12} className="animate-spin" /> : <LogIn size={12} />}
-        <span>{loggingIn ? '等待授权…' : '登录'}</span>
       </button>
     );
   }
@@ -62,28 +79,26 @@ export function AccountStatusEntry() {
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="pd-btn flex items-center gap-1.5 rounded transition-colors hover:opacity-80 p-0.5"
-        style={{ color: open ? 'var(--accent)' : 'var(--text-secondary)', background: 'transparent' }}
+        className="flex items-center justify-center shrink-0 rounded-full text-[11px] font-semibold transition-colors hover:opacity-80"
+        style={{
+          width: 24,
+          height: 24,
+          alignSelf: 'center',
+          color: open ? 'var(--accent)' : 'var(--text-primary)',
+          background: open ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+          border: `1px solid ${open ? 'var(--accent)' : 'var(--border)'}`,
+        }}
         title="账号与会员"
+        aria-label={`账号：${account.nickname || account.email}`}
         aria-expanded={open}
       >
-        <span className="truncate" style={{ maxWidth: 110 }}>
-          {account.nickname || account.email}
-        </span>
-        {/* 收起态用角标，不抢状态栏视线；详情在弹层 */}
-        <PlanBadge
-          compact
-          planKey={account.planKey}
-          planName={account.planName}
-          expired={account.expired}
-          stale={account.stale}
-        />
+        {avatarInitial(account.nickname, account.email)}
       </button>
 
-      {/* 弹层挂在状态栏上方（状态栏在最底部，所以向上弹出） */}
+      {/* 弹层挂在顶栏下方，右对齐（顶栏在最上方，所以向下弹出） */}
       {open && (
         <div
-          className="absolute left-0 bottom-full mb-1.5 w-64 rounded-lg shadow-lg z-50 p-3 text-[11px]"
+          className="absolute right-0 top-full mt-1.5 w-64 rounded-lg shadow-lg z-50 p-3 text-[11px]"
           style={{
             backgroundColor: 'var(--bg-secondary)',
             border: '1px solid var(--border)',

@@ -4,7 +4,6 @@ import { useEnvInfo, isAgentInstalled, isAgentAvailable, type AgentDetectStatus 
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useI18n } from '../../hooks/useI18n';
 import type { AgentConfig } from '../../types';
-import { AccountStatusEntry } from './AccountStatusEntry';
 
 // 版本号单一来源：由 vite.config.ts 从根 package.json 注入（见该文件注释）
 const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
@@ -72,11 +71,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
       style={{ color: 'var(--text-secondary)' }}
     >
       <div className="flex items-center gap-3">
-        {/* 最左端：账号状态（未登录=登录入口；已登录=昵称+等级徽章，详情在弹层）。
-            设置按钮已移到顶部 TitleBar 的功能按钮区。 */}
-        <AccountStatusEntry />
-        {/* 分隔符（账号 vs Agent 状态区） */}
-        <div className="w-px h-3" style={{ backgroundColor: 'var(--border)' }} />
+        {/* 账号入口已移到顶栏右侧（头像）；底栏只保留 Agent 状态与版本 */}
         <span className="flex items-center gap-1">{t('statusBar.agentLabel', 'Agent')}:</span>
         {enabledAgents.length === 0 && (
           <button

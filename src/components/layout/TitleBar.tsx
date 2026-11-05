@@ -8,6 +8,7 @@ import { useNotificationStore, countUnread } from '../../stores/notificationStor
 import { useI18n } from '../../hooks/useI18n';
 import { Select, type SelectGroup } from '../common/Select';
 import { TabIcon } from '../common/TabIcon';
+import { AccountStatusEntry } from './AccountStatusEntry';
 
 /**
  * 顶栏门户标签的平铺渲染数量由用户配置（设置 → 门户标签「顶部显示个数」，0–3，默认 3）。
@@ -854,11 +855,14 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             )}
           </button>
 
-        {/* Separator：应用动作区 与 窗口控制区 分道 */}
-        <div
-          className="w-px h-4 mx-1 shrink-0"
-          style={{ backgroundColor: 'var(--border)' }}
-        />
+          {/* 账号头像：顶栏高度（52px）足够呈现 24px 圆形头像，昵称/等级/权益收在弹层里 */}
+          <AccountStatusEntry />
+
+          {/* Separator：应用动作区 与 窗口控制区 分道 */}
+          <div
+            className="w-px h-4 mx-1 shrink-0"
+            style={{ backgroundColor: 'var(--border)' }}
+          />
 
         {/* Window controls：32×32 **正方形** + 8px 圆角 + 彼此 4px 间距。
             原先做的是 32×满高（48px）的竖长条、hover 时整条铺灰 —— 在 52px 高的顶栏里显得又长又重。
