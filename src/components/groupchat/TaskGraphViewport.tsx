@@ -84,13 +84,14 @@ export function TaskGraphViewport({ scale, onScaleChange, className, style, chil
       active = true;
       el.scrollLeft = startLeft - dx;
       el.scrollTop = startTop - dy;
+      el.style.cursor = 'grabbing';
       ev.preventDefault();
     };
 
     const cleanup = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      el.style.cursor = 'pointer';
+      el.style.cursor = 'grab';
       cleanupRef.current = null;
     };
 
@@ -115,7 +116,7 @@ export function TaskGraphViewport({ scale, onScaleChange, className, style, chil
     <div
       ref={viewportRef}
       className={`overflow-auto ${className ?? ''}`}
-      style={{ cursor: 'pointer', ...style }}
+      style={{ cursor: 'grab', ...style }}
       onPointerDown={handlePointerDown}
       onClickCapture={(e) => {
         if (!suppressClickRef.current) return;
