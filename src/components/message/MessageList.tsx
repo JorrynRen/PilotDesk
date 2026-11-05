@@ -336,8 +336,9 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
           {headerActions && (
             <div className="flex items-center gap-1 shrink-0">{headerActions}</div>
           )}
-          {/* 低频动作收进统一工具栏：宽时带文字，窄时降级/进溢出（主操作不收起） */}
+          {/* 低频动作收进统一工具栏：除行尾关闭外全部进「…」，顶部只留最少入口 */}
           <PageToolbar
+            collapseAll
             actions={[
               // 多选态下隐藏：同屏出现「沉淀为知识」与「整理为知识」两个同名动作，用户会分不清该点哪个
               ...(selectMode

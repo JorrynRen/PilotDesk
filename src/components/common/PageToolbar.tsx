@@ -34,12 +34,17 @@ export interface ToolbarAction {
 interface Props {
   actions: ToolbarAction[];
   className?: string;
+  /**
+   * 全部收起：除 `iconOnly`（如行尾关闭按钮）外，所有动作都进溢出菜单，
+   * 工具栏只留一个「…」。用于顶部只想保留最少入口的页面。
+   */
+  collapseAll?: boolean;
 }
 
 const LABEL_BREAKPOINT = 900;
 const ICON_BREAKPOINT = 700;
 
-export function PageToolbar({ actions, className }: Props) {
+export function PageToolbar({ actions, className, collapseAll = false }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [hostWidth, setHostWidth] = useState(9999);
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -81,15 +86,21 @@ export function PageToolbar({ actions, className }: Props) {
     return hostWidth < ICON_BREAKPOINT;
   };
 
-  const inOverflow = (action: ToolbarAction) =>
-    !action.iconOnly && action.priority === 2 && hostWidth < ICON_BREAKPOINT;
+  const inOverflow = (action: ToolbarAction) => {
+    if (action.iconOnly) return false;
+    if (collapseAll) return true;
+    return action.priority === 2 && hostWidth < ICON_BREAKPOINT;
+  };
 
   const visible = actions.filter((a) => !inOverflow(a));
   const overflow = actions.filter((a) => inOverflow(a));
+  // 常驻图标（关闭等）固定在行尾，「…」插在它前面。
+  const inline = visible.filter((a) => !a.iconOnly);
+  const pinned = visible.filter((a) => a.iconOnly);
 
   return (
     <div ref={rootRef} className={`relative flex items-center gap-1 shrink-0 ${className ?? ''}`}>
-      {visible.map((action) => {
+      {inline.map((action) => {
         const compact = isCompact(action);
         const tone = action.tone ?? (action.active ? 'var(--accent)' : 'var(--text-secondary)');
         return (
@@ -153,7 +164,7 @@ export function PageToolbar({ actions, className }: Props) {
               }}
               disabled={action.disabled}
               className="pd-btn w-full flex items-center gap-2 px-2 py-1.5 transition-colors hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
-              style={{ color: 'var(--text-secondary)', textAlign: 'left' }}
+              style={{ color: action.tone ?? 'var(--text-secondary)', textAlign: 'left' }}
             >
               {action.icon}
               <span className="flex-1">{action.label}</span>
@@ -164,6 +175,24 @@ export function PageToolbar({ actions, className }: Props) {
           ))}
         </div>
       )}
+
+      {pinned.map((action) => (
+        <button
+          key={action.key}
+          type="button"
+          onClick={action.onClick}
+          disabled={action.disabled}
+          title={action.title ?? action.label}
+          aria-label={action.label}
+          className="pd-btn flex items-center justify-center shrink-0 rounded transition-colors w-6 h-6"
+          style={{
+            color: action.tone ?? 'var(--text-secondary)',
+            opacity: action.disabled ? 0.4 : 1,
+          }}
+        >
+          {action.icon}
+        </button>
+      ))}
     </div>
   );
 }

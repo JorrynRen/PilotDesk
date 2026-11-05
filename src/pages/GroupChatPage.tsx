@@ -2688,8 +2688,9 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             </span>
           )}
           <div className="flex-1" />
-          {/* 房间控制动作统一走 PageToolbar：宽度不足时低频项降级/进溢出，主控始终带文字 */}
+          {/* 房间控制动作统一走 PageToolbar：除行尾关闭外全部收进「…」，顶部保持清爽 */}
           <PageToolbar
+            collapseAll
             actions={[
               ...(currentRoom && sortedMessages.length > 0
                 ? ([
