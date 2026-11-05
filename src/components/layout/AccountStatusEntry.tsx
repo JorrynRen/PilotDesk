@@ -1,8 +1,8 @@
 /**
  * 顶栏右侧的账号入口（头像）。
  *
- * 未登录 → 登录图标按钮；已登录 → 24px 圆形首字母头像（昵称/等级/到期/能力/升级入口全收进弹层）。
- * 顶栏高度足够撑起清晰的圆形头像，避免在 32px 状态栏里压成小图标。
+ * 未登录 → 登录图标按钮；已登录 → 32px 圆角方形首字母头像（昵称/等级/到期/能力/升级入口全收进弹层）。
+ * 尺寸与形状对齐顶栏其余图标按钮（32px、rounded-lg），避免头像比旁边控件小一圈。
  */
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -47,8 +47,8 @@ export function AccountStatusEntry() {
   if (!loaded) {
     return (
       <span
-        className="shrink-0 rounded-full"
-        style={{ width: 24, height: 24, alignSelf: 'center', backgroundColor: 'var(--bg-tertiary)' }}
+        className="shrink-0 rounded-lg"
+        style={{ width: 32, height: 32, alignSelf: 'center', backgroundColor: 'var(--bg-tertiary)' }}
         aria-hidden
       />
     );
@@ -59,10 +59,10 @@ export function AccountStatusEntry() {
       <button
         onClick={() => void login()}
         disabled={loggingIn}
-        className="flex items-center justify-center shrink-0 rounded-full transition-colors hover:opacity-80 disabled:opacity-60"
+        className="flex items-center justify-center shrink-0 rounded-lg transition-colors hover:bg-[var(--bg-tertiary)] disabled:opacity-60"
         style={{
-          width: 24,
-          height: 24,
+          width: 32,
+          height: 32,
           alignSelf: 'center',
           color: 'var(--text-secondary)',
           background: 'var(--bg-tertiary)',
@@ -70,7 +70,7 @@ export function AccountStatusEntry() {
         }}
         title={loggingIn ? '请在浏览器中完成登录与授权' : '登录平台账号'}
       >
-        {loggingIn ? <Loader2 size={12} className="animate-spin" /> : <LogIn size={12} />}
+        {loggingIn ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />}
       </button>
     );
   }
@@ -79,10 +79,10 @@ export function AccountStatusEntry() {
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center justify-center shrink-0 rounded-full text-[11px] font-semibold transition-colors hover:opacity-80"
+        className="flex items-center justify-center shrink-0 rounded-lg text-[12px] font-semibold transition-colors hover:opacity-80"
         style={{
-          width: 24,
-          height: 24,
+          width: 32,
+          height: 32,
           alignSelf: 'center',
           color: open ? 'var(--accent)' : 'var(--text-primary)',
           background: open ? 'var(--accent-light)' : 'var(--bg-tertiary)',
