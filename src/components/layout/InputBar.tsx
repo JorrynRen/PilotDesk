@@ -989,8 +989,11 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                     {plusSubmenu === 'mode' && (
                       <div
                         style={{
+                          paddingTop: 4,
+                          marginTop: 4,
                           paddingBottom: 4,
                           marginBottom: 4,
+                          borderTop: '1px solid var(--border)',
                           borderBottom: '1px solid var(--border)',
                         }}
                       >
@@ -1072,7 +1075,13 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       />
                     </button>
                     {plusSubmenu === 'attach' && (
-                      <div>
+                      <div
+                        style={{
+                          paddingTop: 4,
+                          marginTop: 4,
+                          borderTop: '1px solid var(--border)',
+                        }}
+                      >
                         <button
                           onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickImages(); }}
                           className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
