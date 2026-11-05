@@ -16,6 +16,7 @@ import {
   Library, Plus, Pencil, Trash2, Layers, Sparkles, Network, Search, Loader2, FolderOpen, X,
 } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
+import { PageToolbar, type ToolbarAction } from '../components/common/PageToolbar';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { makeBaseId, useKnowledgeStore, type KnowledgeTab } from '../stores/knowledgeStore';
 import { KnowledgeEntryList } from '../components/knowledge/KnowledgeEntryList';
@@ -220,42 +221,43 @@ export function KnowledgePage() {
                     <span>{base.fields.length} 个专属字段</span>
                   </div>
                   <div className="flex-1" />
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => useKnowledgeStore.getState().closeBase()}
-                      className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
-                      style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
-                      title="关闭这个知识库（回到默认页）。库、条目、文件都不会动。"
-                    >
-                      <X size={11} />
-                      关闭知识库
-                    </button>
-                    <button
-                      onClick={() => void openKnowledgeRoot()}
-                      className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
-                      style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
-                      title="在文件管理器里打开知识库目录（原文与库结构都在这里）"
-                    >
-                      <FolderOpen size={11} />
-                      打开库根目录
-                    </button>
-                    <button
-                      onClick={() => setDialog({ open: true, baseId: base.id })}
-                      className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
-                      style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
-                    >
-                      <Pencil size={11} />
-                      编辑定义
-                    </button>
-                    <button
-                      onClick={() => void handleDeleteBase(base.id, base.name)}
-                      className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
-                      style={{ color: 'var(--status-danger, #EF4444)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
-                    >
-                      <Trash2 size={11} />
-                      删除知识库
-                    </button>
-                  </div>
+                  {/* 库级动作统一走 PageToolbar：全部收进「…」，关闭图标固定在行尾 */}
+                  <PageToolbar
+                    collapseAll
+                    actions={[
+                      {
+                        key: 'edit',
+                        label: '编辑定义',
+                        icon: <Pencil size={11} />,
+                        priority: 2,
+                        onClick: () => setDialog({ open: true, baseId: base.id }),
+                      },
+                      {
+                        key: 'root',
+                        label: '打开库根目录',
+                        icon: <FolderOpen size={11} />,
+                        priority: 2,
+                        title: '在文件管理器里打开知识库目录（原文与库结构都在这里）',
+                        onClick: () => void openKnowledgeRoot(),
+                      },
+                      {
+                        key: 'delete',
+                        label: '删除知识库',
+                        icon: <Trash2 size={11} />,
+                        priority: 2,
+                        tone: 'var(--status-danger, #EF4444)',
+                        onClick: () => void handleDeleteBase(base.id, base.name),
+                      },
+                      {
+                        key: 'close',
+                        label: '关闭知识库',
+                        icon: <X size={13} />,
+                        iconOnly: true,
+                        title: '关闭这个知识库（回到默认页）。库、条目、文件都不会动。',
+                        onClick: () => useKnowledgeStore.getState().closeBase(),
+                      },
+                    ] satisfies ToolbarAction[]}
+                  />
                 </div>
                 <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{base.description}</div>
               </div>
