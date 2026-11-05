@@ -50,6 +50,14 @@ export function TooltipLayer() {
    * 因此 title 只在指针真正离开（或失焦 / 卸载）时还原。
    */
   const stashedElRef = useRef<HTMLElement | null>(null);
+  /**
+   * 锚点祖先链上被同步摘掉 `title` 的元素。
+   *
+   * 原生提示在「悬停元素自身没有 title」时会向上找最近带 title 的祖先，所以只摘子元素
+   * （如文件名 span）不摘外层行（title 为"路径（点击打开文件）"）时，祖先的 title 仍会在
+   * 约 1 秒后弹出，与自绘浮层形成两层提示。这里把祖先链一并摘除、离开时一并还原。
+   */
+  const stashedAncestorsRef = useRef<HTMLElement[]>([]);
 
   const cancelPending = useCallback((): HTMLElement | null => {
     if (timerRef.current !== null) {
@@ -64,24 +72,58 @@ export function TooltipLayer() {
   /** 还原被摘掉的 title（读屏 / 原生行为都依赖它） */
   const restoreTitle = useCallback((el: HTMLElement | null) => {
     if (!el) return;
-    if (stashedElRef.current === el) stashedElRef.current = null;
     const stashed = el.getAttribute('data-pd-title');
     if (stashed === null) return;
     el.setAttribute('title', stashed);
     el.removeAttribute('data-pd-title');
   }, []);
 
-  /** 把 title 搬到 data-pd-title（同一时刻只保留一个被摘除的元素） */
+  const restoreAncestors = useCallback(() => {
+    for (const a of stashedAncestorsRef.current) restoreTitle(a);
+    stashedAncestorsRef.current = [];
+  }, [restoreTitle]);
+
+  /** 还原锚点及其祖先链（指针真正离开 / 失焦 / 卸载时） */
+  const restoreStashed = useCallback(() => {
+    restoreTitle(stashedElRef.current);
+    stashedElRef.current = null;
+    restoreAncestors();
+  }, [restoreAncestors, restoreTitle]);
+
+  /**
+   * 把 title 搬到 data-pd-title。
+   * 同一时刻只保留一个锚点，并同步摘掉祖先链上的 title（见 stashedAncestorsRef 说明）。
+   */
   const stashTitle = useCallback(
     (el: HTMLElement) => {
-      if (!el.hasAttribute('title')) return;
-      const prev = stashedElRef.current;
-      if (prev && prev !== el) restoreTitle(prev);
-      el.setAttribute('data-pd-title', el.getAttribute('title') ?? '');
-      el.removeAttribute('title');
-      stashedElRef.current = el;
+      // 动态 title 兜底复查的同一元素：只重新摘除自身（祖先可能已被 React 写回）
+      if (stashedElRef.current === el) {
+        if (el.hasAttribute('title')) {
+          el.setAttribute('data-pd-title', el.getAttribute('title') ?? '');
+          el.removeAttribute('title');
+        }
+      } else {
+        restoreStashed();
+        if (!el.hasAttribute('title')) return;
+        el.setAttribute('data-pd-title', el.getAttribute('title') ?? '');
+        el.removeAttribute('title');
+        stashedElRef.current = el;
+      }
+      // 祖先链始终补齐：切换锚点时上层行可能刚被还原过 title；
+      // 同一锚点复查时祖先仍处于摘除状态，按 data-pd-title 重新收集即可。
+      const ancestors: HTMLElement[] = [];
+      let node = el.parentElement;
+      while (node) {
+        if (node.hasAttribute('title')) {
+          node.setAttribute('data-pd-title', node.getAttribute('title') ?? '');
+          node.removeAttribute('title');
+        }
+        if (node.getAttribute('data-pd-title') !== null) ancestors.push(node);
+        node = node.parentElement;
+      }
+      stashedAncestorsRef.current = ancestors;
     },
-    [restoreTitle],
+    [restoreStashed],
   );
 
   /**
@@ -95,9 +137,9 @@ export function TooltipLayer() {
       cancelPending();
       activeElRef.current = null;
       setTip(null);
-      if (restoreTitleToo) restoreTitle(stashedElRef.current);
+      if (restoreTitleToo) restoreStashed();
     },
-    [cancelPending, restoreTitle],
+    [cancelPending, restoreStashed],
   );
 
   const scheduleShow = useCallback(
@@ -209,9 +251,9 @@ export function TooltipLayer() {
       window.removeEventListener('blur', onFocusOut);
       restoreTitle(cancelPending());
       restoreTitle(activeElRef.current);
-      restoreTitle(stashedElRef.current);
+      restoreStashed();
     };
-  }, [cancelPending, hide, restoreTitle, scheduleShow, stashTitle]);
+  }, [cancelPending, hide, restoreStashed, restoreTitle, scheduleShow, stashTitle]);
 
   // 渲染后量尺寸：默认在下方，放不下翻到上方，水平/垂直都夹取在视口内。
   // 直接写 DOM 样式（不改 state）：避免多一次渲染，也避开 set-state-in-effect。
