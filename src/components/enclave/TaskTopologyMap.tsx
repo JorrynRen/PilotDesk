@@ -208,7 +208,20 @@ export function TaskTopologyMap({
                 backgroundColor: 'var(--bg-side)',
                 border: '1px dashed var(--border)',
               }}
-            />
+            >
+              {g.rail && (
+                <div
+                  className="absolute"
+                  style={{
+                    left: g.rail.x - g.x,
+                    top: g.rail.y1 - g.y,
+                    width: 1,
+                    height: Math.max(0, g.rail.y2 - g.rail.y1),
+                    backgroundColor: 'var(--border)',
+                  }}
+                />
+              )}
+            </div>
           ))}
 
         {/* 依赖边（节点之下） */}
@@ -260,6 +273,8 @@ export function TaskTopologyMap({
           const task = node.task;
           const active = node.id === activeTaskId;
           const overdue = isOverdue(task, nowSec);
+          // 只改四边颜色，不使用 border 简写：简写会覆盖 borderLeft 的状态色条
+          const lineColor = active ? 'var(--accent)' : 'var(--border)';
           return (
             <button
               key={node.id}
@@ -274,7 +289,9 @@ export function TaskTopologyMap({
                 width: node.width,
                 height: node.height,
                 backgroundColor: active ? 'var(--accent-light)' : 'var(--bg-raised)',
-                border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                borderTop: `1px solid ${lineColor}`,
+                borderRight: `1px solid ${lineColor}`,
+                borderBottom: `1px solid ${lineColor}`,
                 borderLeft: `3px solid ${STATUS_COLOR[task.status]}`,
                 boxShadow: '0 1px 2px rgba(0,0,0,0.12)',
                 cursor: 'pointer',
@@ -282,7 +299,10 @@ export function TaskTopologyMap({
             >
               <div className="flex items-center gap-1 min-w-0">
                 <span className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: STATUS_COLOR[task.status] }} />
-                <span className="text-[11px] truncate min-w-0" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                <span
+                  className="text-[11px] truncate min-w-0"
+                  style={{ color: 'var(--text-primary)', fontWeight: node.role === 'parent' ? 600 : 500 }}
+                >
                   {task.title}
                 </span>
                 {task.blocked && (

@@ -11,6 +11,8 @@ import type { TaskView } from '../../types/enclave';
 
 export const NODE_W = 196;
 export const NODE_H = 46;
+/** 子任务相对父任务容器的左侧缩进，用于表达层级而不是「同级卡片」 */
+const CHILD_INDENT = 14;
 const NODE_GAP = 8;
 const GROUP_PAD = 8;
 const COL_GAP = 48;
@@ -25,6 +27,8 @@ export interface TopoNode {
   y: number;
   width: number;
   height: number;
+  /** single = 独立任务；parent = 分组框内的父任务；child = 父任务下的子任务 */
+  role: 'single' | 'parent' | 'child';
   /** 汇总任务：已完成子任务数（非汇总任务为 0） */
   childDone: number;
   childTotal: number;
@@ -38,6 +42,8 @@ export interface TopoGroupBox {
   height: number;
   /** false = 该组只有一个任务，不画分组框 */
   framed: boolean;
+  /** 父任务到子任务的层级引导线（仅 framed 组有） */
+  rail?: { x: number; y1: number; y2: number };
 }
 
 export interface TopoEdge {
@@ -164,6 +170,8 @@ export function buildTaskTopology(tasks: TaskView[], flat = false): TopoLayout {
       let cursorY = CANVAS_PAD;
       for (const g of column) {
         const height = heightOf(g);
+        // 只有「父任务 + 子任务」的组才需要缩进与层级引导线
+        const isChildGroup = g.framed && g.members.length > 1;
         const box: TopoGroupBox = {
           key: g.key,
           x: cursorX,
@@ -171,19 +179,32 @@ export function buildTaskTopology(tasks: TaskView[], flat = false): TopoLayout {
           width: slotW,
           height,
           framed: g.framed,
+          rail: isChildGroup
+            ? {
+                x: cursorX + GROUP_PAD + 6,
+                y1: cursorY + GROUP_PAD + NODE_H,
+                y2:
+                  cursorY +
+                  GROUP_PAD +
+                  (g.members.length - 1) * (NODE_H + NODE_GAP) +
+                  NODE_H / 2,
+              }
+            : undefined,
         };
         groups.push(box);
 
         const childTotal = g.members.length - 1;
         g.members.forEach((task, index) => {
+          const child = index > 0 && isChildGroup;
           const nodeY = cursorY + GROUP_PAD + index * (NODE_H + NODE_GAP);
           nodes.push({
             id: task.id,
             task,
-            x: cursorX + GROUP_PAD,
+            x: cursorX + GROUP_PAD + (child ? CHILD_INDENT : 0),
             y: nodeY,
-            width: NODE_W,
+            width: NODE_W - (child ? CHILD_INDENT : 0),
             height: NODE_H,
+            role: isChildGroup ? (index === 0 ? 'parent' : 'child') : 'single',
             childDone: index === 0 ? g.members.slice(1).filter((c) => c.status === 'done').length : 0,
             childTotal: index === 0 ? childTotal : 0,
           });
