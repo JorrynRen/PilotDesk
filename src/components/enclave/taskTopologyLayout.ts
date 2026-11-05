@@ -12,7 +12,7 @@ import type { TaskView } from '../../types/enclave';
 export const NODE_W = 196;
 export const NODE_H = 46;
 /** 子任务相对父任务容器的左侧缩进，用于表达层级而不是「同级卡片」 */
-const CHILD_INDENT = 14;
+const CHILD_INDENT = 18;
 const NODE_GAP = 8;
 const GROUP_PAD = 8;
 const COL_GAP = 48;
@@ -42,8 +42,16 @@ export interface TopoGroupBox {
   height: number;
   /** false = 该组只有一个任务，不画分组框 */
   framed: boolean;
-  /** 父任务到子任务的层级引导线（仅 framed 组有） */
-  rail?: { x: number; y1: number; y2: number };
+  /**
+   * 父任务 → 子树状连线（坐标相对分组框）。
+   * 主干从父任务底部向下，再横向分叉到每个子任务左侧。
+   */
+  childLink?: {
+    trunkX: number;
+    trunkY1: number;
+    trunkY2: number;
+    branches: { y: number; x2: number }[];
+  };
 }
 
 export interface TopoEdge {
@@ -172,6 +180,18 @@ export function buildTaskTopology(tasks: TaskView[], flat = false): TopoLayout {
         const height = heightOf(g);
         // 只有「父任务 + 子任务」的组才需要缩进与层级引导线
         const isChildGroup = g.framed && g.members.length > 1;
+        const childLink = isChildGroup
+          ? {
+              trunkX: GROUP_PAD + 8,
+              trunkY1: GROUP_PAD + NODE_H,
+              trunkY2:
+                GROUP_PAD + (g.members.length - 1) * (NODE_H + NODE_GAP) + NODE_H / 2,
+              branches: g.members.slice(1).map((_, i) => ({
+                y: GROUP_PAD + (i + 1) * (NODE_H + NODE_GAP) + NODE_H / 2,
+                x2: GROUP_PAD + CHILD_INDENT,
+              })),
+            }
+          : undefined;
         const box: TopoGroupBox = {
           key: g.key,
           x: cursorX,
@@ -179,17 +199,7 @@ export function buildTaskTopology(tasks: TaskView[], flat = false): TopoLayout {
           width: slotW,
           height,
           framed: g.framed,
-          rail: isChildGroup
-            ? {
-                x: cursorX + GROUP_PAD + 6,
-                y1: cursorY + GROUP_PAD + NODE_H,
-                y2:
-                  cursorY +
-                  GROUP_PAD +
-                  (g.members.length - 1) * (NODE_H + NODE_GAP) +
-                  NODE_H / 2,
-              }
-            : undefined,
+          childLink,
         };
         groups.push(box);
 

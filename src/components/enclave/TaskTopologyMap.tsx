@@ -196,33 +196,51 @@ export function TaskTopologyMap({
         {/* 分组框（最底层） */}
         {layout.groups
           .filter((g) => g.framed)
-          .map((g) => (
-            <div
-              key={g.key}
-              className="absolute rounded-lg"
-              style={{
-                left: g.x,
-                top: g.y,
-                width: g.width,
-                height: g.height,
-                backgroundColor: 'var(--bg-side)',
-                border: '1px dashed var(--border)',
-              }}
-            >
-              {g.rail && (
-                <div
-                  className="absolute"
-                  style={{
-                    left: g.rail.x - g.x,
-                    top: g.rail.y1 - g.y,
-                    width: 1,
-                    height: Math.max(0, g.rail.y2 - g.rail.y1),
-                    backgroundColor: 'var(--border)',
-                  }}
-                />
-              )}
-            </div>
-          ))}
+          .map((g) => {
+            const link = g.childLink;
+            return (
+              <div
+                key={g.key}
+                className="absolute rounded-lg"
+                style={{
+                  left: g.x,
+                  top: g.y,
+                  width: g.width,
+                  height: g.height,
+                  backgroundColor: 'var(--bg-side)',
+                  border: '1px dashed var(--border)',
+                }}
+              >
+                {link && (
+                  <svg
+                    className="absolute inset-0 pointer-events-none"
+                    width={g.width}
+                    height={g.height}
+                  >
+                    {/* 主干：从父任务底部向下 */}
+                    <path
+                      d={`M ${link.trunkX} ${link.trunkY1} L ${link.trunkX} ${link.trunkY2}`}
+                      fill="none"
+                      stroke="var(--text-tertiary)"
+                      strokeWidth={1}
+                      opacity={0.55}
+                    />
+                    {/* 分支：横向连到每个子任务左侧 */}
+                    {link.branches.map((b) => (
+                      <path
+                        key={`${b.y}-${b.x2}`}
+                        d={`M ${link.trunkX} ${b.y} L ${b.x2} ${b.y}`}
+                        fill="none"
+                        stroke="var(--text-tertiary)"
+                        strokeWidth={1}
+                        opacity={0.55}
+                      />
+                    ))}
+                  </svg>
+                )}
+              </div>
+            );
+          })}
 
         {/* 依赖边（节点之下） */}
         <svg
