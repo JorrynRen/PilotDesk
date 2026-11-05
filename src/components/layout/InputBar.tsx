@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Send, Square, Zap, Brain, GraduationCap, Cpu, ChevronUp, ClipboardList, ImagePlus, FileText, Paperclip, FolderOpen, X, Plus, MemoryStick, Bot } from 'lucide-react';
+import { Send, Square, Zap, Brain, GraduationCap, Cpu, ChevronDown, ClipboardList, ImagePlus, FileText, Paperclip, FolderOpen, X, Plus, MemoryStick, Bot } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -103,8 +103,10 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
    * ref 在所有闭包间共享，才是可靠的防重闸。
    */
   const sendingRef = useRef(false);
-  const [showAttachMenu, setShowAttachMenu] = useState(false);
-  const attachMenuRef = useRef<HTMLDivElement>(null);
+  /** 「+」菜单（会话模式 / 技能 / 记忆 / 附件 的合并入口）；submenu 控制二级列表展开 */
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [plusSubmenu, setPlusSubmenu] = useState<'mode' | 'attach' | null>(null);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
   const [showCwdMenu, setShowCwdMenu] = useState(false);
   const cwdMenuRef = useRef<HTMLDivElement>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -113,10 +115,8 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   /** 项目记忆预览弹窗（原右侧面板「记忆」tab：只有只读预览，改弹窗不占 tab 位） */
   const [showMemoryDialog, setShowMemoryDialog] = useState(false);
-  const [showModeDropdown, setShowModeDropdown] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerAnchorRef = useRef<HTMLDivElement>(null);
-  const modeDropdownRef = useRef<HTMLDivElement>(null);
   const inputBarRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
 
@@ -270,30 +270,20 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     });
   }, [pendingInput, onPendingConsumed]);
 
-  // Close mode dropdown on outside click
+  // 「+」菜单与「工作目录」菜单的点击外部关闭（两者互斥，同时只开一个）
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (modeDropdownRef.current && !modeDropdownRef.current.contains(e.target as Node)) {
-        setShowModeDropdown(false);
-      }
-    };
-    if (showModeDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showModeDropdown]);
-
-  // 「附件」「工作目录」两个小菜单的点击外部关闭（两者互斥，同时只开一个）
-  useEffect(() => {
-    if (!showAttachMenu && !showCwdMenu) return;
+    if (!showPlusMenu && !showCwdMenu) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (showAttachMenu && !attachMenuRef.current?.contains(t)) setShowAttachMenu(false);
+      if (showPlusMenu && !plusMenuRef.current?.contains(t)) {
+        setShowPlusMenu(false);
+        setPlusSubmenu(null);
+      }
       if (showCwdMenu && !cwdMenuRef.current?.contains(t)) setShowCwdMenu(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [showAttachMenu, showCwdMenu]);
+  }, [showPlusMenu, showCwdMenu]);
 
   /**
    * 工具栏宽度自适应：默认宽度（窗口里左侧有会话列表、右侧可能开面板）常常不够放
@@ -919,152 +909,175 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
           {/* 主操作行：生成中显示停止，其余显示发送（按钮独占右下角一行，见 .pd-composer-actions） */}
           <div className="pd-composer-actions">
-            {/* 工具栏：模式 / 技能 / 记忆 / 附件 / 安全模式 / 目录 / 会话方式 / 语音 —— 与发送键同排。
+            {/* 工具栏：「+」菜单（模式/技能/记忆/附件）/ 安全模式 / 目录 / 会话方式 / 语音 —— 与发送键同排。
                 按容器宽度降级（见 compact）；宽度不足时工具组自身换行，发送键始终贴同行右端 */}
             <div ref={toolbarRef} className="pd-composer-tools">
-              {/* 新会话：选中了会话时给一条回"快捷开始"的路（否则只能去左侧列表点新建弹窗） */}
-              {session && (
+              {/* 「+」菜单：会话模式 / 技能 / 记忆 / 附件 收敛为单一入口。
+                  模式与附件点击后展开二级列表（菜单保持打开），技能与记忆直接唤起既有浮层。
+                  原「新会话」按钮已移除：Ctrl+N 与左侧会话列表的新建弹窗仍可用。 */}
+              <div className="relative shrink-0" ref={plusMenuRef}>
                 <button
-                  onClick={handleStartNewSession}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0"
+                  onClick={() => {
+                    setShowPlusMenu((v) => !v);
+                    setPlusSubmenu(null);
+                    setShowCwdMenu(false);
+                  }}
+                  className="flex items-center justify-center rounded-lg transition-colors"
                   style={{
-                    color: 'var(--text-secondary)',
-                    backgroundColor: 'var(--bg-field)',
+                    color: showPlusMenu ? 'var(--accent)' : 'var(--text-secondary)',
+                    backgroundColor: showPlusMenu ? 'var(--border)' : 'var(--bg-field)',
                     border: '1px solid var(--border)',
                     height: '24px',
+                    width: '24px',
+                    position: 'relative',
                   }}
-                  title="新建会话（Ctrl+N）"
+                  title={`更多会话选项（当前模式：${MODE_LABELS[mode]}${attachCount > 0 ? `；附件 ${attachCount} 个` : ''}）`}
                 >
-                  <Plus size={12} />
-                  {!compact && '新会话'}
+                  <Plus size={13} />
+                  {/* 附件收起后仍要能被看到：计数挂在「+」右上角 */}
+                  {attachCount > 0 && (
+                    <span
+                      className="absolute flex items-center justify-center rounded-full"
+                      style={{
+                        top: -5,
+                        right: -5,
+                        minWidth: 13,
+                        height: 13,
+                        padding: '0 3px',
+                        fontSize: 8,
+                        lineHeight: 1,
+                        color: '#fff',
+                        backgroundColor: 'var(--accent)',
+                      }}
+                    >
+                      {attachCount}
+                    </span>
+                  )}
                 </button>
-              )}
-
-              {/* Mode dropdown */}
-              <div className="relative shrink-0" ref={modeDropdownRef}>
-                <button
-                  onClick={() => setShowModeDropdown((v) => !v)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
-                  style={{
-                    backgroundColor: 'var(--bg-field)',
-                    color: MODE_COLORS[mode],
-                    border: '1px solid var(--border)',
-                    height: '24px',
-                  }}
-                  title={modeDescriptions[mode] || '加载中...'}
-                >
-                  {(() => {
-                    const Icon = MODE_ICONS[mode];
-                    return <Icon size={11} />;
-                  })()}
-                  {MODE_LABELS[mode]}
-                  <ChevronUp size={11} style={{ color: 'var(--text-secondary)' }} />
-                </button>
-                {showModeDropdown && (
+                {showPlusMenu && (
                   <div
                     className={`absolute left-0 ${menuPos} py-1 rounded-lg shadow-lg z-50`}
                     style={{
                       backgroundColor: 'var(--bg-panel)',
                       border: '1px solid var(--border)',
-                      minWidth: '110px',
+                      minWidth: 184,
                     }}
                   >
-                    {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
-                      const Icon = MODE_ICONS[m];
-                      const isActive = mode === m;
-                      return (
+                    {/* 会话模式（二级） */}
+                    <button
+                      onClick={() => setPlusSubmenu((v) => (v === 'mode' ? null : 'mode'))}
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      {(() => {
+                        const Icon = MODE_ICONS[mode];
+                        return <Icon size={12} style={{ color: MODE_COLORS[mode], flexShrink: 0 }} />;
+                      })()}
+                      <span className="flex-1">会话模式</span>
+                      <span style={{ color: MODE_COLORS[mode] }}>{MODE_LABELS[mode]}</span>
+                      <ChevronDown
+                        size={11}
+                        style={{
+                          color: 'var(--text-secondary)',
+                          transform: plusSubmenu === 'mode' ? 'rotate(180deg)' : undefined,
+                        }}
+                      />
+                    </button>
+                    {plusSubmenu === 'mode' && (
+                      <div className="pb-1">
+                        {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
+                          const Icon = MODE_ICONS[m];
+                          const isActive = mode === m;
+                          return (
+                            <button
+                              key={m}
+                              onClick={() => { setMode(m); setShowPlusMenu(false); setPlusSubmenu(null); }}
+                              className="flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                              style={{
+                                color: isActive ? MODE_COLORS[m] : 'var(--text-primary)',
+                                backgroundColor: isActive ? `${MODE_COLORS[m]}11` : 'transparent',
+                              }}
+                              title={modeDescriptions[m] || '加载中...'}
+                            >
+                              <Icon size={11} style={{ flexShrink: 0 }} />
+                              <span className="flex-1">{MODE_LABELS[m]}</span>
+                              {isActive && <span style={{ color: MODE_COLORS[m] }}>✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* 技能：打开既有技能面板，Ctrl+K 仍可用 */}
+                    <button
+                      onClick={() => {
+                        setShowPlusMenu(false);
+                        setPlusSubmenu(null);
+                        setShowSkillPicker(true);
+                        setShowInspirationPicker(false);
+                      }}
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                      style={{ color: 'var(--text-primary)', borderTop: '1px solid var(--border)' }}
+                    >
+                      <Cpu size={12} style={{ flexShrink: 0 }} />
+                      <span className="flex-1">技能</span>
+                      <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>Ctrl+K</span>
+                    </button>
+
+                    {/* 项目记忆：打开既有只读预览弹窗 */}
+                    <button
+                      onClick={() => {
+                        setShowPlusMenu(false);
+                        setPlusSubmenu(null);
+                        setShowMemoryDialog(true);
+                      }}
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                      style={{ color: 'var(--text-primary)', borderTop: '1px solid var(--border)' }}
+                    >
+                      <MemoryStick size={12} style={{ flexShrink: 0 }} />
+                      <span className="flex-1">项目记忆</span>
+                    </button>
+
+                    {/* 附件（二级）：图片 / 文件 */}
+                    <button
+                      onClick={() => setPlusSubmenu((v) => (v === 'attach' ? null : 'attach'))}
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                      style={{
+                        color: attachCount > 0 ? 'var(--accent)' : 'var(--text-primary)',
+                        borderTop: '1px solid var(--border)',
+                      }}
+                    >
+                      <Paperclip size={12} style={{ flexShrink: 0 }} />
+                      <span className="flex-1">附件</span>
+                      {attachCount > 0 && <span>{attachCount} 个</span>}
+                      <ChevronDown
+                        size={11}
+                        style={{
+                          color: 'var(--text-secondary)',
+                          transform: plusSubmenu === 'attach' ? 'rotate(180deg)' : undefined,
+                        }}
+                      />
+                    </button>
+                    {plusSubmenu === 'attach' && (
+                      <div className="pb-1">
                         <button
-                          key={m}
-                          onClick={() => { setMode(m); setShowModeDropdown(false); }}
-                          className="flex items-center gap-2 w-full px-3 py-1.5 text-xs transition-colors text-left"
-                          style={{
-                            color: isActive ? MODE_COLORS[m] : 'var(--text-primary)',
-                            backgroundColor: isActive ? `${MODE_COLORS[m]}11` : 'transparent',
-                          }}
-                          title={modeDescriptions[m] || '加载中...'}
+                          onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickImages(); }}
+                          className="flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                          style={{ color: 'var(--text-primary)' }}
                         >
-                          <Icon size={12} />
-                          <span className="flex-1">{MODE_LABELS[m]}</span>
+                          <ImagePlus size={11} style={{ flexShrink: 0 }} />
+                          <span className="flex-1">选择图片{imageCount > 0 ? `（${imageCount}）` : ''}</span>
                         </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* 技能按钮（窄宽度下只留图标，标题里写全称）。
-                  无会话时也能用：往输入框插文本，不依赖会话；技能列表按草稿选的 agent 类型取。
-                  —— 灵感按钮已移除：右栏「灵感」面板本就支持把内容送进输入框（pendingInputStore），
-                  这里再放一个纯属重复占位；快捷键 Ctrl+I 仍保留，需要就地搜索时照旧可用 */}
-              <button
-                onClick={() => { setShowSkillPicker((v) => !v); setShowInspirationPicker(false); }}
-                className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0"
-                style={{
-                  color: showSkillPicker ? getTheme(session?.agentType ?? draftAgentType).color : 'var(--text-secondary)',
-                  backgroundColor: showSkillPicker ? 'var(--border)' : 'transparent',
-                }}
-                title="技能列表 (Ctrl+K)"
-              >
-                <Cpu size={12} />
-                {!compact && '技能'}
-              </button>
-              {/* 项目记忆：只读预览当前会话工作区的 MEMORY.md（无会话时为兜底记忆根，弹窗内会写明）。
-                  与 技能 同排 —— 都是"看一眼/取一下"的会话级入口，不常驻占位。
-                  图标用 MemoryStick（memory=记忆）并与 设置 › 记忆管理 一致：同排的模式下拉里 Brain 是「思考」模式，
-                  两边都用大脑会让人分不清 */}
-              <button
-                onClick={() => setShowMemoryDialog(true)}
-                className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0"
-                style={{
-                  color: showMemoryDialog ? 'var(--accent)' : 'var(--text-secondary)',
-                  backgroundColor: showMemoryDialog ? 'var(--border)' : 'transparent',
-                }}
-                title="项目记忆（当前会话工作区的 MEMORY.md）"
-              >
-                <MemoryStick size={12} />
-                {!compact && '记忆'}
-              </button>
-
-              {/* 附件：图片/文件合并为一个回形针按钮（菜单选类型），腾出工具栏宽度给「工作目录 + 会话方式」 */}
-              <div className="relative shrink-0" ref={attachMenuRef}>
-                <button
-                  onClick={() => setShowAttachMenu((v) => !v)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
-                  style={{
-                    color: attachCount > 0 || showAttachMenu ? 'var(--accent)' : 'var(--text-secondary)',
-                    backgroundColor: showAttachMenu ? 'var(--border)' : 'transparent',
-                  }}
-                  title={`添加附件（支持拖拽/粘贴，最多 ${MAX_ATTACHMENTS} 个）`}
-                >
-                  <Paperclip size={12} />
-                  {compact ? attachCount || '' : `附件${attachCount > 0 ? ` ${attachCount}` : ''}`}
-                </button>
-                {showAttachMenu && (
-                  <div
-                    className={`absolute left-0 ${menuPos} py-1 rounded-lg z-20`}
-                    style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.22)',
-                      minWidth: 132,
-                    }}
-                  >
-                    <button
-                      onClick={() => { setShowAttachMenu(false); void handlePickImages(); }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-primary)' }}
-                    >
-                      <ImagePlus size={12} />
-                      选择图片{imageCount > 0 ? `（${imageCount}）` : ''}
-                    </button>
-                    <button
-                      onClick={() => { setShowAttachMenu(false); void handlePickFiles(); }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-primary)' }}
-                    >
-                      <FileText size={12} />
-                      选择文件{fileCount > 0 ? `（${fileCount}）` : ''}
-                    </button>
+                        <button
+                          onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickFiles(); }}
+                          className="flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                          style={{ color: 'var(--text-primary)' }}
+                        >
+                          <FileText size={11} style={{ flexShrink: 0 }} />
+                          <span className="flex-1">选择文件{fileCount > 0 ? `（${fileCount}）` : ''}</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1104,7 +1117,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   截断由内层 truncate 兜底，完整值在 title 里 */}
               <div className="relative" ref={cwdMenuRef} style={{ flex: '1 1 0', minWidth: 96, maxWidth: 'max-content' }}>
                 <button
-                  onClick={() => setShowCwdMenu((v) => !v)}
+                  onClick={() => { setShowCwdMenu((v) => !v); setShowPlusMenu(false); }}
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors min-w-0 w-full"
                   style={{
                     color: (session ? session.cwd : draftCwd) ? 'var(--text-primary)' : '#F59E0B',
