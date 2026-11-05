@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { CheckSquare, Loader2, Sparkles, X } from 'lucide-react';
@@ -26,10 +26,10 @@ interface MessageListProps {
   confirmation?: ConfirmationBlockData | null;
   onResendMessage?: (content: string) => void;
   /**
-   * 搜索栏右侧的操作位（会话页放「转为工作流 / 转为群聊」）。
-   * 用插槽而不是具体按钮：消息列表保持通用，业务动作仍定义在会话页。
+   * 工具栏扩展动作（会话页放「转为工作流 / 转为圆桌」）。
+   * 与「整理为知识 / 多选 / 关闭」共用同一个 PageToolbar：默认全部收进「…」。
    */
-  headerActions?: ReactNode;
+  headerActions?: ToolbarAction[];
   /**
    * 关闭当前会话（渲染在顶部操作行**最右侧**）。会话页传 `startNewSession`：
    * 只清空选中、回到「快捷开始」，不删除任何数据。
@@ -333,13 +333,11 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
               </div>
             )}
           </div>
-          {headerActions && (
-            <div className="flex items-center gap-1 shrink-0">{headerActions}</div>
-          )}
           {/* 低频动作收进统一工具栏：除行尾关闭外全部进「…」，顶部只留最少入口 */}
           <PageToolbar
             collapseAll
             actions={[
+              ...(headerActions ?? []),
               // 多选态下隐藏：同屏出现「沉淀为知识」与「整理为知识」两个同名动作，用户会分不清该点哪个
               ...(selectMode
                 ? []

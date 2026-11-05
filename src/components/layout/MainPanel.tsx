@@ -1245,8 +1245,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
       <div className="flex-1 flex flex-col overflow-hidden">
       {currentSession ? (
         <>
-        {/* 「转为工作流 / 转为群聊」以 headerActions 插槽交给 MessageList：与搜索框同行显示，
-            不再单独占一行；会话标题也不再占这一行（标题在左侧列表里已有） */}
+        {/* 「转为工作流 / 转为圆桌」作为动作交给 MessageList，与「整理为知识/多选/关闭」一起收进统一工具栏的「…」 */}
         {isLoadingMessages ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="pilotdesk-spinner" />
@@ -1256,30 +1255,24 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
           <MessageList
             messages={displayMessages}
             session={currentSession}
-            headerActions={
-              <>
-                {/* 与「整理为知识 / 多选 / 关闭会话」统一：**无边框**、同内边距与字号 */}
-                <button
-                  className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
-                  style={{ color: 'var(--text-secondary)' }}
-                  onClick={() => setShowWorkflowModal(true)}
-                  title="把本会话的任务清单转为可运行的工作流"
-                >
-                  <Workflow size={11} />
-                  转为工作流
-                </button>
-                {/* 会话转房间：对所有用户开放（本地能力不设限） */}
-                <button
-                  className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
-                  style={{ color: 'var(--text-secondary)' }}
-                  onClick={() => setShowRoomModal(true)}
-                  title="把本会话的任务清单转为圆桌，由多 Agent 协作执行"
-                >
-                  <Users size={11} />
-                  转为圆桌
-                </button>
-              </>
-            }
+            headerActions={[
+              {
+                key: 'to-workflow',
+                label: '转为工作流',
+                title: '把本会话的任务清单转为可运行的工作流',
+                icon: <Workflow size={11} />,
+                priority: 2,
+                onClick: () => setShowWorkflowModal(true),
+              },
+              {
+                key: 'to-room',
+                label: '转为圆桌',
+                title: '把本会话的任务清单转为圆桌，由多 Agent 协作执行',
+                icon: <Users size={11} />,
+                priority: 2,
+                onClick: () => setShowRoomModal(true),
+              },
+            ]}
             onCloseSession={() => startNewSession()}
             isGenerating={!!currentGenState}
             streamingProgress={currentGenState?.streamingProgress ?? ''}
