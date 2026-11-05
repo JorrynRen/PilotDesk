@@ -12,7 +12,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, ListTree, Link2, AlertTriangle, ChevronRight,
   Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Trash2,
-  Wand2, Loader2,
+  Wand2, Loader2, X,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore, type TaskDetailTab } from '../../stores/enclaveTaskStore';
@@ -24,6 +24,8 @@ import { Select } from '../common/Select';
 import { EnclaveNavBar } from './EnclaveNavBar';
 import { EnclaveToolbarActions, EnclaveFilesRootPanel } from './EnclaveToolbar';
 import { TASK_TEMPLATES, type TaskTemplate } from './taskTemplates';
+import { STATUS_COLOR, STATUS_LABEL } from './taskStatusMeta';
+import { TaskTopologyMap } from './TaskTopologyMap';
 import type {
   DepsPreview, KbView, MemberView, TaskCommentView, TaskSplitDraft, TaskStatus, TaskView,
 } from '../../types/enclave';
@@ -36,24 +38,6 @@ const FIELD_STYLE = {
   border: '1px solid var(--border)',
 } as const;
 const TEXTAREA_CLASS = 'w-full p-3 rounded-lg text-xs leading-relaxed outline-none resize-y';
-
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  pending: '待办',
-  in_progress: '进行中',
-  submitted: '待确认',
-  done: '已完成',
-  archived: '已归档',
-  cancelled: '已作废',
-};
-
-const STATUS_COLOR: Record<TaskStatus, string> = {
-  pending: 'var(--text-tertiary)',
-  in_progress: 'var(--accent)',
-  submitted: 'var(--status-warning, #d08700)',
-  done: 'var(--status-success, #2f9e44)',
-  archived: 'var(--text-tertiary)',
-  cancelled: 'var(--status-danger)',
-};
 
 const PRIORITY_LABEL: Record<string, string> = {
   low: '低',
@@ -134,6 +118,23 @@ export function TaskWorkspace() {
   const [newKb, setNewKb] = useState('');
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  /** 默认页视图：地图（默认）/ 任务树列表；记住用户上次选择 */
+  const [viewMode, setViewMode] = useState<'map' | 'list'>(() => {
+    try {
+      return localStorage.getItem('enclave.taskView') === 'list' ? 'list' : 'map';
+    } catch {
+      return 'map';
+    }
+  });
+  const changeViewMode = (mode: 'map' | 'list') => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem('enclave.taskView', mode);
+    } catch {
+      // 写入失败（隐私模式等）时只影响本次会话
+    }
+  };
+
   /** 任务列表筛选：默认「活跃」= 不含已归档；也可按单一状态筛选 */
   const [statusFilter, setStatusFilter] = useState<'active' | 'all' | TaskStatus>('active');
   /** 负责人筛选：all / unassigned / userId */
@@ -626,205 +627,295 @@ export function TaskWorkspace() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 flex overflow-hidden">
-        {/* 左：任务树（顶部按状态筛选） */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        {/* 视图切换 + 筛选：地图与列表共用同一套筛选状态 */}
         <div
-          className="w-[280px] shrink-0 flex flex-col overflow-hidden"
-          style={{ borderRight: '1px solid var(--border)' }}
+          className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 flex-wrap"
+          style={{ borderBottom: '1px solid var(--border)' }}
         >
-          <div
-            className="shrink-0 px-2 py-1.5 flex flex-col gap-1.5"
-            style={{ borderBottom: '1px solid var(--border)' }}
-          >
-            <Select
-              value={statusFilter}
-              onChange={(v) => setStatusFilter(v as 'active' | 'all' | TaskStatus)}
-              className="w-full"
-              options={[
-                { value: 'active', label: '活跃任务（不含已归档）' },
-                { value: 'all', label: '全部状态' },
-                { value: 'pending', label: '待办' },
-                { value: 'in_progress', label: '进行中' },
-                { value: 'submitted', label: '待确认 / 待汇总确认' },
-                { value: 'done', label: '已完成' },
-                { value: 'archived', label: '已归档' },
-                { value: 'cancelled', label: '已作废' },
-              ]}
-              title="按任务状态筛选"
-            />
-            <div className="flex items-center gap-1">
-              <Select
-                value={assigneeFilter}
-                onChange={setAssigneeFilter}
-                className="flex-1 min-w-0"
-                options={[
-                  { value: 'all', label: '全部负责人' },
-                  { value: 'unassigned', label: '未指派' },
-                  ...members
-                    .filter((m) => m.seatStatus !== 'removed')
-                    .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
-                ]}
-                title="按负责人筛选"
-              />
+          <div className="flex items-center rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+            {(['map', 'list'] as const).map((mode) => (
               <button
-                onClick={() => setOverdueOnly((v) => !v)}
-                className="shrink-0 text-[10px] px-1.5 py-1 rounded"
+                key={mode}
+                onClick={() => changeViewMode(mode)}
+                className="text-[10px] px-2 py-1"
                 style={{
-                  backgroundColor: overdueOnly ? 'var(--accent)' : 'var(--bg-tertiary)',
-                  color: overdueOnly ? '#fff' : 'var(--text-secondary)',
-                  border: `1px solid ${overdueOnly ? 'var(--accent)' : 'var(--border)'}`,
+                  backgroundColor: viewMode === mode ? 'var(--accent)' : 'transparent',
+                  color: viewMode === mode ? '#fff' : 'var(--text-secondary)',
                 }}
-                title="只看已过截止时间且未完成的任务"
+                title={mode === 'map' ? '按前置依赖展示任务拓扑（默认）' : '按任务树浏览与批量操作'}
               >
-                逾期
+                {mode === 'map' ? '地图' : '列表'}
               </button>
-              <button
-                onClick={() => {
-                  setBatchMode((v) => !v);
-                  setSelectedIds([]);
-                  setBatchAssignee('');
-                  setBatchDue('');
-                }}
-                className="shrink-0 text-[10px] px-1.5 py-1 rounded"
-                style={{
-                  backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
-                  color: batchMode ? '#fff' : 'var(--text-secondary)',
-                  border: `1px solid ${batchMode ? 'var(--accent)' : 'var(--border)'}`,
-                }}
-                title="批量改派 / 改期"
-              >
-                批量
-              </button>
-            </div>
-            {batchMode && (
-              <div className="flex flex-col gap-1 pt-0.5">
-                <div className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  <span>已选 {selectedIds.length}</span>
-                  <button
-                    onClick={() => setSelectedIds(visibleTasks.map((t) => t.id))}
-                    style={{ color: 'var(--accent)' }}
-                    title="全选当前筛选结果"
-                  >
-                    全选
-                  </button>
-                  <button
-                    onClick={() => setSelectedIds([])}
-                    style={{ color: 'var(--text-tertiary)' }}
-                    disabled={selectedIds.length === 0}
-                  >
-                    清空
-                  </button>
-                </div>
-                <Select
-                  value={batchAssignee}
-                  onChange={(v) => void batchAssign(v)}
-                  className="w-full"
-                  options={[
-                    { value: '', label: batchBusy ? '处理中…' : '批量改派到…' },
-                    { value: '__none__', label: '未指派' },
-                    ...members
-                      .filter((m) => m.seatStatus !== 'removed')
-                      .map((m) => ({ value: m.userId, label: memberOptionLabel(m) })),
-                  ]}
-                  title="把选中的任务改派给该成员（括号内为在办任务数）"
-                />
-                <div className="flex items-center gap-1">
-                  <input
-                    type="date"
-                    className={FIELD_CLASS}
-                    style={{ ...FIELD_STYLE, flex: 1, minWidth: 0 }}
-                    value={batchDue}
-                    onChange={(e) => setBatchDue(e.target.value)}
-                    title="批量设置同一截止日期"
-                  />
-                  <button
-                    onClick={() => void batchSetDue()}
-                    disabled={batchBusy || !batchDue || selectedIds.length === 0}
-                    className="shrink-0 text-[10px] px-1.5 py-1 rounded"
-                    style={{
-                      backgroundColor: 'var(--bg-tertiary)',
-                      color: 'var(--text-secondary)',
-                      border: '1px solid var(--border)',
-                      opacity: batchBusy || !batchDue || selectedIds.length === 0 ? 0.5 : 1,
-                    }}
-                    title="把选中任务的截止日期改成该日期"
-                  >
-                    改期
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="flex-1 overflow-auto py-1">
-            {roots.length === 0 && (
-              <div className="px-3 py-6 text-xs text-center" style={{ color: 'var(--text-tertiary)' }}>
-                {notLoggedIn
-                  ? '未登录：登录平台账号后才会加载团队任务'
-                  : tasks.length === 0
-                    ? '还没有任务，点右上角「新建任务」'
-                    : '没有符合筛选条件的任务'}
-              </div>
-            )}
-            {roots.map((root) => (
-              <div key={root.id}>
-                <TaskNode
-                  task={root}
-                  active={root.id === activeTaskId}
-                  onClick={() => useEnclaveTaskStore.getState().selectTask(root.id)}
-                  onAddChild={() => {
-                    setNewParentId(root.id);
-                    setNewOpen(true);
-                  }}
-                  selectable={batchMode}
-                  selected={selectedIds.includes(root.id)}
-                  onToggleSelect={() =>
-                    setSelectedIds((prev) =>
-                      prev.includes(root.id) ? prev.filter((x) => x !== root.id) : [...prev, root.id],
-                    )
-                  }
-                />
-                {childrenOf(root.id).map((child) => (
-                  <TaskNode
-                    key={child.id}
-                    task={child}
-                    child
-                    active={child.id === activeTaskId}
-                    onClick={() => useEnclaveTaskStore.getState().selectTask(child.id)}
-                    selectable={batchMode}
-                    selected={selectedIds.includes(child.id)}
-                    onToggleSelect={() =>
-                      setSelectedIds((prev) =>
-                        prev.includes(child.id)
-                          ? prev.filter((x) => x !== child.id)
-                          : [...prev, child.id],
-                      )
-                    }
-                  />
-                ))}
-              </div>
             ))}
           </div>
+          <Select
+            value={statusFilter}
+            onChange={(v) => setStatusFilter(v as 'active' | 'all' | TaskStatus)}
+            style={{ width: 150, flexShrink: 0 }}
+            options={[
+              { value: 'active', label: '活跃任务（不含已归档）' },
+              { value: 'all', label: '全部状态' },
+              { value: 'pending', label: '待办' },
+              { value: 'in_progress', label: '进行中' },
+              { value: 'submitted', label: '待确认 / 待汇总确认' },
+              { value: 'done', label: '已完成' },
+              { value: 'archived', label: '已归档' },
+              { value: 'cancelled', label: '已作废' },
+            ]}
+            title="按任务状态筛选"
+          />
+          <Select
+            value={assigneeFilter}
+            onChange={setAssigneeFilter}
+            style={{ width: 130, flexShrink: 0 }}
+            options={[
+              { value: 'all', label: '全部负责人' },
+              { value: 'unassigned', label: '未指派' },
+              ...members
+                .filter((m) => m.seatStatus !== 'removed')
+                .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+            ]}
+            title="按负责人筛选"
+          />
+          <button
+            onClick={() => setOverdueOnly((v) => !v)}
+            className="shrink-0 text-[10px] px-1.5 py-1 rounded"
+            style={{
+              backgroundColor: overdueOnly ? 'var(--accent)' : 'var(--bg-tertiary)',
+              color: overdueOnly ? '#fff' : 'var(--text-secondary)',
+              border: `1px solid ${overdueOnly ? 'var(--accent)' : 'var(--border)'}`,
+            }}
+            title="只看已过截止时间且未完成的任务"
+          >
+            逾期
+          </button>
+          <div className="flex-1" />
+          {viewMode === 'map' ? (
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              拖拽平移 · 滚轮缩放
+            </span>
+          ) : (
+            <button
+              onClick={() => {
+                setBatchMode((v) => !v);
+                setSelectedIds([]);
+                setBatchAssignee('');
+                setBatchDue('');
+              }}
+              className="shrink-0 text-[10px] px-1.5 py-1 rounded"
+              style={{
+                backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
+                color: batchMode ? '#fff' : 'var(--text-secondary)',
+                border: `1px solid ${batchMode ? 'var(--accent)' : 'var(--border)'}`,
+              }}
+              title="批量改派 / 改期"
+            >
+              批量
+            </button>
+          )}
         </div>
 
-        {/* 中：详情（属性 / 依赖 / 过程记录 / 汇报都在这里，右侧不常驻面板） */}
-        <div className="flex-1 min-w-0 overflow-auto">
-          {!task && (
-            <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
-              选择左侧任务查看详情
-            </div>
-          )}
-          {task && activeOrgId && (
-            <TaskDetail
-              key={task.id}
-              orgId={activeOrgId}
-              task={task}
-              tasks={tasks}
-              members={members}
-              memberLabel={memberLabel}
-              kbOptions={kbOptions}
-              myRole={detail?.org.myRole ?? ''}
-              memberLoad={memberLoad}
-            />
+        <div className="flex-1 min-h-0 flex overflow-hidden">
+          {viewMode === 'map' ? (
+            <>
+              <TaskTopologyMap
+                tasks={visibleTasks}
+                flat={isFlatFilter}
+                activeTaskId={activeTaskId}
+                memberLabel={memberLabel}
+                onSelect={(id) => useEnclaveTaskStore.getState().selectTask(id)}
+                emptyHint={
+                  notLoggedIn
+                    ? '未登录：登录平台账号后才会加载团队任务'
+                    : tasks.length === 0
+                      ? '还没有任务，点右上角「新建任务」'
+                      : '没有符合筛选条件的任务'
+                }
+                className="flex-1 min-w-0"
+              />
+              {task && activeOrgId && (
+                <aside
+                  className="w-[360px] shrink-0 flex flex-col overflow-hidden"
+                  style={{ borderLeft: '1px solid var(--border)', backgroundColor: 'var(--bg-content)' }}
+                >
+                  <div
+                    className="shrink-0 px-3 py-1.5 flex items-center gap-2"
+                    style={{ borderBottom: '1px solid var(--border)' }}
+                  >
+                    <span className="text-[11px] font-medium truncate min-w-0" style={{ color: 'var(--text-secondary)' }}>
+                      {task.title}
+                    </span>
+                    <div className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => useEnclaveTaskStore.getState().selectTask(null)}
+                      className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+                      style={{ color: 'var(--text-secondary)' }}
+                      title="关闭详情"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-auto">
+                    <TaskDetail
+                      key={task.id}
+                      orgId={activeOrgId}
+                      task={task}
+                      tasks={tasks}
+                      members={members}
+                      memberLabel={memberLabel}
+                      kbOptions={kbOptions}
+                      myRole={detail?.org.myRole ?? ''}
+                      memberLoad={memberLoad}
+                    />
+                  </div>
+                </aside>
+              )}
+            </>
+          ) : (
+            <>
+              {/* 左：任务树（批量操作只在列表视图提供） */}
+              <div
+                className="w-[280px] shrink-0 flex flex-col overflow-hidden"
+                style={{ borderRight: '1px solid var(--border)' }}
+              >
+                {batchMode && (
+                  <div
+                    className="shrink-0 px-2 py-1.5 flex flex-col gap-1.5"
+                    style={{ borderBottom: '1px solid var(--border)' }}
+                  >
+                    <div className="flex flex-col gap-1 pt-0.5">
+                      <div className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        <span>已选 {selectedIds.length}</span>
+                        <button
+                          onClick={() => setSelectedIds(visibleTasks.map((t) => t.id))}
+                          style={{ color: 'var(--accent)' }}
+                          title="全选当前筛选结果"
+                        >
+                          全选
+                        </button>
+                        <button
+                          onClick={() => setSelectedIds([])}
+                          style={{ color: 'var(--text-tertiary)' }}
+                          disabled={selectedIds.length === 0}
+                        >
+                          清空
+                        </button>
+                      </div>
+                      <Select
+                        value={batchAssignee}
+                        onChange={(v) => void batchAssign(v)}
+                        className="w-full"
+                        options={[
+                          { value: '', label: batchBusy ? '处理中…' : '批量改派到…' },
+                          { value: '__none__', label: '未指派' },
+                          ...members
+                            .filter((m) => m.seatStatus !== 'removed')
+                            .map((m) => ({ value: m.userId, label: memberOptionLabel(m) })),
+                        ]}
+                        title="把选中的任务改派给该成员（括号内为在办任务数）"
+                      />
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="date"
+                          className={FIELD_CLASS}
+                          style={{ ...FIELD_STYLE, flex: 1, minWidth: 0 }}
+                          value={batchDue}
+                          onChange={(e) => setBatchDue(e.target.value)}
+                          title="批量设置同一截止日期"
+                        />
+                        <button
+                          onClick={() => void batchSetDue()}
+                          disabled={batchBusy || !batchDue || selectedIds.length === 0}
+                          className="shrink-0 text-[10px] px-1.5 py-1 rounded"
+                          style={{
+                            backgroundColor: 'var(--bg-tertiary)',
+                            color: 'var(--text-secondary)',
+                            border: '1px solid var(--border)',
+                            opacity: batchBusy || !batchDue || selectedIds.length === 0 ? 0.5 : 1,
+                          }}
+                          title="把选中任务的截止日期改成该日期"
+                        >
+                          改期
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="flex-1 overflow-auto py-1">
+                  {roots.length === 0 && (
+                    <div className="px-3 py-6 text-xs text-center" style={{ color: 'var(--text-tertiary)' }}>
+                      {notLoggedIn
+                        ? '未登录：登录平台账号后才会加载团队任务'
+                        : tasks.length === 0
+                          ? '还没有任务，点右上角「新建任务」'
+                          : '没有符合筛选条件的任务'}
+                    </div>
+                  )}
+                  {roots.map((root) => (
+                    <div key={root.id}>
+                      <TaskNode
+                        task={root}
+                        active={root.id === activeTaskId}
+                        onClick={() => useEnclaveTaskStore.getState().selectTask(root.id)}
+                        onAddChild={() => {
+                          setNewParentId(root.id);
+                          setNewOpen(true);
+                        }}
+                        selectable={batchMode}
+                        selected={selectedIds.includes(root.id)}
+                        onToggleSelect={() =>
+                          setSelectedIds((prev) =>
+                            prev.includes(root.id) ? prev.filter((x) => x !== root.id) : [...prev, root.id],
+                          )
+                        }
+                      />
+                      {childrenOf(root.id).map((child) => (
+                        <TaskNode
+                          key={child.id}
+                          task={child}
+                          child
+                          active={child.id === activeTaskId}
+                          onClick={() => useEnclaveTaskStore.getState().selectTask(child.id)}
+                          selectable={batchMode}
+                          selected={selectedIds.includes(child.id)}
+                          onToggleSelect={() =>
+                            setSelectedIds((prev) =>
+                              prev.includes(child.id)
+                                ? prev.filter((x) => x !== child.id)
+                                : [...prev, child.id],
+                            )
+                          }
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 中：详情（属性 / 依赖 / 过程记录 / 汇报都在这里，右侧不常驻面板） */}
+              <div className="flex-1 min-w-0 overflow-auto">
+                {!task && (
+                  <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    选择左侧任务查看详情
+                  </div>
+                )}
+                {task && activeOrgId && (
+                  <TaskDetail
+                    key={task.id}
+                    orgId={activeOrgId}
+                    task={task}
+                    tasks={tasks}
+                    members={members}
+                    memberLabel={memberLabel}
+                    kbOptions={kbOptions}
+                    myRole={detail?.org.myRole ?? ''}
+                    memberLoad={memberLoad}
+                  />
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>
