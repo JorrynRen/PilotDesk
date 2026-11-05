@@ -20,6 +20,7 @@ import { WorkflowNodeTimeline } from '../components/workflow/WorkflowNodeTimelin
 import type { NodeExecRow } from '../components/workflow/WorkflowNodeTimeline';
 import { ExecutionStats } from '../components/workflow/ExecutionStats';
 import { Select } from '../components/common/Select';
+import { PageToolbar, type ToolbarAction } from '../components/common/PageToolbar';
 import type { WorkflowDefinition, WorkflowInstance, ExecutionProgressPayload } from '../types/workflow';
 import type { JsonValue } from '../types/plugin';
 import { useCommandCenterStore } from '../stores/commandCenterStore';
@@ -1082,74 +1083,82 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
 
         <div className="flex-1" />
 
-        <div className="flex items-center gap-2 pb-2">
-          {/* 待处理入口：审批卡与人工输入统一在指挥中心就地处理（这里只做入口与计数，
-              避免同一批待办在页面底部再堆一份、位置还随 tab 漂移） */}
-          {pendingCount > 0 && (
-            <button
-              onClick={() => useCommandCenterStore.getState().openCenter()}
-              className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-              style={{ border: '1px solid #F59E0B', backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}
-              title="有待审批的工具调用或等待输入，点击到指挥中心处理"
-            >
-              <AlertTriangle size={14} />
-              待处理 {pendingCount}
-            </button>
-          )}
-          <button
-            onClick={handleCreateAndEdit}
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-          >
-            <Plus size={14} /> 新建工作流
-          </button>
-          <button
-            onClick={handleImportWorkflow}
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-          >
-            <Download size={14} /> 从文件导入
-          </button>
-          {/* 从组织导入：走组织共享空间（团队版），与「共享到组织」配合使用 */}
-          <button
-            onClick={() => void handleOpenImportOrgDialog()}
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="从组织共享空间导入工作流"
-          >
-            <Building2 size={14} /> 从组织导入
-          </button>
-          {/* 批量导出：对所有用户开放（本地能力不设限） */}
-          <button
-            onClick={() => {
-              setBatchSelectedIds(new Set());
-              setShowBatchExport(true);
-            }}
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="勾选多个工作流一次性导出到指定目录"
-          >
-            <Upload size={14} /> 批量导出
-          </button>
-          {/* 模板市场已迁至「资源市集 › 工作流模板」：这里只留跳转入口 */}
-          <button
-            onClick={() => navigate('/market?tab=workflow')}
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="前往资源市集 › 工作流模板"
-          >
-            <LayoutTemplate size={14} /> 模板市场
-          </button>
-          {/* 回收站：软删除的工作流入口（恢复 / 彻底删除 / 清空） */}
-          <button
-            onClick={handleOpenRecycleBin}
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="查看已删除（回收站）的工作流，可恢复或彻底删除"
-          >
-            <Trash2 size={14} /> 回收站
-          </button>
-        </div>
+        {/* 工具栏：仅「新建工作流」与「待处理」常驻，其余（导入/批量导出/市集/回收站）收进「…」 */}
+        <PageToolbar
+          collapseAll
+          actions={[
+            // 待处理入口：审批卡与人工输入统一在指挥中心就地处理（这里只做入口与计数）
+            ...(pendingCount > 0
+              ? ([
+                  {
+                    key: 'pending',
+                    label: `待处理 ${pendingCount}`,
+                    title: '有待审批的工具调用或等待输入，点击到指挥中心处理',
+                    icon: <AlertTriangle size={14} />,
+                    priority: 0,
+                    alwaysVisible: true,
+                    tone: 'var(--status-warning)',
+                    onClick: () => useCommandCenterStore.getState().openCenter(),
+                  },
+                ] satisfies ToolbarAction[])
+              : []),
+            {
+              key: 'create',
+              label: '新建工作流',
+              icon: <Plus size={14} />,
+              priority: 0,
+              alwaysVisible: true,
+              variant: 'primary',
+              onClick: handleCreateAndEdit,
+            },
+            {
+              key: 'import-file',
+              label: '从文件导入',
+              icon: <Download size={14} />,
+              priority: 2,
+              onClick: handleImportWorkflow,
+            },
+            // 从组织导入：走组织共享空间（团队版），与「共享到组织」配合使用
+            {
+              key: 'import-org',
+              label: '从组织导入',
+              title: '从组织共享空间导入工作流',
+              icon: <Building2 size={14} />,
+              priority: 2,
+              onClick: () => void handleOpenImportOrgDialog(),
+            },
+            // 批量导出：对所有用户开放（本地能力不设限）
+            {
+              key: 'batch-export',
+              label: '批量导出',
+              title: '勾选多个工作流一次性导出到指定目录',
+              icon: <Upload size={14} />,
+              priority: 2,
+              onClick: () => {
+                setBatchSelectedIds(new Set());
+                setShowBatchExport(true);
+              },
+            },
+            // 模板市场已迁至「资源市集 › 工作流模板」：这里只留跳转入口
+            {
+              key: 'market',
+              label: '模板市场',
+              title: '前往资源市集 › 工作流模板',
+              icon: <LayoutTemplate size={14} />,
+              priority: 2,
+              onClick: () => navigate('/market?tab=workflow'),
+            },
+            // 回收站：软删除的工作流入口（恢复 / 彻底删除 / 清空）
+            {
+              key: 'recycle',
+              label: '回收站',
+              title: '查看已删除（回收站）的工作流，可恢复或彻底删除',
+              icon: <Trash2 size={14} />,
+              priority: 2,
+              onClick: handleOpenRecycleBin,
+            },
+          ]}
+        />
       </div>
 
       {/* Content */}

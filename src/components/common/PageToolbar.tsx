@@ -20,6 +20,10 @@ export interface ToolbarAction {
   priority?: 0 | 1 | 2;
   /** 强制只显示图标（例如行尾关闭按钮），不受优先级影响。 */
   iconOnly?: boolean;
+  /** 即使开启 collapseAll 也常驻显示（用于新建、待处理等不可埋没的入口）。 */
+  alwaysVisible?: boolean;
+  /** primary = 实心强调色主按钮。 */
+  variant?: 'primary';
   /** 悬停提示；缺省用 label。 */
   title?: string;
   /** 溢出菜单中展示的快捷键提示（如 ⌘K）。 */
@@ -81,13 +85,13 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
 
   const isCompact = (action: ToolbarAction) => {
     if (action.iconOnly) return true;
-    if (action.priority === 0) return false;
+    if (action.priority === 0 || action.alwaysVisible) return false;
     if (action.priority === 2) return hostWidth < LABEL_BREAKPOINT;
     return hostWidth < ICON_BREAKPOINT;
   };
 
   const inOverflow = (action: ToolbarAction) => {
-    if (action.iconOnly) return false;
+    if (action.iconOnly || action.alwaysVisible) return false;
     if (collapseAll) return true;
     return action.priority === 2 && hostWidth < ICON_BREAKPOINT;
   };
@@ -102,7 +106,10 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
     <div ref={rootRef} className={`relative flex items-center gap-1 shrink-0 ${className ?? ''}`}>
       {inline.map((action) => {
         const compact = isCompact(action);
-        const tone = action.tone ?? (action.active ? 'var(--accent)' : 'var(--text-secondary)');
+        const primary = action.variant === 'primary';
+        const tone = primary
+          ? '#fff'
+          : action.tone ?? (action.active ? 'var(--accent)' : 'var(--text-secondary)');
         return (
           <button
             key={action.key}
@@ -117,7 +124,11 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
             }`}
             style={{
               color: tone,
-              backgroundColor: action.active ? 'var(--accent-light)' : 'transparent',
+              backgroundColor: primary
+                ? 'var(--accent)'
+                : action.active
+                  ? 'var(--accent-light)'
+                  : 'transparent',
               opacity: action.disabled ? 0.4 : 1,
               fontSize: 10,
             }}
