@@ -2,10 +2,9 @@ import { useEffect, useMemo, useRef, useCallback, useState, memo, type CSSProper
 import {
   Users, Plus, Bot, User, Sparkles, Send, Pause, Play, Square,
   Radio, Paperclip, Scale, ListTodo, CheckCircle, XCircle, AlertCircle, Download, Copy, Trash2, Folder,
-  ImagePlus, FileText, X, Clock, Flag, Save, Undo2, Loader2, History, ChevronDown,
+  ImagePlus, FileText, X, Flag, Save, Undo2, Loader2, History, ChevronDown,
   SkipForward, GitBranch, CheckSquare, Maximize2,
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
@@ -887,13 +886,6 @@ function AddParticipantModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-const CONCLUSION_SECTIONS: { title: string; icon: LucideIcon; color: string }[] = [
-  { title: '已完成', icon: CheckCircle, color: 'var(--status-success)' },
-  { title: '未完成', icon: Clock, color: 'var(--status-warning)' },
-  { title: '失败', icon: XCircle, color: 'var(--status-danger)' },
-  { title: '最终结论', icon: Flag, color: 'var(--accent)' },
-];
-
 /**
  * 把参与者引用替换为 `@显示名`（仅视觉替换，严格精确匹配）。
  * - 支持 `[@id]` 与 `@id` 两种引用格式，替换结果上限均为 `@显示名`；
@@ -940,16 +932,16 @@ function ConclusionContent({ content }: { content: string }) {
   return (
     <div className="flex flex-col gap-2.5">
       {sections.map((sec) => {
-        const cfg = CONCLUSION_SECTIONS.find((s) => s.title === sec.title);
-        const Icon = cfg?.icon ?? CheckCircle;
-        const color = cfg?.color ?? 'var(--text-primary)';
-        // 四段统一用标题带（图标 + 小标题 + 延伸细线）：只有图标着色，
-        // 文字保持中性色；「最终结论」段用小标题 accent 色做唯一强调。
-        const labelColor = sec.title === '最终结论' ? 'var(--accent)' : 'var(--text-tertiary)';
+        // 与阶段卡片的区块标题带保持一致：强调竖条 + 主文本色小标题 + 延伸细线，
+        // 不用彩色图标/彩色文字，避免同一张卡里出现两套标题语言。
+        const labelColor = sec.title === '最终结论' ? 'var(--accent)' : 'var(--text-primary)';
         return (
           <div key={sec.title} className="flex flex-col gap-1">
             <div className="flex items-center gap-1.5">
-              <Icon size={12} style={{ color, flexShrink: 0 }} />
+              <span
+                className="w-[2px] self-stretch rounded-sm shrink-0"
+                style={{ backgroundColor: 'var(--accent)' }}
+              />
               <span
                 className="text-[10px] font-semibold tracking-wide whitespace-nowrap"
                 style={{ color: labelColor }}
