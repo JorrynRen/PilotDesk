@@ -2,7 +2,8 @@
  * 顶栏右侧的账号入口（头像）。
  *
  * 未登录 → 登录图标按钮；已登录 → 32px 圆角方形首字母头像（昵称/等级/到期/能力/升级入口全收进弹层）。
- * 尺寸与形状对齐顶栏其余图标按钮（32px、rounded-lg），避免头像比旁边控件小一圈。
+ * 尺寸与形状对齐顶栏其余图标按钮（32px、8px 圆角），避免头像比旁边控件小一圈。
+ * 注意圆角要显式写 8：本项目 `--radius-lg` 是 12px，顶栏同排按钮都是内联 8px。
  */
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -48,7 +49,7 @@ export function AccountStatusEntry() {
     return (
       <span
         className="shrink-0 rounded-lg"
-        style={{ width: 32, height: 32, alignSelf: 'center', backgroundColor: 'var(--bg-tertiary)' }}
+        style={{ width: 32, height: 32, alignSelf: 'center', borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}
         aria-hidden
       />
     );
@@ -64,6 +65,7 @@ export function AccountStatusEntry() {
           width: 32,
           height: 32,
           alignSelf: 'center',
+          borderRadius: 8,
           color: 'var(--text-secondary)',
           background: 'var(--bg-tertiary)',
           border: '1px solid var(--border)',
@@ -84,6 +86,7 @@ export function AccountStatusEntry() {
           width: 32,
           height: 32,
           alignSelf: 'center',
+          borderRadius: 8,
           color: open ? 'var(--accent)' : 'var(--text-primary)',
           background: open ? 'var(--accent-light)' : 'var(--bg-tertiary)',
           border: `1px solid ${open ? 'var(--accent)' : 'var(--border)'}`,
