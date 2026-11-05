@@ -652,6 +652,7 @@ export function TaskWorkspace() {
           <Select
             value={statusFilter}
             onChange={(v) => setStatusFilter(v as 'active' | 'all' | TaskStatus)}
+            size="sm"
             style={{ width: 150, flexShrink: 0 }}
             options={[
               { value: 'active', label: '活跃任务（不含已归档）' },
@@ -668,6 +669,7 @@ export function TaskWorkspace() {
           <Select
             value={assigneeFilter}
             onChange={setAssigneeFilter}
+            size="sm"
             style={{ width: 130, flexShrink: 0 }}
             options={[
               { value: 'all', label: '全部负责人' },
