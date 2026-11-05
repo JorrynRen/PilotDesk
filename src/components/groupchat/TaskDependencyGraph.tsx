@@ -149,15 +149,20 @@ export function TaskDependencyGraph({
           const raw = (isStart ? endpointText?.start : endpointText?.end) ?? '';
           const single = raw.replace(/\s+/g, ' ').trim();
           const sub = single.length <= 9 ? single : `${single.slice(0, 9)}…`;
+          // 起点是信息锚点而非任务状态：用中性边框 + 卡片层底色，与「执行中(accent)」「已中止(bg-tertiary)」区分；
+          // 目标尚未整理时用虚线表达「待确定」，已确定则实线。
+          const hasGoal = (endpointText?.start ?? '').trim().length > 0;
           const stroke = selected
             ? 'var(--accent)'
             : isStart
-              ? 'var(--accent)'
+              ? hasGoal
+                ? 'var(--text-secondary)'
+                : 'var(--text-tertiary)'
               : concluded
                 ? 'var(--status-success)'
                 : 'var(--text-tertiary)';
           const fill = isStart
-            ? 'var(--bg-tertiary)'
+            ? 'var(--bg-raised)'
             : concluded
               ? 'var(--status-success-bg)'
               : 'var(--bg-tertiary)';
@@ -184,7 +189,9 @@ export function TaskDependencyGraph({
                 fill={fill}
                 stroke={stroke}
                 strokeWidth={selected ? 2 : 1}
-                strokeDasharray={isStart ? undefined : concluded ? undefined : '4 3'}
+                strokeDasharray={
+                  isStart ? (hasGoal ? undefined : '4 3') : concluded ? undefined : '4 3'
+                }
               />
               {compact ? (
                 <text

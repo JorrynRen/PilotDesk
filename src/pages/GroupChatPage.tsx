@@ -3464,7 +3464,11 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       ) : t.startedAt ? (
                         <div>开始于 {formatDateTime(t.startedAt)} · 进行中</div>
                       ) : null}
-                      {t.error && <div style={{ color: 'var(--status-danger)' }}>错误：{t.error}</div>}
+                      {t.error && (
+                        <div style={{ color: t.status === 'failed' ? 'var(--status-danger)' : 'var(--text-tertiary)' }}>
+                          {t.error}
+                        </div>
+                      )}
                       {(t.status === 'discussing' || t.status === 'pending') && (
                         <div className="flex items-center gap-1 pt-0.5">
                           <button
@@ -3719,7 +3723,19 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                             ) : selectedGraphTask.startedAt ? (
                               <div>开始于 {formatDateTime(selectedGraphTask.startedAt)} · 进行中</div>
                             ) : null}
-                            {selectedGraphTask.error && <div className="break-words" style={{ color: 'var(--status-danger)' }}>错误：{selectedGraphTask.error}</div>}
+                            {selectedGraphTask.error && (
+                              <div
+                                className="break-words"
+                                style={{
+                                  color:
+                                    selectedGraphTask.status === 'failed'
+                                      ? 'var(--status-danger)'
+                                      : 'var(--text-tertiary)',
+                                }}
+                              >
+                                {selectedGraphTask.error}
+                              </div>
+                            )}
                           </div>
                           {selectedGraphTask.resultSummary && (
                             <div className="mt-2">
