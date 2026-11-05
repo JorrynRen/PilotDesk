@@ -68,7 +68,7 @@ export function SecurityModeSelector({
         disabled={disabled}
         className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs outline-none transition-colors disabled:opacity-60"
         style={{
-          backgroundColor: 'var(--bg-tertiary)',
+          backgroundColor: 'var(--bg-field)',
           color: current.danger && !disabled ? 'var(--status-danger)' : 'var(--text-secondary)',
           border: `1px solid ${current.danger && !disabled ? 'var(--status-danger)' : 'var(--border)'}`,
           fontWeight: current.danger && !disabled ? 600 : 400,
@@ -101,8 +101,16 @@ export function SecurityModeSelector({
           宽度取够一行放下最长说明（"风险/未知命令与路径、中高风险工具需确认"），说明不再折行 */}
       {open && (
         <div
-          className={`absolute left-0 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'} rounded-lg shadow-lg py-1 z-50`}
-          style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border)', minWidth: 276 }}
+          className={`absolute left-0 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'} overflow-y-auto z-50`}
+          style={{
+            padding: 4,
+            maxHeight: 280,
+            borderRadius: 'var(--radius-lg)',
+            backgroundColor: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            boxShadow: '0 10px 28px rgba(0,0,0,0.22)',
+            minWidth: 276,
+          }}
         >
           {SECURITY_MODES.map((m) => {
             const active = m.value === value;
@@ -113,12 +121,14 @@ export function SecurityModeSelector({
                   onChange(m.value);
                   setOpen(false);
                 }}
-                className="w-full text-left px-3 py-2 flex flex-col gap-0.5 outline-none"
+                className="w-full text-left flex flex-col gap-0.5 outline-none transition-colors hover:bg-[var(--bg-tertiary)]"
                 style={{
-                  backgroundColor: active ? 'var(--bg-hover)' : 'transparent',
+                  padding: '6px 8px',
+                  borderRadius: 7,
                   width: '100%',
                   textAlign: 'left',
                   alignItems: 'stretch',
+                  backgroundColor: active ? 'var(--bg-tertiary)' : 'transparent',
                 }}
               >
                 <span

@@ -956,18 +956,22 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 </button>
                 {showPlusMenu && (
                   <div
-                    className={`absolute left-0 ${menuPos} py-1 rounded-lg shadow-lg z-50`}
+                    className={`absolute left-0 ${menuPos} overflow-y-auto z-50`}
                     style={{
-                      backgroundColor: 'var(--bg-panel)',
+                      padding: 4,
+                      maxHeight: 280,
+                      borderRadius: 'var(--radius-lg)',
+                      backgroundColor: 'var(--bg-secondary)',
                       border: '1px solid var(--border)',
+                      boxShadow: '0 10px 28px rgba(0,0,0,0.22)',
                       minWidth: 184,
                     }}
                   >
                     {/* 会话模式（二级） */}
                     <button
                       onClick={() => setPlusSubmenu((v) => (v === 'mode' ? null : 'mode'))}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-primary)' }}
+                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                      style={{ padding: '6px 8px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
                     >
                       {(() => {
                         const Icon = MODE_ICONS[mode];
@@ -984,7 +988,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       />
                     </button>
                     {plusSubmenu === 'mode' && (
-                      <div className="pb-1">
+                      <div>
                         {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
                           const Icon = MODE_ICONS[m];
                           const isActive = mode === m;
@@ -992,10 +996,12 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                             <button
                               key={m}
                               onClick={() => { setMode(m); setShowPlusMenu(false); setPlusSubmenu(null); }}
-                              className="flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                              className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
                               style={{
+                                padding: '6px 8px 6px 14px',
+                                fontSize: 12,
+                                borderRadius: 7,
                                 color: isActive ? MODE_COLORS[m] : 'var(--text-primary)',
-                                backgroundColor: isActive ? `${MODE_COLORS[m]}11` : 'transparent',
                               }}
                               title={modeDescriptions[m] || '加载中...'}
                             >
@@ -1016,8 +1022,8 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                         setShowSkillPicker(true);
                         setShowInspirationPicker(false);
                       }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-primary)', borderTop: '1px solid var(--border)' }}
+                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                      style={{ padding: '6px 8px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
                     >
                       <Cpu size={12} style={{ flexShrink: 0 }} />
                       <span className="flex-1">技能</span>
@@ -1031,8 +1037,8 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                         setPlusSubmenu(null);
                         setShowMemoryDialog(true);
                       }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-primary)', borderTop: '1px solid var(--border)' }}
+                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                      style={{ padding: '6px 8px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
                     >
                       <MemoryStick size={12} style={{ flexShrink: 0 }} />
                       <span className="flex-1">项目记忆</span>
@@ -1041,10 +1047,12 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                     {/* 附件（二级）：图片 / 文件 */}
                     <button
                       onClick={() => setPlusSubmenu((v) => (v === 'attach' ? null : 'attach'))}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
+                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
                       style={{
+                        padding: '6px 8px',
+                        fontSize: 12,
+                        borderRadius: 7,
                         color: attachCount > 0 ? 'var(--accent)' : 'var(--text-primary)',
-                        borderTop: '1px solid var(--border)',
                       }}
                     >
                       <Paperclip size={12} style={{ flexShrink: 0 }} />
@@ -1059,19 +1067,19 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       />
                     </button>
                     {plusSubmenu === 'attach' && (
-                      <div className="pb-1">
+                      <div>
                         <button
                           onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickImages(); }}
-                          className="flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                          style={{ color: 'var(--text-primary)' }}
+                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
                         >
                           <ImagePlus size={11} style={{ flexShrink: 0 }} />
                           <span className="flex-1">选择图片{imageCount > 0 ? `（${imageCount}）` : ''}</span>
                         </button>
                         <button
                           onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickFiles(); }}
-                          className="flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                          style={{ color: 'var(--text-primary)' }}
+                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
                         >
                           <FileText size={11} style={{ flexShrink: 0 }} />
                           <span className="flex-1">选择文件{fileCount > 0 ? `（${fileCount}）` : ''}</span>
