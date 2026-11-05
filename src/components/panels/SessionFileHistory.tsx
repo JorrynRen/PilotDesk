@@ -217,7 +217,6 @@ export function SessionFileHistory() {
                 className="px-2 py-1.5 rounded-lg cursor-pointer transition-opacity hover:opacity-75"
                 style={{ backgroundColor: 'var(--bg-tertiary)' }}
                 onClick={() => invoke('open_path', { path: e.filePath }).catch(() => {})}
-                title={`${e.filePath}（点击打开文件）`}
               >
                 <div className="flex items-center gap-1">
                   <FileText size={10} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
