@@ -130,7 +130,7 @@ export function AccountAvatar({
     return (
       <span
         className={`shrink-0 overflow-hidden select-none ${className}`}
-        style={{ width: size, height: size, borderRadius: radius }}
+        style={{ display: 'flex', width: size, height: size, borderRadius: radius }}
       >
         <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden>
           <defs>

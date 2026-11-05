@@ -73,7 +73,7 @@ export function AccountStatusEntry() {
   }
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative" style={{ alignSelf: 'center' }}>
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex items-center justify-center shrink-0 rounded-lg transition-opacity hover:opacity-80"
