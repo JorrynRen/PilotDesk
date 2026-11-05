@@ -22,6 +22,8 @@ interface Props {
   endpointText?: { start?: string; end?: string };
   /** 最终结论是否已产出：决定终点节点的配色与虚线。 */
   concluded?: boolean;
+  /** 起点节点所处阶段：待确定（无目标）/ 进行中（过程态）/ 已完成（全局收敛）。 */
+  startState?: 'pending' | 'active' | 'done';
 }
 
 function nodePaint(status: TaskStatus, phase: TaskPhase) {
@@ -57,6 +59,7 @@ export function TaskDependencyGraph({
   scale = 1,
   endpointText,
   concluded = false,
+  startState,
 }: Props) {
   const rawArrowId = useId();
   const arrowId = `pd-task-graph-arrow-${rawArrowId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -149,20 +152,24 @@ export function TaskDependencyGraph({
           const raw = (isStart ? endpointText?.start : endpointText?.end) ?? '';
           const single = raw.replace(/\s+/g, ' ').trim();
           const sub = single.length <= 9 ? single : `${single.slice(0, 9)}…`;
-          // 起点是信息锚点而非任务状态：用中性边框 + 卡片层底色，与「执行中(accent)」「已中止(bg-tertiary)」区分；
-          // 目标尚未整理时用虚线表达「待确定」，已确定则实线。
+          // 起点跟随全局生命周期：目标待确定→灰色虚线；进行中→过程态 accent；全局收敛→完成态绿色。
           const hasGoal = (endpointText?.start ?? '').trim().length > 0;
+          const startPhase: 'pending' | 'active' | 'done' = startState ?? (hasGoal ? 'active' : 'pending');
           const stroke = selected
             ? 'var(--accent)'
             : isStart
-              ? hasGoal
-                ? 'var(--text-secondary)'
-                : 'var(--text-tertiary)'
+              ? startPhase === 'done'
+                ? 'var(--status-success)'
+                : startPhase === 'pending'
+                  ? 'var(--text-tertiary)'
+                  : 'var(--accent)'
               : concluded
                 ? 'var(--status-success)'
                 : 'var(--text-tertiary)';
           const fill = isStart
-            ? 'var(--bg-raised)'
+            ? startPhase === 'done'
+              ? 'var(--status-success-bg)'
+              : 'var(--bg-raised)'
             : concluded
               ? 'var(--status-success-bg)'
               : 'var(--bg-tertiary)';
@@ -190,7 +197,7 @@ export function TaskDependencyGraph({
                 stroke={stroke}
                 strokeWidth={selected ? 2 : 1}
                 strokeDasharray={
-                  isStart ? (hasGoal ? undefined : '4 3') : concluded ? undefined : '4 3'
+                  isStart ? (startPhase === 'pending' ? '4 3' : undefined) : concluded ? undefined : '4 3'
                 }
               />
               {compact ? (

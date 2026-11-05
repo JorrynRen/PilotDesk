@@ -1531,6 +1531,13 @@ function TaskDepsModal({
   );
 }
 
+/** 子任务附加信息的文字色：失败=危险，跳过/移除等提示=提示色，中止/其他=中性。 */
+function taskNoticeTone(status: string): string {
+  if (status === 'failed') return 'var(--status-danger)';
+  if (status === 'aborted') return 'var(--text-tertiary)';
+  return 'var(--status-warning)';
+}
+
 /** 群聊页面：rightPanelOpen 由外层 MainLayout 的标题栏折叠按钮控制页内右侧面板显隐 */
 export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: boolean }) {
   const {
@@ -1941,6 +1948,14 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     }),
     [tasks],
   );
+
+  /** 起点节点状态：目标未定 → pending；全部任务终态 → done；其余 → active（过程态）。 */
+  const graphStartState = useMemo<'pending' | 'active' | 'done'>(() => {
+    if (!currentRoom?.topic) return 'pending';
+    const terminal = ['success', 'failed', 'skipped', 'aborted'];
+    if (tasks.length > 0 && tasks.every((t) => terminal.includes(t.status))) return 'done';
+    return 'active';
+  }, [currentRoom?.topic, tasks]);
 
   // 已收到用户回复的确认请求 id（confirmation_response.replyTo 指向 confirmation_request 消息 id，
   // 经消息 id → extra.requestId 两步关联），用于跨会话恢复「已提交」态。
@@ -3365,6 +3380,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                     onOpenFull={openGraph}
                     endpointText={graphEndpointText}
                     concluded={Boolean(conclusionMessage)}
+                    startState={graphStartState}
                   />
                 </div>
               )}
@@ -3465,9 +3481,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                         <div>开始于 {formatDateTime(t.startedAt)} · 进行中</div>
                       ) : null}
                       {t.error && (
-                        <div style={{ color: t.status === 'failed' ? 'var(--status-danger)' : 'var(--text-tertiary)' }}>
-                          {t.error}
-                        </div>
+                        <div style={{ color: taskNoticeTone(t.status) }}>{t.error}</div>
                       )}
                       {(t.status === 'discussing' || t.status === 'pending') && (
                         <div className="flex items-center gap-1 pt-0.5">
@@ -3601,6 +3615,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                         }}
                         endpointText={graphEndpointText}
                         concluded={Boolean(conclusionMessage)}
+                        startState={graphStartState}
                       />
                     </TaskGraphViewport>
                     <div
@@ -3726,12 +3741,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                             {selectedGraphTask.error && (
                               <div
                                 className="break-words"
-                                style={{
-                                  color:
-                                    selectedGraphTask.status === 'failed'
-                                      ? 'var(--status-danger)'
-                                      : 'var(--text-tertiary)',
-                                }}
+                                style={{ color: taskNoticeTone(selectedGraphTask.status) }}
                               >
                                 {selectedGraphTask.error}
                               </div>
