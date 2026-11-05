@@ -888,10 +888,10 @@ function AddParticipantModal({ onClose }: { onClose: () => void }) {
 }
 
 const CONCLUSION_SECTIONS: { title: string; icon: LucideIcon; color: string }[] = [
-  { title: '已完成', icon: CheckCircle, color: '#10B981' },
-  { title: '未完成', icon: Clock, color: '#F59E0B' },
-  { title: '失败', icon: XCircle, color: '#EF4444' },
-  { title: '最终结论', icon: Flag, color: '#8B5CF6' },
+  { title: '已完成', icon: CheckCircle, color: 'var(--status-success)' },
+  { title: '未完成', icon: Clock, color: 'var(--status-warning)' },
+  { title: '失败', icon: XCircle, color: 'var(--status-danger)' },
+  { title: '最终结论', icon: Flag, color: 'var(--accent)' },
 ];
 
 /**
@@ -932,35 +932,31 @@ function parseConclusionSections(content: string): { title: string; body: string
   return sections;
 }
 
-// 结论气泡差异化背景（accent-light）适配：MarkdownRenderer 内代码块/内联 code/引用/表格等
-// 元素的背景使用 --bg-tertiary、边框使用 --border 变量；在结论容器作用域内覆盖为与浅紫底协调的值，
-// 使元素样式（如代码块背景）随结论气泡配色自动适配。
-const CONCLUSION_BG_OVERRIDE = {
-  '--bg-tertiary': 'rgba(255, 255, 255, 0.55)',
-  '--border': 'rgba(139, 92, 246, 0.30)',
-} as unknown as CSSProperties;
-
 function ConclusionContent({ content }: { content: string }) {
   const sections = parseConclusionSections(content);
   if (sections.length === 0) {
-    return (
-      <div style={CONCLUSION_BG_OVERRIDE}>
-        <MarkdownRenderer content={content} />
-      </div>
-    );
+    return <MarkdownRenderer content={content} />;
   }
   return (
-    <div className="flex flex-col" style={CONCLUSION_BG_OVERRIDE}>
-      {sections.map((sec, i) => {
+    <div className="flex flex-col gap-2.5">
+      {sections.map((sec) => {
         const cfg = CONCLUSION_SECTIONS.find((s) => s.title === sec.title);
         const Icon = cfg?.icon ?? CheckCircle;
         const color = cfg?.color ?? 'var(--text-primary)';
+        // 四段统一用标题带（图标 + 小标题 + 延伸细线）：只有图标着色，
+        // 文字保持中性色；「最终结论」段用小标题 accent 色做唯一强调。
+        const labelColor = sec.title === '最终结论' ? 'var(--accent)' : 'var(--text-tertiary)';
         return (
-          <div key={sec.title}>
-            {i > 0 && <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '6px 0' }} />}
-            <div className="flex items-center gap-1.5 mb-1">
-              <Icon size={14} style={{ color, flexShrink: 0 }} />
-              <span className="font-semibold" style={{ color, fontSize: '13px' }}>{sec.title}</span>
+          <div key={sec.title} className="flex flex-col gap-1">
+            <div className="flex items-center gap-1.5">
+              <Icon size={12} style={{ color, flexShrink: 0 }} />
+              <span
+                className="text-[10px] font-semibold tracking-wide whitespace-nowrap"
+                style={{ color: labelColor }}
+              >
+                {sec.title}
+              </span>
+              <span className="flex-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
             </div>
             <MarkdownRenderer content={sec.body} />
           </div>
@@ -1124,7 +1120,7 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
           <div
             className={
               isConclusion
-                ? 'block w-full rounded-xl text-xs leading-relaxed break-all overflow-hidden'
+                ? 'block w-full rounded-lg text-xs leading-relaxed break-all overflow-hidden'
                 : isUser
                   // 用户消息：气泡宽度跟随内容（w-fit），不再默认整行
                   ? 'message-bubble-user rounded-xl w-fit max-w-full text-xs leading-relaxed break-all'
@@ -1132,15 +1128,19 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
                   : 'block text-xs leading-relaxed break-all'
             }
             style={{
-              backgroundColor: isConclusion ? 'var(--accent-light)' : isUser ? 'var(--accent)' : undefined,
+              backgroundColor: isConclusion ? 'var(--bg-raised)' : isUser ? 'var(--accent)' : undefined,
               color: isUser ? '#fff' : 'var(--text-primary)',
-              border: isConclusion ? '1px solid var(--accent)' : undefined,
+              border: isConclusion ? '1px solid var(--border)' : undefined,
             }}
           >
             {isConclusion && (
-              <div className="flex items-center gap-1.5 px-3 py-2.5" style={{ backgroundColor: 'var(--accent)' }}>
-                <Flag size={13} style={{ color: '#fff' }} />
-                <span className="font-semibold" style={{ color: '#fff', fontSize: '12px' }}>最终结论</span>
+              // 结论卡与阶段卡同语言：中性底 + 一条标题带，不再用满色标题栏。
+              <div
+                className="flex items-center gap-1.5 px-3 py-2"
+                style={{ borderBottom: '1px solid var(--border)' }}
+              >
+                <Flag size={12} style={{ color: 'var(--accent)' }} />
+                <span className="font-semibold" style={{ color: 'var(--text-primary)', fontSize: '11px' }}>最终结论</span>
               </div>
             )}
             <div className={isUser || isConclusion ? 'px-3 py-2' : 'py-2'}>
