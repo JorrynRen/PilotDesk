@@ -73,7 +73,9 @@ export function AccountStatusEntry() {
   }
 
   return (
-    <div ref={rootRef} className="relative" style={{ alignSelf: 'center' }}>
+    // 外层必须是 flex 容器：全局 `button { display: inline-flex }` 会让直接放在普通 div 里的按钮
+    // 变成行内元素，div 被行框撑高约 5px，头像就会比旁边的图标按钮偏高。
+    <div ref={rootRef} className="relative flex" style={{ alignSelf: 'center' }}>
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex items-center justify-center shrink-0 rounded-lg transition-opacity hover:opacity-80"
