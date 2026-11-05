@@ -28,6 +28,8 @@ import { TaskDependencyGraph } from '../components/groupchat/TaskDependencyGraph
 import { TaskGraphViewport } from '../components/groupchat/TaskGraphViewport';
 import { StageNotice, StanceBadge, deriveStage, parseStance, parseStageExtra } from '../components/groupchat/StageNotice';
 import {
+  GRAPH_END_ID,
+  GRAPH_START_ID,
   TASK_PHASE_LABEL,
   depTasksOf,
   directDependentsOf,
@@ -1774,14 +1776,22 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     }
   }, [currentRoom?.goalNotes]);
 
+  /** 拓扑选中的合成节点（起点=总目标 / 终点=最终结论）；null 表示当前选中的是任务节点。 */
+  const graphEndpoint = useMemo<'start' | 'end' | null>(() => {
+    if (graphSelectedId === GRAPH_START_ID) return 'start';
+    if (graphSelectedId === GRAPH_END_ID) return 'end';
+    return null;
+  }, [graphSelectedId]);
+
   /** 拓扑浮层默认选中：执行中 → 失败 → 首个任务。 */
   const selectedGraphTask = useMemo(() => {
+    if (graphEndpoint) return null;
     if (graphSelectedId) {
       const hit = tasks.find((t) => t.id === graphSelectedId);
       if (hit) return hit;
     }
     return tasks.find((t) => t.status === 'running') ?? tasks.find((t) => t.status === 'failed') ?? tasks[0] ?? null;
-  }, [tasks, graphSelectedId]);
+  }, [tasks, graphSelectedId, graphEndpoint]);
 
   /** 从拓扑回到列表：展开目标卡片并滚动到可见位置。 */
   const focusTaskCard = useCallback((taskId: string) => {
@@ -1905,6 +1915,31 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const sortedMessages = useMemo(
     () => [...messages].sort((a, b) => a.seq - b.seq || a.timestamp - b.timestamp),
     [messages],
+  );
+
+  // 最终结论消息：拓扑终点节点与属性面板「最终结论」的数据源，取最后一条 conclusion。
+  const conclusionMessage = useMemo(() => {
+    for (let i = sortedMessages.length - 1; i >= 0; i -= 1) {
+      if (sortedMessages[i].kind === 'conclusion') return sortedMessages[i];
+    }
+    return null;
+  }, [sortedMessages]);
+
+  /** 起止节点摘要：起点取目标锚点，终点取结论首段。 */
+  const graphEndpointText = useMemo(
+    () => ({ start: currentRoom?.topic ?? '', end: conclusionMessage?.content ?? '' }),
+    [currentRoom?.topic, conclusionMessage],
+  );
+
+  /** 终点属性面板的任务终态统计。 */
+  const graphTaskCounts = useMemo(
+    () => ({
+      success: tasks.filter((t) => t.status === 'success').length,
+      failed: tasks.filter((t) => t.status === 'failed').length,
+      skipped: tasks.filter((t) => t.status === 'skipped').length,
+      aborted: tasks.filter((t) => t.status === 'aborted').length,
+    }),
+    [tasks],
   );
 
   // 已收到用户回复的确认请求 id（confirmation_response.replyTo 指向 confirmation_request 消息 id，
@@ -3324,7 +3359,13 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       放大
                     </button>
                   </div>
-                  <TaskDependencyGraph tasks={tasks} variant="mini" onOpenFull={openGraph} />
+                  <TaskDependencyGraph
+                    tasks={tasks}
+                    variant="mini"
+                    onOpenFull={openGraph}
+                    endpointText={graphEndpointText}
+                    concluded={Boolean(conclusionMessage)}
+                  />
                 </div>
               )}
 
@@ -3549,8 +3590,13 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                         tasks={tasks}
                         variant="full"
                         scale={graphScale}
-                        selectedId={selectedGraphTask?.id ?? null}
-                        onSelect={(task) => setGraphSelectedId(task.id)}
+                        selectedId={graphEndpoint ? graphSelectedId : selectedGraphTask?.id ?? null}
+                        onSelect={(selection) => {
+                          if (selection.kind === 'task') setGraphSelectedId(selection.task.id);
+                          else setGraphSelectedId(selection.kind === 'start' ? GRAPH_START_ID : GRAPH_END_ID);
+                        }}
+                        endpointText={graphEndpointText}
+                        concluded={Boolean(conclusionMessage)}
                       />
                     </TaskGraphViewport>
                     <div
@@ -3579,7 +3625,65 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       className="min-w-0 shrink-0 overflow-y-auto rounded-lg p-3 text-[10px]"
                       style={{ width: graphDetailWidth, backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
                     >
-                      {selectedGraphTask ? (
+                      {graphEndpoint === 'start' ? (
+                        <>
+                          <div className="flex items-center justify-between gap-1 mb-1.5">
+                            <span className="font-medium" style={{ color: 'var(--text-primary)' }}>总目标</span>
+                            <span className="px-1 rounded text-[9px]" style={{ color: 'var(--accent)', border: '1px solid var(--border)' }}>
+                              起点
+                            </span>
+                          </div>
+                          <div className="mb-1.5 leading-relaxed break-words whitespace-pre-wrap" style={{ color: 'var(--text-primary)' }}>
+                            {currentRoom?.topic || '目标整理中'}
+                          </div>
+                          {goalNotes.length > 0 && (
+                            <div className="mb-2">
+                              <div className="mb-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>补充约束</div>
+                              <ul className="space-y-0.5 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                                {goalNotes.map((n, i) => (
+                                  <li key={i} className="break-words">· {n}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          <div className="space-y-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                            <div className="break-words">输出目录：{currentRoom?.outputDir || '待确定'}</div>
+                            <div>参与者：{participants.length} · 任务：{tasks.length}</div>
+                            {currentRoom?.createdAt ? <div>创建于 {formatDateTime(currentRoom.createdAt)}</div> : null}
+                          </div>
+                        </>
+                      ) : graphEndpoint === 'end' ? (
+                        <>
+                          <div className="flex items-center justify-between gap-1 mb-1.5">
+                            <span className="font-medium" style={{ color: 'var(--text-primary)' }}>最终结论</span>
+                            <span
+                              className="px-1 rounded text-[9px]"
+                              style={{
+                                color: conclusionMessage ? 'var(--status-success)' : 'var(--text-tertiary)',
+                                border: '1px solid var(--border)',
+                              }}
+                            >
+                              终点{conclusionMessage ? '' : ' · 待收敛'}
+                            </span>
+                          </div>
+                          {conclusionMessage ? (
+                            <div className="pd-task-detail-markdown mb-2" style={{ color: 'var(--text-secondary)' }}>
+                              <MarkdownRenderer content={conclusionMessage.content} />
+                            </div>
+                          ) : (
+                            <div className="mb-2 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                              讨论仍在进行，最终结论待收敛。
+                            </div>
+                          )}
+                          <div className="space-y-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                            <div>
+                              任务：完成 {graphTaskCounts.success} · 失败 {graphTaskCounts.failed} · 跳过 {graphTaskCounts.skipped} · 中止 {graphTaskCounts.aborted}
+                            </div>
+                            <div className="break-words">输出目录：{currentRoom?.outputDir || '待确定'}</div>
+                            {conclusionMessage && <div>生成于 {formatDateTime(conclusionMessage.timestamp)}</div>}
+                          </div>
+                        </>
+                      ) : selectedGraphTask ? (
                         <>
                           <div className="flex items-center justify-between gap-1 mb-1.5">
                             <span className="font-medium" style={{ color: 'var(--text-primary)' }}>T{selectedGraphTask.taskNo}</span>
