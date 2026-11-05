@@ -27,6 +27,7 @@ import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
 import { TaskDependencyGraph } from '../components/groupchat/TaskDependencyGraph';
 import { TaskGraphViewport } from '../components/groupchat/TaskGraphViewport';
 import { StageNotice, StanceBadge, deriveStage, parseStance, parseStageExtra } from '../components/groupchat/StageNotice';
+import { PageToolbar, type ToolbarAction } from '../components/common/PageToolbar';
 import {
   GRAPH_END_ID,
   GRAPH_START_ID,
@@ -2687,73 +2688,82 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             </span>
           )}
           <div className="flex-1" />
-          {currentRoom && sortedMessages.length > 0 && (
-            <button
-              onClick={() => (selectMode ? exitSelectMode() : enterSelectMode())}
-              className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
-              style={{
-                color: selectMode ? 'var(--accent)' : 'var(--text-secondary)',
-                backgroundColor: selectMode ? 'var(--accent-light)' : 'transparent',
-              }}
-              title="多选消息：勾选若干条，交给 AI 整理成多条知识"
-            >
-              {selectMode ? <X size={11} /> : <CheckSquare size={11} />}
-              {selectMode ? '退出多选' : '多选'}
-            </button>
-          )}
-          {/* 运行/暂停/已中止 房间显示控制按钮；running 分真/假（Actor 存活）：
-              真在跑 → 暂停；假 running（Actor 不在，异常退出残留）→ 恢复（重启 Actor 续跑） */}
-          {currentRoom && (currentRoom.status === 'running' || currentRoom.status === 'paused' || currentRoom.status === 'aborted') && (
-            <>
-              <button
-                onClick={() => (runningAlive ? pause() : resume())}
-                className="pd-btn pd-btn-sm"
-                style={{ color: 'var(--text-secondary)' }}
-                title={
-                  runningAlive ? '暂停讨论'
-                  : statusIsPaused ? '继续讨论'
-                  : '恢复运行（重新启动圆桌 Actor）'
-                }
-              >
-                {runningAlive ? <Pause size={11} /> : <Play size={11} />}
-                {runningAlive ? '暂停' : (statusIsPaused ? '继续' : '恢复')}
-              </button>
-              {(runningAlive || statusIsPaused) && (
-                <button
-                  onClick={() => abort()}
-                  className="pd-btn pd-btn-sm"
-                  style={{ color: 'var(--status-danger)' }}
-                  title="结束讨论"
-                >
-                  <Square size={11} />
-                  结束
-                </button>
-              )}
-            </>
-          )}
-          {currentRoom && currentRoom.status === 'finished' && (
-            <button
-              onClick={handleExport}
-              className="pd-btn pd-btn-sm"
-              style={{ color: 'var(--text-secondary)' }}
-              disabled={exporting}
-              title="按任务议程生成可直接运行的工作流定义（含依赖与前置产出引用）"
-            >
-              <Download size={11} />
-              {exporting ? '生成中…' : '转为工作流'}
-            </button>
-          )}
-          {/* 关闭当前会话实例：固定在**行尾最右**（不再夹在多选与控制按钮之间） */}
-          {currentRoom && (
-            <button
-              onClick={() => selectRoom('')}
-              className="p-1.5 rounded-md hover:opacity-70 transition-opacity shrink-0"
-              style={{ color: 'var(--text-tertiary)' }}
-              title="关闭当前会话实例"
-            >
-              <X size={13} />
-            </button>
-          )}
+          {/* 房间控制动作统一走 PageToolbar：宽度不足时低频项降级/进溢出，主控始终带文字 */}
+          <PageToolbar
+            actions={[
+              ...(currentRoom && sortedMessages.length > 0
+                ? ([
+                    {
+                      key: 'select',
+                      label: selectMode ? '退出多选' : '多选',
+                      title: '多选消息：勾选若干条，交给 AI 整理成多条知识',
+                      icon: selectMode ? <X size={11} /> : <CheckSquare size={11} />,
+                      priority: 1,
+                      active: selectMode,
+                      onClick: () => (selectMode ? exitSelectMode() : enterSelectMode()),
+                    },
+                  ] satisfies ToolbarAction[])
+                : []),
+              // running 分真/假（Actor 存活）：真在跑 → 暂停；假 running（Actor 不在，异常退出残留）→ 恢复
+              ...(currentRoom &&
+              (currentRoom.status === 'running' ||
+                currentRoom.status === 'paused' ||
+                currentRoom.status === 'aborted')
+                ? ([
+                    {
+                      key: 'pause',
+                      label: runningAlive ? '暂停' : statusIsPaused ? '继续' : '恢复',
+                      title: runningAlive
+                        ? '暂停讨论'
+                        : statusIsPaused
+                          ? '继续讨论'
+                          : '恢复运行（重新启动圆桌 Actor）',
+                      icon: runningAlive ? <Pause size={11} /> : <Play size={11} />,
+                      priority: 0,
+                      onClick: () => (runningAlive ? pause() : resume()),
+                    },
+                    ...(runningAlive || statusIsPaused
+                      ? ([
+                          {
+                            key: 'abort',
+                            label: '结束',
+                            title: '结束讨论',
+                            icon: <Square size={11} />,
+                            priority: 0,
+                            tone: 'var(--status-danger)',
+                            onClick: () => abort(),
+                          },
+                        ] satisfies ToolbarAction[])
+                      : []),
+                  ] satisfies ToolbarAction[])
+                : []),
+              ...(currentRoom && currentRoom.status === 'finished'
+                ? ([
+                    {
+                      key: 'export',
+                      label: exporting ? '生成中…' : '转为工作流',
+                      title: '按任务议程生成可直接运行的工作流定义（含依赖与前置产出引用）',
+                      icon: <Download size={11} />,
+                      priority: 2,
+                      disabled: exporting,
+                      onClick: () => void handleExport(),
+                    },
+                  ] satisfies ToolbarAction[])
+                : []),
+              ...(currentRoom
+                ? ([
+                    {
+                      key: 'close',
+                      label: '关闭当前会话实例',
+                      title: '关闭当前会话实例',
+                      icon: <X size={13} />,
+                      iconOnly: true,
+                      onClick: () => selectRoom(''),
+                    },
+                  ] satisfies ToolbarAction[])
+                : []),
+            ]}
+          />
         </div>
 
         {/* 选择条：多选态下出现。把勾选的群聊消息**按对话顺序**交给 AI 整理成 0..N 条知识 */}

@@ -5,6 +5,7 @@ import { CheckSquare, Loader2, Sparkles, X } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { MessageSelectionBar } from './MessageSelectionBar';
 import { copyToClipboard, useMessageSelection } from './messageSelection';
+import { PageToolbar, type ToolbarAction } from '../common/PageToolbar';
 import { SaveToKnowledgeDialog, type KbDigestInput } from '../knowledge/SaveToKnowledgeDialog';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { showToast } from '../../utils/toast';
@@ -335,42 +336,50 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
           {headerActions && (
             <div className="flex items-center gap-1 shrink-0">{headerActions}</div>
           )}
-          {/* 多选态下隐藏：同屏出现「沉淀为知识」与「整理为知识」两个"知识"动作，用户会分不清该点哪个 */}
-          {!selectMode && (
-            <button
-              onClick={() => void handleSediment()}
-              disabled={!sessionId || sedimenting}
-              className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors disabled:opacity-40"
-              style={{ color: 'var(--text-secondary)' }}
-              title="把本会话的新增内容交给知识库模型整理成候选（进「待确认」，不直入库）"
-            >
-              {sedimenting ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
-              {sedimenting ? '整理中' : '整理为知识'}
-            </button>
-          )}
-          <button
-            onClick={() => (selectMode ? exitSelectMode() : enterSelectMode())}
-            className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
-            style={{
-              color: selectMode ? 'var(--accent)' : 'var(--text-secondary)',
-              backgroundColor: selectMode ? 'var(--accent-light)' : 'transparent',
-            }}
-            title="多选消息：勾选若干条，交给 AI 整理成多条知识"
-          >
-            {selectMode ? <X size={11} /> : <CheckSquare size={11} />}
-            {selectMode ? '退出多选' : '多选'}
-          </button>
-          {/* 关闭会话：行尾图标按钮（样式与群聊页的关闭按钮一致，不带文字） */}
-          {onCloseSession && (
-            <button
-              onClick={onCloseSession}
-              className="p-1.5 rounded-md hover:opacity-70 transition-opacity shrink-0"
-              style={{ color: 'var(--text-tertiary)' }}
-              title="关闭当前会话（回到「快捷开始」，不删除任何数据）"
-            >
-              <X size={13} />
-            </button>
-          )}
+          {/* 低频动作收进统一工具栏：宽时带文字，窄时降级/进溢出（主操作不收起） */}
+          <PageToolbar
+            actions={[
+              // 多选态下隐藏：同屏出现「沉淀为知识」与「整理为知识」两个同名动作，用户会分不清该点哪个
+              ...(selectMode
+                ? []
+                : ([
+                    {
+                      key: 'sediment',
+                      label: sedimenting ? '整理中' : '整理为知识',
+                      title: '把本会话的新增内容交给知识库模型整理成候选（进「待确认」，不直入库）',
+                      icon: sedimenting ? (
+                        <Loader2 size={11} className="animate-spin" />
+                      ) : (
+                        <Sparkles size={11} />
+                      ),
+                      priority: 2,
+                      disabled: !sessionId || sedimenting,
+                      onClick: () => void handleSediment(),
+                    },
+                  ] satisfies ToolbarAction[])),
+              {
+                key: 'select',
+                label: selectMode ? '退出多选' : '多选',
+                title: '多选消息：勾选若干条，交给 AI 整理成多条知识',
+                icon: selectMode ? <X size={11} /> : <CheckSquare size={11} />,
+                priority: 1,
+                active: selectMode,
+                onClick: () => (selectMode ? exitSelectMode() : enterSelectMode()),
+              },
+              ...(onCloseSession
+                ? ([
+                    {
+                      key: 'close',
+                      label: '关闭当前会话',
+                      title: '关闭当前会话（回到「快捷开始」，不删除任何数据）',
+                      icon: <X size={13} />,
+                      iconOnly: true,
+                      onClick: onCloseSession,
+                    },
+                  ] satisfies ToolbarAction[])
+                : []),
+            ]}
+          />
         </div>
       )}
 
