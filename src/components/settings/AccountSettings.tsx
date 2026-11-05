@@ -267,7 +267,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
         ) : account ? (
           <SettingsCard>
             <div className="flex items-center gap-2.5 min-w-0">
-              <AccountAvatar nickname={account.nickname} email={account.email} size={32} radius={8} />
+              <AccountAvatar nickname={account.nickname} email={account.email} avatarId={account.avatarId} size={32} radius={8} />
               <div className="min-w-0">
                 <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
                   {account.nickname || account.email}

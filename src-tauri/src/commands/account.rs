@@ -81,6 +81,9 @@ struct MeResp {
 struct MeUser {
     email: String,
     nickname: String,
+    /// 内置头像键（null = 未选择）；老平台不返回该字段时按 null 处理
+    #[serde(rename = "avatarId", default)]
+    avatar_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -155,6 +158,9 @@ struct RevokeReq<'a> {
 pub struct AccountView {
     pub email: String,
     pub nickname: String,
+    /// 内置头像键（null = 未选择，前端回退首字母头像）
+    #[serde(default)]
+    pub avatar_id: Option<String>,
     /// 等级键（free / pro / team）；已过期时平台按 free 返回
     pub plan_key: String,
     pub plan_name: String,
@@ -379,6 +385,7 @@ async fn fetch_view(state: &crate::DbState, tokens: &StoredTokens) -> Result<Acc
     Ok(AccountView {
         email: me.user.email,
         nickname: me.user.nickname,
+        avatar_id: me.user.avatar_id,
         plan_key: ent.plan.key,
         plan_name: ent.plan.name,
         expires_at: ent.plan.expires_at,

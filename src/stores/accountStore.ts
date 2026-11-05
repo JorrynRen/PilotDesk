@@ -45,6 +45,8 @@ export function capabilityLabel(key: string): string {
 export interface AccountInfo {
   email: string;
   nickname: string;
+  /** 内置头像键（null = 未选择，前端回退首字母头像） */
+  avatarId?: string | null;
   planKey: string;
   planName: string;
   /** 到期时间（ISO；free 为空） */

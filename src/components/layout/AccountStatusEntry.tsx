@@ -91,7 +91,7 @@ export function AccountStatusEntry() {
         aria-label={`账号：${account.nickname || account.email}`}
         aria-expanded={open}
       >
-        <AccountAvatar nickname={account.nickname} email={account.email} size={30} radius={7} />
+        <AccountAvatar nickname={account.nickname} email={account.email} avatarId={account.avatarId} size={30} radius={7} />
       </button>
 
       {/* 弹层挂在顶栏下方，右对齐（顶栏在最上方，所以向下弹出） */}
@@ -105,7 +105,7 @@ export function AccountStatusEntry() {
           }}
         >
           <div className="flex items-center gap-2">
-            <AccountAvatar nickname={account.nickname} email={account.email} size={28} radius={7} />
+            <AccountAvatar nickname={account.nickname} email={account.email} avatarId={account.avatarId} size={28} radius={7} />
             <span className="truncate font-medium">{account.nickname || '（未设昵称）'}</span>
             <PlanBadge
               planKey={account.planKey}
