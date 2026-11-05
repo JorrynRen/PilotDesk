@@ -251,10 +251,9 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   useEffect(() => {
     (async () => {
       const descs: Record<string, string> = {};
-      for (const m of ['native', 'fast', 'think', 'expert'] as const) {
+      for (const m of Object.keys(MODE_LABELS) as ChatMode[]) {
         const p = await getModePrompt(m);
-        if (p && p.trim() !== '') descs[m] = p;
-        else descs[m] = '原生模式，使用默认对话风格';
+        descs[m] = p && p.trim() !== '' ? p : '使用默认对话风格';
       }
       setModeDescriptions(descs);
     })();
@@ -1001,9 +1000,9 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                                 padding: '6px 8px 6px 14px',
                                 fontSize: 12,
                                 borderRadius: 7,
-                                color: isActive ? MODE_COLORS[m] : 'var(--text-primary)',
+                                color: isActive ? MODE_COLORS[m] : 'var(--text-secondary)',
                               }}
-                              title={modeDescriptions[m] || '加载中...'}
+                              title={modeDescriptions[m] || '使用默认对话风格'}
                             >
                               <Icon size={11} style={{ flexShrink: 0 }} />
                               <span className="flex-1">{MODE_LABELS[m]}</span>
@@ -1071,7 +1070,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                         <button
                           onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickImages(); }}
                           className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
+                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
                         >
                           <ImagePlus size={11} style={{ flexShrink: 0 }} />
                           <span className="flex-1">选择图片{imageCount > 0 ? `（${imageCount}）` : ''}</span>
@@ -1079,7 +1078,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                         <button
                           onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickFiles(); }}
                           className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
+                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
                         >
                           <FileText size={11} style={{ flexShrink: 0 }} />
                           <span className="flex-1">选择文件{fileCount > 0 ? `（${fileCount}）` : ''}</span>
