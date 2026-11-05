@@ -987,7 +987,13 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       />
                     </button>
                     {plusSubmenu === 'mode' && (
-                      <div>
+                      <div
+                        style={{
+                          paddingBottom: 4,
+                          marginBottom: 4,
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
                         {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
                           const Icon = MODE_ICONS[m];
                           const isActive = mode === m;
