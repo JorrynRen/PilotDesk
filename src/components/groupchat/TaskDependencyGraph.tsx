@@ -97,6 +97,7 @@ export function TaskDependencyGraph({
         maxWidth: compact || scale <= 1 ? '100%' : 'none',
         height: 'auto',
         margin: '0 auto',
+        cursor: 'pointer',
       }}
     >
       <defs>
