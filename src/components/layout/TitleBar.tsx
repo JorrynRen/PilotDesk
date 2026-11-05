@@ -380,8 +380,10 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
 
   return (
     <header
-      className="flex items-center gap-4 px-3 h-[52px] shrink-0 select-none overflow-hidden"
+      className="relative z-[110] flex items-center gap-4 px-3 h-[52px] shrink-0 select-none"
       // 壳层风格：顶栏不再自成一条"带子"——去掉底色与下边框，直接画在壳层那片底上（见 App.tsx 工作区）
+      // 不能加 overflow-hidden：账号弹层挂在顶栏内向下展开，会被裁剪成不可见；
+      // 需要裁剪的导航区/门户标签各自已有 overflow-hidden。z-[110] 保证弹层盖在页面内容之上。
       style={{ color: 'var(--text-primary)' }}
       onMouseDown={handleHeaderMouseDown}
       onMouseUp={handleHeaderMouseUp}
