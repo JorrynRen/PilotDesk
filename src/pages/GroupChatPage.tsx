@@ -3532,7 +3532,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             {/* ── 依赖拓扑全屏浮层：图承担 7 种原始状态，右侧详情栏显示任务明细 ── */}
             {graphOpen && createPortal(
               <div
-                className={`fixed inset-0 z-[80] flex ${graphMaximized ? '' : 'items-center justify-center p-6'}`}
+                className={`fixed left-0 right-0 bottom-0 top-[52px] z-[80] flex ${graphMaximized ? '' : 'items-center justify-center p-6'}`}
                 style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}
                 onClick={closeGraph}
               >
@@ -3541,8 +3541,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                   style={{
                     backgroundColor: 'var(--bg-primary)',
                     border: '1px solid var(--border)',
-                    maxHeight: graphMaximized ? '100vh' : '88vh',
-                    height: graphMaximized ? '100vh' : undefined,
+                    maxHeight: graphMaximized ? 'calc(100vh - 52px)' : '88vh',
+                    height: graphMaximized ? 'calc(100vh - 52px)' : undefined,
                   }}
                   onClick={(e) => e.stopPropagation()}
                 >
