@@ -9,15 +9,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, LogIn, LogOut } from 'lucide-react';
 
+import { AccountAvatar } from '../common/AccountAvatar';
 import { PlanBadge } from '../common/PlanBadge';
 import { capabilityLabel, useAccountStore } from '../../stores/accountStore';
 import { expiryText } from '../../utils/planText';
-
-/** 头像发起字母：昵称优先，其次邮箱，均无则用问号占位。 */
-function avatarInitial(nickname?: string | null, email?: string | null): string {
-  const source = (nickname || email || '').trim();
-  return source ? source.charAt(0).toUpperCase() : '?';
-}
 
 export function AccountStatusEntry() {
   const navigate = useNavigate();
@@ -81,21 +76,22 @@ export function AccountStatusEntry() {
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center justify-center shrink-0 rounded-lg text-[12px] font-semibold transition-colors hover:opacity-80"
+        className="flex items-center justify-center shrink-0 rounded-lg transition-opacity hover:opacity-80"
         style={{
           width: 32,
           height: 32,
           alignSelf: 'center',
           borderRadius: 8,
-          color: open ? 'var(--accent)' : 'var(--text-primary)',
-          background: open ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+          padding: 0,
+          overflow: 'hidden',
+          background: 'transparent',
           border: `1px solid ${open ? 'var(--accent)' : 'var(--border)'}`,
         }}
         title="账号与会员"
         aria-label={`账号：${account.nickname || account.email}`}
         aria-expanded={open}
       >
-        {avatarInitial(account.nickname, account.email)}
+        <AccountAvatar nickname={account.nickname} email={account.email} size={30} radius={7} />
       </button>
 
       {/* 弹层挂在顶栏下方，右对齐（顶栏在最上方，所以向下弹出） */}
@@ -109,6 +105,7 @@ export function AccountStatusEntry() {
           }}
         >
           <div className="flex items-center gap-2">
+            <AccountAvatar nickname={account.nickname} email={account.email} size={28} radius={7} />
             <span className="truncate font-medium">{account.nickname || '（未设昵称）'}</span>
             <PlanBadge
               planKey={account.planKey}

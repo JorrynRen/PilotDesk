@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronRight, Cloud, Loader2, LogIn, LogOut, UploadCloud } from 'lucide-react';
 
+import { AccountAvatar } from '../common/AccountAvatar';
 import { PlanBadge } from '../common/PlanBadge';
 import { Select } from '../common/Select';
 import { CAP_CLOUD_SYNC, capabilityLabel, hasCapability, useAccountStore } from '../../stores/accountStore';
@@ -265,12 +266,15 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
           </SettingsCard>
         ) : account ? (
           <SettingsCard>
-            <div className="min-w-0">
-              <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
-                {account.nickname || account.email}
-              </div>
-              <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
-                {account.email}
+            <div className="flex items-center gap-2.5 min-w-0">
+              <AccountAvatar nickname={account.nickname} email={account.email} size={32} radius={8} />
+              <div className="min-w-0">
+                <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                  {account.nickname || account.email}
+                </div>
+                <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                  {account.email}
+                </div>
               </div>
             </div>
             <SettingsButton variant="secondary" icon={<LogOut size={13} />} onClick={() => void handleLogout()}>
