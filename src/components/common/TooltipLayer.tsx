@@ -104,9 +104,12 @@ export function TooltipLayer() {
         }
       } else {
         restoreStashed();
-        if (!el.hasAttribute('title')) return;
-        el.setAttribute('data-pd-title', el.getAttribute('title') ?? '');
-        el.removeAttribute('title');
+        if (el.hasAttribute('title')) {
+          el.setAttribute('data-pd-title', el.getAttribute('title') ?? '');
+          el.removeAttribute('title');
+        } else if (el.getAttribute('data-pd-title') === null) {
+          return;
+        }
         stashedElRef.current = el;
       }
       // 祖先链始终补齐：切换锚点时上层行可能刚被还原过 title；
@@ -153,10 +156,12 @@ export function TooltipLayer() {
       // 先改名压掉原生提示：原生延迟约 1s，同步改名不会闪
       stashTitle(el);
 
-      const prevPending = cancelPending();
-      if (prevPending && prevPending !== el) restoreTitle(prevPending);
+      // 切换锚点时只清空旧气泡，**不要**把旧锚点的 title 还回去：
+      // 旧锚点常常正是新锚点的祖先（外层行 → 行内 span/撤销按钮），还回去会让祖先的
+      // title 在指针仍位于其内部时重新生效，约 1 秒后冒出原生提示（双层提示的来源）。
+      // 旧链的还原已由 stashTitle（切锚点/离开）统一负责。
+      cancelPending();
       if (activeElRef.current && activeElRef.current !== el) {
-        restoreTitle(activeElRef.current);
         activeElRef.current = null;
         setTip(null);
       }
@@ -171,7 +176,7 @@ export function TooltipLayer() {
         setTip({ text, rect });
       }, SHOW_DELAY_MS);
     },
-    [cancelPending, restoreTitle, stashTitle],
+    [cancelPending, stashTitle],
   );
 
   useEffect(() => {
