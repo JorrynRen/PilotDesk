@@ -16,12 +16,11 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
 
 export const STATUS_COLOR: Record<TaskStatus, string> = {
   pending: 'var(--text-tertiary)',
-  in_progress: 'var(--accent)',
+  // 进行中不再直接用 --accent：主题色是用户可改的，若改成绿/琥珀就会与完成/待确认撞色
+  in_progress: 'var(--status-running)',
   submitted: 'var(--status-warning, #d08700)',
-  // 完成 / 归档：不能依赖 --status-success 的兜底色 —— 部分主题没有定义该变量，
-  // 会回落到偏暗的 #2f9e44，在深色底上几乎与待办的灰同色。这里改为固定亮色，
-  // 并让归档用更浅的绿，二者与 pending（灰）都能一眼区分。
-  done: '#10B981',
-  archived: '#34D399',
+  done: 'var(--status-success)',
+  // 归档态此前与 pending 同为 --text-tertiary，地图上完全无法区分；改用主题的归档色
+  archived: 'var(--status-archived)',
   cancelled: 'var(--status-danger)',
 };

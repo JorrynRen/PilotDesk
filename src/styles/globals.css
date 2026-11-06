@@ -91,6 +91,10 @@
   --status-danger-bg: #FEE2E2;
   --status-warning-bg: #FEF3C7;
   --status-info-bg: #DBEAFE;
+  /* 任务状态专用色：不跟随用户可改的「主题色」(--accent)，否则选绿/琥珀时会与完成/待确认撞色 */
+  --status-running: #2563EB;
+  /* 归档：比待办（--text-tertiary 灰）更深一档的石板蓝灰，明暗主题下都与待办区分 */
+  --status-archived: #64748B;
 
   /* ── Border Radius ── */
   --radius-sm: 4px;
@@ -179,6 +183,8 @@
   --status-danger-bg: #450A0A;
   --status-warning-bg: #451A03;
   --status-info-bg: #172554;
+  --status-running: #3B82F6;
+  --status-archived: #94A3B8;
 
   /* ── Agent Tags ── */
   --api-tag: #10B981;
@@ -255,6 +261,8 @@
   --status-danger-bg: rgba(248, 113, 113, 0.16);
   --status-warning-bg: rgba(251, 191, 36, 0.16);
   --status-info-bg: rgba(96, 165, 250, 0.16);
+  --status-running: #38BDF8;
+  --status-archived: #94A3B8;
 
   /* ── Shadows ── */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
@@ -327,6 +335,8 @@
   --status-danger-bg: rgba(248, 113, 113, 0.16);
   --status-warning-bg: rgba(251, 191, 36, 0.16);
   --status-info-bg: rgba(96, 165, 250, 0.16);
+  --status-running: #4FD1C5;
+  --status-archived: #6B7F8C;
 
   /* ── Shadows ── */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.42);
@@ -399,6 +409,8 @@
   --status-danger-bg: #FFE4E9;
   --status-warning-bg: #FEF3C7;
   --status-info-bg: #E0F2FE;
+  --status-running: #7C5CFA;
+  --status-archived: #64748B;
 
   /* ── Shadows ──（内嵌方向，阴影只留给真正浮起的弹层，故压得很轻） */
   --shadow-sm: 0 1px 2px rgba(20, 45, 60, 0.06);
@@ -474,6 +486,8 @@
   --status-danger-bg: #FEE2E2;
   --status-warning-bg: #FEF3C7;
   --status-info-bg: #DBEAFE;
+  --status-running: #DC2626;
+  --status-archived: #64748B;
 
   /* ── Shadows ──（中性，轻） */
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
@@ -544,6 +558,8 @@
   --status-danger-bg: #FFE3E4;
   --status-warning-bg: #FEF0D6;
   --status-info-bg: #E3F0FF;
+  --status-running: #C026D3;
+  --status-archived: #64748B;
 
   /* ── Shadows ──（冷调，轻） */
   --shadow-sm: 0 1px 2px rgba(30, 50, 90, 0.07);
