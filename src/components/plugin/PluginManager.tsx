@@ -316,7 +316,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
             </div>
             {/* 与设置页其它分页一致：标题下给一行说明，不再单独画分隔线 */}
             <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-              管理本地插件的启停、README 与面板入口；在线插件商店在「资源市集 › 插件」。
+              安装、卸载与启停本地插件；在线插件商店在「资源市集 › 插件」。
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
