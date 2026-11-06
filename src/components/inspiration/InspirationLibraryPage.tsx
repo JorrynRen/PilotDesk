@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
-import { Search, Plus, Star, FolderDown, Lightbulb, Upload } from 'lucide-react';
+import { Search, Plus, Star, FolderDown, Lightbulb, Upload, Store } from 'lucide-react';
 import { TitleBar, StatusBar } from '../layout';
 import { useTerminal, type ViewMode } from '../../TerminalManager';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
@@ -243,6 +243,16 @@ export function InspirationLibraryPage() {
           />
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* 与资源市集的「我的灵感」入口对称：从灵感库也能直接去市场看别人的分享 */}
+          <button
+            onClick={() => navigate('/market?tab=inspiration')}
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs"
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+            title="前往资源市集 › 灵感（浏览他人分享的灵感）"
+          >
+            <Store size={12} />
+            资源市集
+          </button>
           <button
             onClick={() => void handleImport()}
             className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs"

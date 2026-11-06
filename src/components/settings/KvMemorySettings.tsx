@@ -90,7 +90,7 @@ const PAGE_SIZE = 100;
  * 为什么不复用 WorkflowOutputCard 的 CollapsibleSection：那个是**带边框的详情盒**（还有内滚动），
  * 用在产出卡片里合适；这里是正文里的次要说明，套盒子反而比正文更抢眼，所以只要一个行内开关。
  */
-function CollapsibleNote({ title, children }: { title: string; children: ReactNode }) {
+export function CollapsibleNote({ title, children }: { title: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <div>

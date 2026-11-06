@@ -296,27 +296,33 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
     <div className="flex flex-col">
       {/* 左右内边距交给外层（设置页内容区）：标题行、工具栏与卡片列表左右对齐 */}
       <div className="pt-4 pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {/* 标题文字省略，仅保留沙箱徽标与右侧操作按钮 */}
-            <span
-              className="text-[9px] px-1.5 py-0.5 rounded font-medium"
-              style={{
-                backgroundColor: sandboxInfo?.sandbox_enabled
-                  ? 'rgba(16,185,129,0.15)'
-                  : 'var(--bg-tertiary)',
-                color: sandboxInfo?.sandbox_enabled
-                  ? '#10B981'
-                  : 'var(--text-tertiary)',
-              }}
-            >
-              {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
-            </span>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>插件管理</h3>
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                style={{
+                  backgroundColor: sandboxInfo?.sandbox_enabled
+                    ? 'rgba(16,185,129,0.15)'
+                    : 'var(--bg-tertiary)',
+                  color: sandboxInfo?.sandbox_enabled
+                    ? '#10B981'
+                    : 'var(--text-tertiary)',
+                }}
+              >
+                {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
+              </span>
+            </div>
+            {/* 与设置页其它分页一致：标题下给一行说明，不再单独画分隔线 */}
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+              管理本地插件的启停、README 与面板入口；在线插件商店在「资源市集 › 插件」。
+            </p>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={handleInstallZip}
-              className="pd-btn text-[10px] px-2 py-1 rounded transition-all"
+              className="pd-btn text-xs px-2.5 py-1.5 rounded-lg transition-all"
               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
               title="从压缩包安装插件"
             >
@@ -325,16 +331,16 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
             {/* 在线插件商店已迁至「资源市集 › 插件」：这里只留跳转入口 */}
             <button
               onClick={() => navigate('/market?tab=plugins')}
-              className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
+              className="pd-btn text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1"
               style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
               title="前往资源市集 › 插件"
             >
-              <Store size={11} />
+              <Store size={12} />
               资源市集
             </button>
             <button
               onClick={() => setShowSandbox(!showSandbox)}
-              className="pd-btn text-[10px] px-2 py-1 rounded"
+              className="pd-btn text-xs px-2.5 py-1.5 rounded-lg"
               style={{
                 backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-field)',
                 color: showSandbox ? 'var(--accent)' : 'var(--text-tertiary)',
@@ -345,8 +351,6 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
             </button>
           </div>
         </div>
-        {/* 分隔线 */}
-        <div className="my-3" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
       </div>
 
       <div className="pb-4">
@@ -429,7 +433,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
               return (
                 <div
                   key={plugin.manifest.id}
-                  className="px-3 py-2.5 rounded-lg transition-colors overflow-hidden"
+                  className="px-3 py-2.5 rounded-xl transition-colors overflow-hidden"
                   style={{
                     backgroundColor: 'var(--bg-secondary)',
                     border: '1px solid var(--border)',

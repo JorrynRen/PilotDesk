@@ -22,6 +22,7 @@ import { Select } from '../common/Select';
 import { TabIcon } from '../common/TabIcon';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { CollapsibleNote } from './KvMemorySettings';
 
 /**
  * 门户标签管理（设置页 tab 内容）。
@@ -297,7 +298,8 @@ export function CustomTabsSettings() {
     <div>
       <div className="mb-4">
         <h3 className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>门户标签</h3>
-        {/* 说明按「前缀 + 内容」逐条列出：条目多时列表比连续段落更易扫读 */}
+        {/* 说明条目多，默认折叠：点标题才展开，避免首屏被文字占满 */}
+        <CollapsibleNote title="使用说明">
         <ul className="text-xs space-y-1 list-disc pl-4" style={{ color: 'var(--text-tertiary)' }}>
           <li>
             <span style={{ color: 'var(--text-secondary)' }}>用途</span>：承载在线版 Agent 站点（如 chat.deepseek.com），也支持本地文件 / 目录等常用页面。
@@ -321,6 +323,7 @@ export function CustomTabsSettings() {
             <span style={{ color: 'var(--text-secondary)' }}>排序</span>：按住左侧手柄拖动，顺序会持久化保存。
           </li>
         </ul>
+        </CollapsibleNote>
       </div>
 
       {/* 顶栏平铺显示个数：设置组合开关里平铺几个门户标签，其余收进「更多」下拉 */}
