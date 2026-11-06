@@ -2008,7 +2008,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         rightPanelOpen={false}
         showBackButton={false}
         settingsOpen
-        onOpenSettings={() => { /* 已在设置页，无需动作 */ }}
+        onOpenSettings={() => navigate('/')}
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenEnclave={() => navigate('/enclave')}
         onOpenMarket={() => navigate('/market')}
