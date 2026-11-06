@@ -18,7 +18,10 @@ export const STATUS_COLOR: Record<TaskStatus, string> = {
   pending: 'var(--text-tertiary)',
   in_progress: 'var(--accent)',
   submitted: 'var(--status-warning, #d08700)',
-  done: 'var(--status-success, #2f9e44)',
-  archived: 'var(--text-tertiary)',
+  // 完成 / 归档：不能依赖 --status-success 的兜底色 —— 部分主题没有定义该变量，
+  // 会回落到偏暗的 #2f9e44，在深色底上几乎与待办的灰同色。这里改为固定亮色，
+  // 并让归档用更浅的绿，二者与 pending（灰）都能一眼区分。
+  done: '#10B981',
+  archived: '#34D399',
   cancelled: 'var(--status-danger)',
 };
