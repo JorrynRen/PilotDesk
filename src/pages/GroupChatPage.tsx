@@ -28,6 +28,7 @@ import { TaskDependencyGraph } from '../components/groupchat/TaskDependencyGraph
 import { TaskGraphViewport } from '../components/groupchat/TaskGraphViewport';
 import { StageNotice, StanceBadge, deriveStage, parseStance, parseStageExtra } from '../components/groupchat/StageNotice';
 import { PageToolbar, type ToolbarAction } from '../components/common/PageToolbar';
+import { ScrollToBottomButton } from '../components/common/ScrollToBottomButton';
 import {
   GRAPH_END_ID,
   GRAPH_START_ID,
@@ -1760,6 +1761,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const inputBarRef = useRef<HTMLDivElement>(null);
   const inputAreaRef = useRef<HTMLTextAreaElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  /** 消息列表当前是否停在底部（离开底部时浮出「回到最新消息」按钮）。 */
+  const [atBottom, setAtBottom] = useState(true);
 
   useEffect(() => {
     loadRooms();
@@ -2794,7 +2797,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           />
         )}
 
-        <div className="flex-1 overflow-hidden">
+        <div className="relative flex-1 overflow-hidden">
           {!currentRoomId ? (
             <GroupChatIntro />
           ) : messagesLoading ? (
@@ -2806,17 +2809,26 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               <span>加载消息中…</span>
             </div>
           ) : (
-            <Virtuoso
-              ref={virtuosoRef}
-              className="h-full"
-              data={sortedMessages}
-              firstItemIndex={firstItemIndex}
-              itemContent={renderMessage}
-              followOutput="smooth"
-              startReached={loadEarlierMessages}
-              increaseViewportBy={{ top: 400, bottom: 400 }}
-              components={{ Header }}
-            />
+            <>
+              <Virtuoso
+                ref={virtuosoRef}
+                className="h-full"
+                data={sortedMessages}
+                firstItemIndex={firstItemIndex}
+                itemContent={renderMessage}
+                followOutput="smooth"
+                atBottomStateChange={setAtBottom}
+                atBottomThreshold={120}
+                startReached={loadEarlierMessages}
+                increaseViewportBy={{ top: 400, bottom: 400 }}
+                components={{ Header }}
+              />
+              {/* 不在底部时浮出：一键平滑回到最后一条消息（阈值 120px 内视为仍在底部，避免小抖动就弹按钮） */}
+              <ScrollToBottomButton
+                visible={!atBottom}
+                onClick={() => virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' })}
+              />
+            </>
           )}
         </div>
 

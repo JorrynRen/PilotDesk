@@ -6,6 +6,7 @@ import { MessageBubble } from './MessageBubble';
 import { MessageSelectionBar } from './MessageSelectionBar';
 import { copyToClipboard, useMessageSelection } from './messageSelection';
 import { PageToolbar, type ToolbarAction } from '../common/PageToolbar';
+import { ScrollToBottomButton } from '../common/ScrollToBottomButton';
 import { SaveToKnowledgeDialog, type KbDigestInput } from '../knowledge/SaveToKnowledgeDialog';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { showToast } from '../../utils/toast';
@@ -40,6 +41,8 @@ interface MessageListProps {
 export function MessageList({ messages, session, isGenerating, streamingProgress, thinkingChain, confirmation, onResendMessage, headerActions, onCloseSession }: MessageListProps) {
   const { getTheme } = useAgentRegistry();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  /** 虚拟列表当前是否停在底部（离开底部时浮出「回到最新消息」按钮）。 */
+  const [atBottom, setAtBottom] = useState(true);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
@@ -236,7 +239,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="relative flex-1 flex flex-col overflow-hidden">
       {/* 顶部一栏：搜索框 + 检索导航 + 业务操作位（会话页的「转为工作流 / 转为群聊」）。
           会话标题不再占这一行——标题在左侧列表里已有，省下的横向空间留给搜索与操作。
 
@@ -406,10 +409,18 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
         data={messages}
         itemContent={itemContent}
         followOutput="smooth"
+        atBottomStateChange={setAtBottom}
+        atBottomThreshold={120}
         increaseViewportBy={{ top: 200, bottom: 200 }}
         components={{
           Footer: () => null,
         }}
+      />
+
+      {/* 不在底部时浮出：一键平滑回到最后一条消息（阈值 120px 内视为仍在底部，避免小抖动就弹按钮） */}
+      <ScrollToBottomButton
+        visible={!atBottom}
+        onClick={() => virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth', align: 'end' })}
       />
 
       {/* 沉淀弹窗：把选中的一段对话交给 AI 整理成 0..N 条知识（成功后退出多选） */}
