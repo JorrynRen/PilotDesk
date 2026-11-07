@@ -16,8 +16,7 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
 
 export const STATUS_COLOR: Record<TaskStatus, string> = {
   pending: 'var(--text-tertiary)',
-  // 进行中不再直接用 --accent：主题色是用户可改的，若改成绿/琥珀就会与完成/待确认撞色
-  in_progress: 'var(--status-running)',
+  in_progress: 'var(--accent)',
   submitted: 'var(--status-warning, #d08700)',
   done: 'var(--status-success)',
   // 归档态此前与 pending 同为 --text-tertiary，地图上完全无法区分；改用主题的归档色
