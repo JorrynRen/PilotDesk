@@ -120,6 +120,29 @@ pub async fn get_json_with_status<T: serde::de::DeserializeOwned>(
     })
 }
 
+/// 瞬时故障（网络层失败、429、5xx）：多来自隧道 / 网关抖动，不是接口本身的问题。
+fn is_transient_read_error(err: &PlatformError) -> bool {
+    err.status == 0 || err.status == 429 || err.status >= 500
+}
+
+/// GET 一个 JSON 接口，**瞬时故障自动重试一次**（只用于幂等读取）。
+///
+/// 客户端经公网隧道访问平台，网关偶发 503「Service Unavailable」；
+/// 一次抖动不该让用户看到「读取设备失败」，重试后仍失败才如实报错。
+pub async fn get_json_retry<T: serde::de::DeserializeOwned>(
+    path: &str,
+    token: Option<&str>,
+) -> Result<T, AppError> {
+    match get_json_with_status::<T>(path, token).await {
+        Ok(value) => Ok(value),
+        Err(err) if is_transient_read_error(&err) => {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            get_json(path, token).await
+        }
+        Err(err) => Err(AppError::External(err.message)),
+    }
+}
+
 /// POST 一个 JSON 接口（可选 Bearer）；失败时保留 HTTP 状态码。
 pub async fn post_json_with_status<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     path: &str,

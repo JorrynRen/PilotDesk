@@ -230,7 +230,7 @@ pub async fn remote_device_status(
     };
     let access = require_access(state.inner()).await?;
     let response: DeviceListResponse =
-        platform::get_json("/api/v1/me/remote/devices", Some(&access))
+        platform::get_json_retry("/api/v1/me/remote/devices", Some(&access))
             .await
             .map_err(|e| e.to_string())?;
     if let Some(device) = response
@@ -266,7 +266,7 @@ pub async fn remote_devices_list(
     };
     let access = require_access(state.inner()).await?;
     let response: DeviceListResponse =
-        platform::get_json("/api/v1/me/remote/devices", Some(&access))
+        platform::get_json_retry("/api/v1/me/remote/devices", Some(&access))
             .await
             .map_err(|e| e.to_string())?;
     let current_id = identity.as_ref().map(|item| item.device_id);
@@ -321,7 +321,7 @@ pub async fn remote_run_list(
     state: tauri::State<'_, crate::DbState>,
 ) -> Result<Vec<RemoteRunView>, String> {
     let access = require_access(state.inner()).await?;
-    let response: RunListResponse = platform::get_json("/api/v1/me/remote/requests", Some(&access))
+    let response: RunListResponse = platform::get_json_retry("/api/v1/me/remote/requests", Some(&access))
         .await
         .map_err(|e| e.to_string())?;
     Ok(response.requests)
