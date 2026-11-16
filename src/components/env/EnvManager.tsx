@@ -16,6 +16,8 @@ interface DependencyStatus {
   key: string;
   version: string | null;
   installed: boolean;
+  /** 本轮检测是否给出了结论（false 表示没测到，不能当成「未安装」） */
+  detected: boolean;
   /** 启动命令是否可解析（已安装 ≠ 可用：适配器装了但运行时缺失时不可用） */
   available?: boolean;
   /** 不可用/未安装的原因 */
@@ -91,7 +93,7 @@ const TIER_STYLE: Record<PrereqTier, CSSProperties> = {
 export type { EnvManagerProps };
 
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
-  const { envInfo, loading: envLoading, agentStatus, refresh: fetchEnv } = useEnvInfo();
+  const { envInfo, loading: envLoading, error: envError, agentStatus, refresh: fetchEnv } = useEnvInfo();
   // Agent 列表是全局单例缓存：本页装/卸完必须让它重拉，
   // 否则「设置 › 集成配置」里的包状态（待安装 / 已就绪）一直停在旧值。
   const { agents, fetchAgents } = useAgentRegistry();
@@ -176,6 +178,10 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     return () => { alive = false; };
   }, []);
   const isAcpAgent = (agentType: string) => transportMap[agentType] === 'acp';
+  // API 提供商（http 接入）不是可安装的 Agent：没有版本/启动命令，放进「Agent 检测」
+  // 只会永远显示「未安装」。它们归「提供商」页管理。
+  const isApiProvider = (agentType: string) =>
+    agentType === 'api' || agentType.startsWith('api:') || transportMap[agentType] === 'http';
 
   // 本地 CLI 市集里「同名且可安装」的预置：历史手工创建的 Agent 靠它接管安装/更新/卸载
   const [presetInstallable, setPresetInstallable] = useState<Record<string, boolean>>({});
@@ -216,22 +222,30 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       }
     });
 
-    const unlistenAgent = await listen<{ agentType: string; version: string | null }>('env-agent-version', (event) => {
-      const { agentType, version } = event.payload;
+    const unlistenAgent = await listen<{ agentType: string; version: string | null; installed?: boolean }>('env-agent-version', (event) => {
+      const { agentType, version, installed } = event.payload;
+      if (isApiProvider(agentType)) return;
       const agent = agents.find(a => a.agentType === agentType);
       const name = agent?.displayName || agentType;
-      addLog(`${name}: ${version || '未安装'}`, version ? 'success' : 'warn');
+      // 日志按「是否已安装」判定：版本探测失败（网络/超时）时 version 为 null，
+      // 但 Agent 可能已装可用，不能一律记成「未安装」。
+      const ok = installed ?? version !== null;
+      addLog(
+        `${name}: ${ok ? (version ? `v${version}` : '已安装（版本未知）') : '未安装'}`,
+        ok ? 'success' : 'warn',
+      );
     });
 
+    let ok = false;
     try {
-      await fetchEnv();
+      ok = (await fetchEnv()) !== null;
     } finally {
       // Clean up temporary listeners (even if fetchEnv fails)
       unlistenBase();
       unlistenAgent();
     }
 
-    addLog('环境检测完成', 'success');
+    addLog(ok ? '环境检测完成' : '环境检测失败', ok ? 'success' : 'error');
   }, [fetchEnv, addLog, agents]);
 
   /** Simple semver older check */
@@ -250,12 +264,14 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
   // 前置依赖（Node / Python / Git）在「前置依赖」区块单独渲染，这里只构造 Agent 行
   const agentDependencies: DependencyStatus[] = agents
-    .filter(a => a.isEnabled)
+    .filter(a => a.isEnabled && !isApiProvider(a.agentType))
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     .map((agent) => {
       const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
       // 安装（包/适配器）与可用（启动命令）分开：ACP 装好适配器但运行时缺失时显示「不可用」
       const health = envInfo?.agentHealth?.[agent.agentType];
+      // 有 health 或拿到版本号才算「测到了」；否则是检测没覆盖到，不能武断显示「未安装」
+      const detected = !!health || version !== null;
       const installed = health?.installed ?? !!version;
       const available = health?.available ?? !!version;
       const latestVer = envInfo?.agentLatestVersions?.[agent.agentType] ?? latestVersions[agent.agentType]?.version ?? null;
@@ -266,6 +282,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         key: agent.agentType,
         version,
         installed,
+        detected,
         available,
         healthReason: health?.reason ?? null,
         // 安装/卸载命令来自市集下发的 lifecycle；历史手工 Agent 若市集有同名可安装预置，
@@ -387,6 +404,23 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
   return (
     <div className="settings-page-stack">
+      {envError && (
+        <div
+          className="flex items-center gap-2 rounded-md px-3 py-2 text-[11px]"
+          style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
+        >
+          <span className="min-w-0 flex-1">环境检测失败：{envError}</span>
+          <button
+            type="button"
+            className="pd-btn shrink-0 text-[10px]"
+            style={{ color: 'var(--accent)' }}
+            onClick={() => void fetchEnvWithLog()}
+            disabled={envLoading}
+          >
+            重新检测
+          </button>
+        </div>
+      )}
       {/* Prerequisites：必需项缺失会阻断 Agent 能力，推荐项缺失只影响对应功能，两者都给安装引导 */}
       <SettingsSection title="前置依赖">
         <div className="space-y-2">
@@ -399,6 +433,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                   : envInfo?.gitVersion;
             const installed = !!version;
             const detecting = envLoading && !installed;
+            // 还没拿到任何检测结果时不下「未安装」的结论
+            const checked = installed || !!envInfo;
             return (
               <SettingsCard key={meta.key} className="items-start">
                 <div className="min-w-0 flex-1">
@@ -416,15 +452,23 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     {detecting && <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
                     <span
                       className="text-[10px]"
-                      style={{ color: installed ? 'var(--text-secondary)' : meta.tier === '必需' ? '#EF4444' : '#F59E0B' }}
+                      style={{
+                        color: !checked
+                          ? 'var(--text-tertiary)'
+                          : installed
+                            ? 'var(--text-secondary)'
+                            : meta.tier === '必需'
+                              ? '#EF4444'
+                              : '#F59E0B',
+                      }}
                     >
-                      {detecting ? '检查中' : (version ?? '未安装')}
+                      {detecting ? '检查中' : !checked ? '未检测' : (version ?? '未安装')}
                     </span>
                   </div>
                   <div className="text-[10px] mt-1 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
                     {meta.note}
                   </div>
-                  {!installed && !detecting && (
+                  {checked && !installed && !detecting && (
                     <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                       <SettingsButton
                         variant="secondary"
@@ -482,10 +526,15 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         }
       >
         <div className="space-y-2">
+          {agentDependencies.length === 0 && (
+            <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              没有需要检测的 Agent。API 提供商不参与本地检测，请在「提供商」页管理。
+            </p>
+          )}
           {agentDependencies.map((dep) => (
             <SettingsCard key={dep.name} highlight={dep.hasUpdate}>
               <div className="flex items-center gap-2 min-w-0">
-                <SettingsStatusIcon installed={dep.installed} />
+                <SettingsStatusIcon installed={dep.detected && dep.installed} />
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
@@ -499,18 +548,26 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                   <div className="flex items-center gap-1">
                     <span
                       className="text-[10px]"
-                      style={{ color: !dep.installed || dep.available === false ? '#EF4444' : 'var(--text-secondary)' }}
+                      style={{
+                        color: !dep.detected
+                          ? 'var(--text-tertiary)'
+                          : !dep.installed || dep.available === false
+                            ? '#EF4444'
+                            : 'var(--text-secondary)',
+                      }}
                       title={!dep.detecting ? (dep.healthReason ?? undefined) : undefined}
                     >
                       {dep.detecting
                         ? '检查中'
-                        : !dep.installed
-                          ? '未安装'
-                          : dep.available === false
-                            ? '不可用'
-                            : dep.version
-                              ? `v${dep.version}`
-                              : '可用（版本未知）'}
+                        : !dep.detected
+                          ? '未检测'
+                          : !dep.installed
+                            ? '未安装'
+                            : dep.available === false
+                              ? '不可用'
+                              : dep.version
+                                ? `v${dep.version}`
+                                : '可用（版本未知）'}
                     </span>
                     {/* 不可用原因直接展示：登录/授权这类问题藏在 hover 里用户根本发现不了 */}
                     {!dep.detecting && dep.installed && dep.available === false && dep.healthReason && (
@@ -541,7 +598,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
               {/* Right: action buttons */}
               <div className="flex items-center gap-1.5 shrink-0">
-                {!dep.installed && dep.installable !== false && (
+                {dep.detected && !dep.installed && dep.installable !== false && (
                   <SettingsButton
                     onClick={() => requestEnvAction(dep.key, 'install')}
                     disabled={!!dep.installing}
@@ -554,7 +611,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     )}
                   </SettingsButton>
                 )}
-                {!dep.installed && dep.installable === false && (
+                {dep.detected && !dep.installed && dep.installable === false && (
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                     手工配置
                   </span>

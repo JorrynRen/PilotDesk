@@ -106,6 +106,17 @@ pub(crate) struct AgentProbe {
     pub health: AgentHealth,
 }
 
+/// 从 `npm ls -g <pkg> --json` 里取出包名，用于查共享的全局 npm 清单。
+fn npm_probe_package(cmd: &str) -> Option<&str> {
+    let rest = cmd.trim().strip_prefix("npm ls -g ")?;
+    let pkg = rest.split_whitespace().next()?;
+    if pkg.is_empty() || pkg.starts_with('-') {
+        None
+    } else {
+        Some(pkg)
+    }
+}
+
 /// 评估一个 Agent 的「已安装 / 可用」状态。
 ///
 /// **检测与环境门禁共用同一口径**，避免出现「检测显示可用、会话却起不来」。
@@ -118,6 +129,7 @@ pub(crate) async fn probe_agent(
     agent: &AgentConfig,
     transport: &str,
     conn_json: Option<&str>,
+    npm_inventory: Option<&serde_json::Value>,
 ) -> AgentProbe {
     let lifecycle = agent.lifecycle.as_ref();
     let bins = agent
@@ -143,17 +155,35 @@ pub(crate) async fn probe_agent(
 
     let label = format!("{} 版本查询", agent.agent_type);
     let version = match version_probe {
-        Some(cmd) => agent_mgr
-            .execute_command_output_async(&cmd, "", 15, &label)
-            .await
-            .ok()
-            .and_then(|out| match lifecycle {
-                // 有安装规格就只认它自己的解析：解析不出来说明版本真的不可知，
-                // 回退到「从整段输出里猜数字」会把构建日期（如 `(2026.9.24)`）当成版本号。
-                Some(l) => l.parse_installed_version(&out),
-                // 手工配置的 Agent 没有规格，只能按通用规则猜
-                None => Some(clean_version_string(&out)).filter(|v| !v.trim().is_empty()),
-            }),
+        Some(cmd) => {
+            // npm 全局清单优先：Windows 上单次 `npm ls -g` 要 2~5s，多个 Agent 并发探测
+            // 会互相拖慢并撞满 15s 超时，导致所有 Agent 的版本都探测不到
+            // （界面表现为「全部未安装」）。清单由 detect_env 统一取一次。
+            let from_inventory = npm_inventory
+                .zip(npm_probe_package(&cmd))
+                .and_then(|(inventory, pkg)| {
+                    inventory
+                        .get("dependencies")?
+                        .get(pkg)?
+                        .get("version")?
+                        .as_str()
+                        .map(|v| v.trim().trim_start_matches('v').to_string())
+                });
+            match from_inventory {
+                Some(v) if !v.is_empty() => Some(v),
+                _ => agent_mgr
+                    .execute_command_output_async(&cmd, "", 15, &label)
+                    .await
+                    .ok()
+                    .and_then(|out| match lifecycle {
+                        // 有安装规格就只认它自己的解析：解析不出来说明版本真的不可知，
+                        // 回退到「从整段输出里猜数字」会把构建日期（如 `(2026.9.24)`）当成版本号。
+                        Some(l) => l.parse_installed_version(&out),
+                        // 手工配置的 Agent 没有规格，只能按通用规则猜
+                        None => Some(clean_version_string(&out)).filter(|v| !v.trim().is_empty()),
+                    }),
+            }
+        }
         None => None,
     };
 
@@ -560,6 +590,28 @@ async fn detect_env_with_console(
             .map(|r| (r.agent_type, r.transport))
             .collect();
 
+    // npm 全局清单只取一次：逐个 `npm ls -g <pkg>` 又慢又会并发互相拖累（Windows 上 2~5s/次），
+    // 6 个 Agent 并行时很容易集体超时，版本全为空 → 界面看起来「全部未安装」。
+    let needs_npm_inventory = db_agents.iter().any(|a| {
+        a.is_enabled
+            && a.lifecycle
+                .as_ref()
+                .and_then(|l| l.commands().ok())
+                .and_then(|c| c.version_probe)
+                .map(|p| p.trim_start().starts_with("npm ls -g "))
+                .unwrap_or(false)
+    });
+    let npm_inventory = if needs_npm_inventory {
+        agent_mgr
+            .execute_command_output_async("npm ls -g --json --depth=0", "", 20, "npm 全局清单")
+            .await
+            .ok()
+            .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok())
+    } else {
+        None
+    };
+    let npm_inventory_ref = npm_inventory.as_ref();
+
     let mut agent_futures = Vec::new();
     for agent in &db_agents {
         if !agent.is_enabled {
@@ -575,7 +627,9 @@ async fn detect_env_with_console(
             .and_then(|info| info.conn);
         let agent = agent.clone();
         agent_futures.push(async move {
-            let probe = probe_agent(agent_mgr, &agent, &transport, conn_json.as_deref()).await;
+            let probe =
+                probe_agent(agent_mgr, &agent, &transport, conn_json.as_deref(), npm_inventory_ref)
+                    .await;
             (agent.agent_type, probe)
         });
     }

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { EnvInfo } from '../types';
+import { errorMessage } from '../utils/errorMessage';
 
 /**
  * Shared hook for environment info (agent versions, tool versions).
@@ -48,6 +49,8 @@ export function isAgentAvailable(
 interface EnvState {
   info: EnvInfo | null;
   loading: boolean;
+  /** 最近一次检测的失败原因（成功时清空）——上层用它区分「检测失败」与「确实没装」 */
+  error: string | null;
   /** Per-agent status map for progressive rendering */
   agentStatus: Record<string, AgentDetectStatus>;
 }
@@ -55,10 +58,13 @@ interface EnvState {
 const globalState: EnvState = {
   info: null,
   loading: false,
+  error: null,
   agentStatus: {},
 };
 const globalListeners = new Set<() => void>();
 let globalFetchPromise: Promise<EnvInfo | null> | null = null;
+/** 检测轮次：只让最后一轮的结果写入全局状态，避免并发检测互相覆盖 */
+let fetchSeq = 0;
 const unlistenFns: Array<() => void> = [];
 let listenersSetup = false;
 
@@ -151,13 +157,17 @@ async function fetchEnv(): Promise<EnvInfo | null> {
   // If a fetch is already in-flight, return the same promise (no duplicate call)
   if (globalFetchPromise) return globalFetchPromise;
 
+  const seq = ++fetchSeq;
   globalState.loading = true;
+  globalState.error = null;
   globalState.agentStatus = {};
   notifyListeners();
 
   globalFetchPromise = (async () => {
     try {
       const info = await invoke<EnvInfo>('detect_env');
+      // 期间又发起了新一轮检测：旧结果直接丢弃，不能覆盖新一轮的状态
+      if (seq !== fetchSeq) return info;
       // The streaming events may have already populated parts of the state,
       // but ensure final state is consistent with the invoke result.
       globalState.info = info;
@@ -170,12 +180,16 @@ async function fetchEnv(): Promise<EnvInfo | null> {
       }
       globalState.agentStatus = finalStatus;
       return info;
-    } catch {
+    } catch (err) {
+      // 检测失败不能静默：上层据此显示失败原因，而不是把一切都当成「未安装」
+      if (seq === fetchSeq) globalState.error = errorMessage(err);
       return null;
     } finally {
-      globalState.loading = false;
-      globalFetchPromise = null;
-      notifyListeners();
+      if (seq === fetchSeq) {
+        globalState.loading = false;
+        globalFetchPromise = null;
+        notifyListeners();
+      }
     }
   })();
 
@@ -211,6 +225,7 @@ export function useEnvInfo() {
   return {
     envInfo: globalState.info,
     loading: globalState.loading,
+    error: globalState.error,
     agentStatus: globalState.agentStatus,
     refresh,
   };
