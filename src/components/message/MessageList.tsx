@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo, type FocusEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { CheckSquare, Loader2, Search, Sparkles, X } from 'lucide-react';
@@ -45,8 +45,9 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
   const [atBottom, setAtBottom] = useState(true);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
-  /** 搜索框是否展开：默认收起成图标，点右侧搜索图标展开，清空内容后自动收回 */
+  /** 搜索框是否展开：默认收起成图标，点右侧搜索图标展开，失焦后自动收回 */
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchWrapRef = useRef<HTMLDivElement>(null);
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
   const [isSearchingMessages, setIsSearchingMessages] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -102,6 +103,13 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
     }
   }, [sessionId]);
 
+  /** 搜索框失焦即收起；焦点只在搜索区内部（清除 ×、上/下条、定位）移动时不收起 */
+  const handleSearchBlur = (e: FocusEvent<HTMLInputElement>) => {
+    const next = e.relatedTarget as Node | null;
+    if (next && searchWrapRef.current?.contains(next)) return;
+    setSearchOpen(false);
+  };
+
   const handleMessageSearch = useCallback((query: string) => {
     setSearchQuery(query);
     // Clear previous timer
@@ -112,8 +120,6 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
     if (!query.trim()) {
       setSearchResults(null);
       setHighlightedMessageId(null);
-      // 内容清空 → 搜索框收回成图标
-      setSearchOpen(false);
       return;
     }
     // Debounce search to avoid invoke on every keystroke
@@ -255,13 +261,14 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
       {messages.length > 0 && (
         <div className="shrink-0 px-4 flex items-center gap-2 border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-content)', height: '36px' }}>
           {searchOpen ? (
-            <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div ref={searchWrapRef} className="flex items-center gap-2 flex-1 min-w-0">
               <div className="relative flex-1 min-w-0">
                 <input
                   type="text"
                   autoFocus
                   value={searchQuery}
                   onChange={(e) => handleMessageSearch(e.target.value)}
+                  onBlur={handleSearchBlur}
                   placeholder="搜索消息..."
                   className="w-full text-xs px-3 py-1 rounded-lg outline-none"
                   style={{
@@ -272,7 +279,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
                 />
                 {searchQuery && (
                   <button
-                    onClick={() => { setSearchQuery(''); setSearchResults(null); setHighlightedMessageId(null); setSearchOpen(false); }}
+                    onClick={() => { setSearchQuery(''); setSearchResults(null); setHighlightedMessageId(null); }}
                     className="absolute right-2 top-1/2 -translate-y-1/2"
                     style={{ color: 'var(--text-tertiary)' }}
                   >
