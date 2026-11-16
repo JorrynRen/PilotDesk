@@ -82,6 +82,21 @@ const READ_TIMEOUT_SECS: u64 = 8;
 const MAX_RETRIES: u32 = 2;
 const RETRY_DELAY_MS: u64 = 1000;
 
+/// 该源是否为官网自建源。
+pub(crate) fn is_official_source(source: &str) -> bool {
+    source.trim_end_matches('/') == site::official_market_base()
+}
+
+/// 单个源的尝试次数：官网源**只连一次**，连不上就立刻降级到下一个源，
+/// 不让用户为自家站点白等两轮超时；公共 CDN / Raw 源保留重试。
+pub(crate) fn attempts_for_source(source: &str) -> u32 {
+    if is_official_source(source) {
+        1
+    } else {
+        MAX_RETRIES
+    }
+}
+
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
@@ -91,10 +106,10 @@ fn http_client() -> reqwest::Client {
         .expect("Failed to build HTTP client")
 }
 
-/// 从单个 URL 获取文本内容（含重试）
-async fn fetch_url(url: &str) -> Result<String, String> {
+/// 从单个 URL 获取文本内容（按 `max_attempts` 重试）
+async fn fetch_url(url: &str, max_attempts: u32) -> Result<String, String> {
     let mut last_err = String::new();
-    for attempt in 1..=MAX_RETRIES {
+    for attempt in 1..=max_attempts {
         match http_client().get(url).send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
@@ -103,7 +118,7 @@ async fn fetch_url(url: &str) -> Result<String, String> {
                         .text()
                         .await
                         .map_err(|e| format!("读取响应失败: {}", e));
-                } else if status >= 500 && attempt < MAX_RETRIES {
+                } else if status >= 500 && attempt < max_attempts {
                     last_err = format!("HTTP {}: {}", status, url);
                     log::warn!(
                         "[Market] 第 {} 次请求失败 ({}), {}ms 后重试...",
@@ -118,7 +133,7 @@ async fn fetch_url(url: &str) -> Result<String, String> {
                 }
             }
             Err(e) => {
-                if attempt < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
+                if attempt < max_attempts && (e.is_timeout() || e.is_connect()) {
                     last_err = format!(
                         "{}: {}",
                         if e.is_timeout() {
@@ -149,7 +164,7 @@ async fn fetch_url(url: &str) -> Result<String, String> {
             }
         }
     }
-    Err(format!("重试 {} 次后仍失败: {}", MAX_RETRIES, last_err))
+    Err(format!("重试 {} 次后仍失败: {}", max_attempts, last_err))
 }
 
 /// 按源优先级依次尝试获取远程 JSON 资源。
@@ -160,7 +175,7 @@ pub(crate) async fn fetch_market_json_with_source(path: &str) -> Result<(Value, 
     let urls = build_urls(path);
     let mut last_err = String::new();
     for (source, url) in SERVER_SOURCES.iter().zip(urls.iter()) {
-        match fetch_url(url).await {
+        match fetch_url(url, attempts_for_source(source)).await {
             Ok(body) => match serde_json::from_str::<Value>(&body) {
                 Ok(json) => return Ok((json, source.clone())),
                 Err(e) => {
@@ -189,8 +204,8 @@ pub(crate) async fn fetch_market_json(path: &str) -> Result<Value, String> {
 async fn fetch_market_text(path: &str) -> Result<String, String> {
     let urls = build_urls(path);
     let mut last_err = String::new();
-    for url in urls.iter() {
-        match fetch_url(url).await {
+    for (source, url) in SERVER_SOURCES.iter().zip(urls.iter()) {
+        match fetch_url(url, attempts_for_source(source)).await {
             Ok(body) => return Ok(body),
             Err(e) => last_err = e,
         }
@@ -210,8 +225,9 @@ const AGENTS_CONFIG_MIN_VERSION: u64 = 2;
 #[tauri::command]
 pub async fn fetch_agents_config() -> Result<Value, String> {
     let mut last_err = String::new();
-    for url in build_urls(AGENTS_CONFIG_PATH) {
-        match fetch_url(&url).await {
+    let urls = build_urls(AGENTS_CONFIG_PATH);
+    for (source, url) in SERVER_SOURCES.iter().zip(urls.iter()) {
+        match fetch_url(url, attempts_for_source(source)).await {
             Ok(body) => match serde_json::from_str::<Value>(&body) {
                 Ok(json) => {
                     let version = json.get("version").and_then(|v| v.as_u64()).unwrap_or(0);

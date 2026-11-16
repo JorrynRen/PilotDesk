@@ -103,10 +103,10 @@ fn http_client() -> &'static reqwest::Client {
     })
 }
 
-/// 从 URL 获取文本内容（异步，带超时，自动重试）
-async fn fetch_url(url: &str) -> Result<String, String> {
+/// 从 URL 获取文本内容（异步，带超时，按 `max_attempts` 重试）
+async fn fetch_url(url: &str, max_attempts: u32) -> Result<String, String> {
     let mut last_err = String::new();
-    for attempt in 1..=MAX_RETRIES {
+    for attempt in 1..=max_attempts {
         let response = http_client().get(url).send().await;
 
         match response {
@@ -117,7 +117,7 @@ async fn fetch_url(url: &str) -> Result<String, String> {
                         .text()
                         .await
                         .map_err(|e| format!("读取响应失败: {}", e));
-                } else if status >= 500 && attempt < MAX_RETRIES {
+                } else if status >= 500 && attempt < max_attempts {
                     // 5xx 错误可重试
                     last_err = format!("HTTP {}: {}", status, url);
                     log::warn!(
@@ -133,7 +133,7 @@ async fn fetch_url(url: &str) -> Result<String, String> {
                 }
             }
             Err(e) => {
-                if attempt < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
+                if attempt < max_attempts && (e.is_timeout() || e.is_connect()) {
                     last_err = if e.is_timeout() {
                         format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
                     } else {
@@ -160,13 +160,13 @@ async fn fetch_url(url: &str) -> Result<String, String> {
             }
         }
     }
-    Err(format!("重试 {} 次后仍失败: {}", MAX_RETRIES, last_err))
+    Err(format!("重试 {} 次后仍失败: {}", max_attempts, last_err))
 }
 
-/// 从 URL 下载文件内容（二进制，异步，带超时，自动重试）
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+/// 从 URL 下载文件内容（二进制，异步，带超时，按 `max_attempts` 重试）
+async fn fetch_bytes(url: &str, max_attempts: u32) -> Result<Vec<u8>, String> {
     let mut last_err = String::new();
-    for attempt in 1..=MAX_RETRIES {
+    for attempt in 1..=max_attempts {
         let response = http_client().get(url).send().await;
 
         match response {
@@ -178,7 +178,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
                         .await
                         .map(|b| b.to_vec())
                         .map_err(|e| format!("读取响应失败: {}", e));
-                } else if status >= 500 && attempt < MAX_RETRIES {
+                } else if status >= 500 && attempt < max_attempts {
                     last_err = format!("HTTP {}: {}", status, url);
                     log::warn!(
                         "[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...",
@@ -193,7 +193,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
                 }
             }
             Err(e) => {
-                if attempt < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
+                if attempt < max_attempts && (e.is_timeout() || e.is_connect()) {
                     last_err = if e.is_timeout() {
                         format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
                     } else {
@@ -220,7 +220,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
             }
         }
     }
-    Err(format!("重试 {} 次后仍失败: {}", MAX_RETRIES, last_err))
+    Err(format!("重试 {} 次后仍失败: {}", max_attempts, last_err))
 }
 
 /// 把索引里的绝对文件地址重新挂到 `base_url` 下（只取文件名），
@@ -370,7 +370,13 @@ async fn install_plugin_from_sources(
         }
         std::fs::create_dir_all(target_dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
 
-        match install_plugin_files(target_dir, &base_url, online_plugin, host).await {
+        // 官网源只连一次，失败立刻降级到下一个源
+        let max_attempts = if crate::utils::market::is_official_source(source) {
+            1
+        } else {
+            MAX_RETRIES
+        };
+        match install_plugin_files(target_dir, &base_url, online_plugin, host, max_attempts).await {
             Ok(id) => return Ok(id),
             Err(e) => {
                 log::warn!(
@@ -391,10 +397,11 @@ async fn install_plugin_files(
     base_url: &str,
     online_plugin: &OnlinePluginInfo,
     host: &Mutex<PluginHost>,
+    max_attempts: u32,
 ) -> Result<String, String> {
     // 下载 manifest.json
     let manifest_url = format!("{}/manifest.json", base_url);
-    let manifest_content = fetch_url(&manifest_url).await?;
+    let manifest_content = fetch_url(&manifest_url, max_attempts).await?;
 
     // 验证 manifest.json
     let manifest: super::PluginManifest = serde_json::from_str(&manifest_content)
@@ -421,7 +428,7 @@ async fn install_plugin_files(
             )
         })?;
 
-    let entry_data = fetch_bytes(&entry_url)
+    let entry_data = fetch_bytes(&entry_url, max_attempts)
         .await
         .map_err(|e| format!("入口文件下载失败: {}", e))?;
 
@@ -449,7 +456,7 @@ async fn install_plugin_files(
         .filter(|s| !s.is_empty())
     {
         let icon_url = format!("{}/{}", base_url.trim_end_matches('/'), icon_name);
-        match fetch_bytes(&icon_url).await {
+        match fetch_bytes(&icon_url, max_attempts).await {
             Ok(data) => {
                 std::fs::write(target_dir.join(icon_name), &data)
                     .map_err(|e| format!("写入图标文件失败: {}", e))?;
@@ -465,7 +472,7 @@ async fn install_plugin_files(
                 };
                 if !alt_name.is_empty() {
                     let alt_url = format!("{}/{}", base_url.trim_end_matches('/'), alt_name);
-                    if let Ok(data) = fetch_bytes(&alt_url).await {
+                    if let Ok(data) = fetch_bytes(&alt_url, max_attempts).await {
                         std::fs::write(target_dir.join(&alt_name), &data)
                             .map_err(|e| format!("写入图标文件失败: {}", e))?;
                     }
@@ -476,7 +483,7 @@ async fn install_plugin_files(
 
     // 下载 README.md（可选，硬编码路径，不依赖索引字段）
     let readme_url = format!("{}/README.md", base_url);
-    match fetch_bytes(&readme_url).await {
+    match fetch_bytes(&readme_url, max_attempts).await {
         Ok(data) => {
             let _ = std::fs::write(target_dir.join("README.md"), &data);
         }
