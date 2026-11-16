@@ -532,7 +532,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
             </p>
           )}
           {agentDependencies.map((dep) => (
-            <SettingsCard key={dep.name} highlight={dep.hasUpdate}>
+            <SettingsCard key={dep.name} highlight={dep.hasUpdate && dep.available !== false}>
               <div className="flex items-center gap-2 min-w-0">
                 <SettingsStatusIcon installed={dep.detected && dep.installed} />
                 <div className="min-w-0">
@@ -541,7 +541,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       {dep.name}
                     </span>
                     {dep.detecting && <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
-                    {dep.hasUpdate && (
+                    {dep.hasUpdate && dep.available !== false && (
                       <ArrowUpCircle size={13} style={{ color: '#F59E0B' }} />
                     )}
                   </div>
@@ -616,7 +616,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     手工配置
                   </span>
                 )}
-                {dep.hasUpdate && dep.installed && dep.installable !== false && (
+                {/* 不可用（如 ACP 适配器在、宿主 CLI 缺失）时不给「更新/已是最新」结论：
+                    版本再新也起不来，只提供「重装」这条修复路径 */}
+                {dep.hasUpdate && dep.installed && dep.available !== false && dep.installable !== false && (
                   <>
                     <SettingsButton
                       onClick={() => requestEnvAction(dep.key, 'update')}
@@ -645,7 +647,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     手工配置
                   </span>
                 )}
-                {dep.installed && !dep.hasUpdate && dep.latestVersion && (
+                {dep.installed && !dep.hasUpdate && dep.latestVersion && dep.available !== false && (
                   <>
                     <span className="text-[10px]" style={{ color: '#10B981' }}>
                       已是最新
@@ -661,7 +663,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     </SettingsButton>
                   </>
                 )}
-                {dep.installed && !dep.hasUpdate && !dep.latestVersion && !dep.updateChecking && (
+                {dep.installed && !dep.updateChecking && (dep.available === false || (!dep.hasUpdate && !dep.latestVersion)) && (
                   <>
                     <SettingsButton
                       onClick={() => requestEnvAction(dep.key, 'reinstall')}
