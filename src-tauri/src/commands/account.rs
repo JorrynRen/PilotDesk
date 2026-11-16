@@ -10,6 +10,7 @@
 //! `app_settings` 键，**前端永远拿不到明文**；access 过期时用 refresh 自动续。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
 use base64::Engine as _;
@@ -337,10 +338,10 @@ async fn ensure_access(state: &crate::DbState, tokens: &StoredTokens) -> Result<
     {
         Ok(v) => v,
         Err(e) => {
-            // `status == 0` = 网络层失败 / 响应解析失败：**不能清令牌**。
-            // 否则断网超过 access 有效期后，一次刷新失败就把用户变成「未登录」，
+            // 网络层失败 / 5xx / 429 = 平台临时不可用：**不能清令牌**。
+            // 否则平台维护或抖动一次，就把用户变成「未登录」，
             // 连带 7 天离线宽限失效（下一次 account_status 读不到令牌会直接返回 None）。
-            if e.status == 0 {
+            if is_transient_status(e.status) {
                 return Err(AppError::Network(e.message));
             }
             // 真正的鉴权失败（refresh 被吊销 / 过期 / 客户端被拒）→ 清掉本地令牌，回到未登录
@@ -380,15 +381,54 @@ pub(crate) async fn current_access_token(
     }
 }
 
+/// 平台「临时不可用」：网络层失败 / 429 / 5xx。
+///
+/// 这类失败**不代表登录失效**：令牌要保留，按离线宽限处理；
+/// 只有 4xx（refresh 被吊销、过期等）才清令牌回到未登录。
+fn is_transient_status(status: u16) -> bool {
+    status == 0 || status == 429 || status >= 500
+}
+
+/// 调平台接口并保留状态码语义：临时不可用映射成 `Network`（走离线缓存），
+/// 其余 4xx 才映射成 `External`（鉴权失败）。
+async fn get_json_typed<T: serde::de::DeserializeOwned>(
+    path: &str,
+    token: &str,
+) -> Result<T, AppError> {
+    platform::get_json_with_status(path, Some(token))
+        .await
+        .map_err(|e| {
+            if is_transient_status(e.status) {
+                AppError::Network(e.message)
+            } else {
+                AppError::External(e.message)
+            }
+        })
+}
+
+/// 最近一次「平台不可达」告警时间：多窗口各自 focus 刷新时避免刷屏。
+static LAST_OFFLINE_WARN_AT: AtomicI64 = AtomicI64::new(0);
+
+/// 平台不可达日志节流：60 秒内只 WARN 一次，其余降为 DEBUG。
+fn log_offline(msg: &str) {
+    let now = chrono::Utc::now().timestamp();
+    let last = LAST_OFFLINE_WARN_AT.load(Ordering::Relaxed);
+    if now - last >= 60 {
+        LAST_OFFLINE_WARN_AT.store(now, Ordering::Relaxed);
+        log::warn!("[Account] 平台不可达，按离线缓存处理：{}", msg);
+    } else {
+        log::debug!("[Account] 平台仍不可达：{}", msg);
+    }
+}
+
 /// 拉账号资料 + 会员权益，组装成前端视图
 async fn fetch_view(
     state: &crate::DbState,
     tokens: &StoredTokens,
 ) -> Result<AccountView, AppError> {
     let access = ensure_access(state, tokens).await?;
-    let me: MeResp = platform::get_json("/api/v1/me", Some(&access)).await?;
-    let ent: EntitlementsResp =
-        platform::get_json("/api/v1/me/entitlements", Some(&access)).await?;
+    let me: MeResp = get_json_typed("/api/v1/me", &access).await?;
+    let ent: EntitlementsResp = get_json_typed("/api/v1/me/entitlements", &access).await?;
     Ok(AccountView {
         email: me.user.email,
         nickname: me.user.nickname,
@@ -582,9 +622,10 @@ pub async fn account_status(
             }
             Ok(Some(view))
         }
-        // 平台不可达（离线 / 后端没起）：宽限期内按「上次已知权益」放行，避免断网即锁功能
+        // 平台临时不可用（离线 / 5xx / 429）：宽限期内按「上次已知权益」放行，
+        // 避免断网或平台维护时直接掉登录态；日志做节流，避免多窗口 focus 反复刷屏
         Err(AppError::Network(msg)) => {
-            log::warn!("[Account] 平台不可达，尝试离线缓存：{}", msg);
+            log_offline(&msg);
             Ok(state
                 .get_conn()
                 .ok()
@@ -596,6 +637,18 @@ pub async fn account_status(
             Ok(None)
         }
     }
+}
+
+/// 本地是否存在登录会话（只读本地库，不发任何网络请求）。
+///
+/// 供前端在窗口 focus 等高频时机先判断登录态：未登录就不调平台接口，
+/// 避免多窗口无条件刷新会员权益，放大请求量与错误日志。
+#[tauri::command]
+pub fn account_has_session(state: tauri::State<'_, crate::DbState>) -> Result<bool, String> {
+    let conn = state
+        .get_conn()
+        .map_err(|e| format!("数据库连接失败：{}", e))?;
+    Ok(load_tokens(&conn).map_err(String::from)?.is_some())
 }
 
 /// 平台基址，供前端拼「升级页 / 会员中心」等地址（基址只在 Rust 一处，避免前后端各写一份漂移）。

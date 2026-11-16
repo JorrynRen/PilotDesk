@@ -3033,6 +3033,7 @@ pub fn run() {
             commands::account::account_login_begin,
             commands::account::account_login_complete,
             commands::account::account_status,
+            commands::account::account_has_session,
             commands::account::account_logout,
             commands::account::account_platform_base,
             commands::account::site_official_url,
