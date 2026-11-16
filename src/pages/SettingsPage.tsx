@@ -1346,28 +1346,10 @@ function AboutSection() {
 
   return (
     <div className="settings-page-stack">
-      <SettingsSection title="关于 PilotDesk">
-        <div className="flex items-start gap-3">
-          <img
-            src="/logo-lg.png"
-            alt="PilotDesk"
-            className="w-14 h-14 rounded-lg shrink-0"
-            draggable={false}
-          />
-          <div className="min-w-0">
-            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>PilotDesk</div>
-            <div className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>v{APP_VERSION}</div>
-            <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-              Agent 统一桌面客户端。集成多 Agent 管理、流式对话、灵感库、API 直连等功能。
-            </p>
-          </div>
-        </div>
-      </SettingsSection>
-
       {/* 「检查更新」按钮走 SettingsSection 的 actions 槽，与标题同一行（靠右）——
           所以更新检查的状态提到了 useUpdater()，按钮才拿得到它 */}
       <SettingsSection
-        title="版本更新"
+        title="关于 PilotDesk"
         actions={
           <SettingsButton
             onClick={() => void u.check()}
@@ -1378,26 +1360,23 @@ function AboutSection() {
           </SettingsButton>
         }
       >
-        <UpdateChecker u={u} />
-      </SettingsSection>
-
-      <SettingsSection title="技术栈">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full" style={{ fontSize: '11px' }}>
-          {[
-            ['前端', 'React 19 + TypeScript + TailwindCSS v4'],
-            ['桌面', 'Tauri 2.0'],
-            ['后端', 'Rust + SQLite'],
-            ['Agent', 'Rust AgentManager + Tauri Event'],
-          ].map(([label, value]) => (
-            <div
-              key={label}
-              className="flex items-center gap-2 px-3 py-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
-            >
-              <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
-              <span>{value}</span>
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <img
+              src="/logo-lg.png"
+              alt="PilotDesk"
+              className="w-14 h-14 rounded-lg shrink-0"
+              draggable={false}
+            />
+            <div className="min-w-0">
+              <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>PilotDesk</div>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>v{APP_VERSION}</div>
+              <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                Agent 统一桌面客户端。集成多 Agent 管理、流式对话、灵感库、API 直连等功能。
+              </p>
             </div>
-          ))}
+          </div>
+          <UpdateChecker u={u} />
         </div>
       </SettingsSection>
 
@@ -1441,6 +1420,26 @@ function AboutSection() {
                 {url ? '在浏览器中打开' : '待补充'}
               </span>
             </button>
+          ))}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="技术栈">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full" style={{ fontSize: '11px' }}>
+          {[
+            ['前端', 'React 19 + TypeScript + TailwindCSS v4'],
+            ['桌面', 'Tauri 2.0'],
+            ['后端', 'Rust + SQLite'],
+            ['Agent', 'Rust AgentManager + Tauri Event'],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="flex items-center gap-2 px-3 py-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+            >
+              <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
+              <span>{value}</span>
+            </div>
           ))}
         </div>
       </SettingsSection>
