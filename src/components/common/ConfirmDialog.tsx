@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { useConfirmStore } from '../../stores/confirmStore';
 
 /**
@@ -40,25 +41,42 @@ export function ConfirmDialog() {
       onClick={() => settle(false)}
     >
       <div
-        className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
+        className="rounded-xl shadow-xl max-w-sm w-full mx-4 overflow-hidden"
         style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-          {title}
+        {/* 标题区与内容区分隔 */}
+        <div
+          className="flex items-center gap-2 px-5 py-3.5"
+          style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}
+        >
+          <AlertTriangle
+            size={15}
+            style={{ color: danger ? 'var(--status-danger)' : 'var(--accent)', flexShrink: 0 }}
+          />
+          <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+            {title}
+          </div>
         </div>
         {/* whitespace-pre-line：message 里的 \n 按换行渲染（如卸载技能要摊开目录路径）；
             break-words：Windows 长路径不撑破弹窗 */}
-        <div className="text-xs mb-4 leading-relaxed whitespace-pre-line break-words" style={{ color: 'var(--text-secondary)' }}>
+        <div
+          className="px-5 py-4 text-xs leading-relaxed whitespace-pre-line break-words"
+          style={{ color: 'var(--text-secondary)' }}
+        >
           {message}
         </div>
-        <div className="flex justify-end gap-2">
+        {/* 操作区与内容区分隔 */}
+        <div
+          className="flex justify-end gap-2 px-5 py-3"
+          style={{ borderTop: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}
+        >
           <button
             onClick={() => settle(false)}
             className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
             style={{
               border: '1px solid var(--border)',
-              background: 'var(--bg-tertiary)',
+              background: 'var(--bg-secondary)',
               color: 'var(--text-secondary)',
             }}
           >
@@ -69,8 +87,8 @@ export function ConfirmDialog() {
             className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
             style={
               danger
-                ? { backgroundColor: '#ef4444', color: '#fff' }
-                : { backgroundColor: 'var(--accent)', color: '#fff' }
+                ? { backgroundColor: 'var(--status-danger)', color: 'var(--text-on-accent)' }
+                : { backgroundColor: 'var(--accent)', color: 'var(--text-on-accent)' }
             }
           >
             {confirmText}
