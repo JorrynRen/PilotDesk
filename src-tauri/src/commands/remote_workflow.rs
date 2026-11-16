@@ -205,55 +205,6 @@ pub async fn remote_device_register(
 }
 
 #[tauri::command]
-pub async fn remote_device_status(
-    state: tauri::State<'_, crate::DbState>,
-) -> Result<RemoteDeviceView, String> {
-    let identity = {
-        let conn = state
-            .get_conn()
-            .map_err(|e| format!("数据库连接失败：{}", e))?;
-        require_capability(&conn)?;
-        load_identity(&conn).map_err(|e| e.to_string())?
-    };
-    let Some(identity) = identity else {
-        return Ok(RemoteDeviceView {
-            registered: false,
-            id: None,
-            name: String::new(),
-            platform: std::env::consts::OS.to_string(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
-            online: false,
-            last_seen_at: None,
-            revoked_at: None,
-            current_device: false,
-        });
-    };
-    let access = require_access(state.inner()).await?;
-    let response: DeviceListResponse =
-        platform::get_json_retry("/api/v1/me/remote/devices", Some(&access))
-            .await
-            .map_err(|e| e.to_string())?;
-    if let Some(device) = response
-        .devices
-        .into_iter()
-        .find(|device| device.id == identity.device_id)
-    {
-        return Ok(to_view(device, Some(identity.device_id)));
-    }
-    Ok(RemoteDeviceView {
-        registered: false,
-        id: Some(identity.device_id),
-        name: identity.name,
-        platform: identity.platform,
-        app_version: identity.app_version,
-        online: false,
-        last_seen_at: None,
-        revoked_at: None,
-        current_device: true,
-    })
-}
-
-#[tauri::command]
 pub async fn remote_devices_list(
     state: tauri::State<'_, crate::DbState>,
 ) -> Result<Vec<RemoteDeviceView>, String> {

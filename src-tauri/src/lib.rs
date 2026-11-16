@@ -2873,7 +2873,6 @@ pub fn run() {
             commands::cloud_sync::cloud_sync_status,
             commands::cloud_sync::cloud_sync_set_enabled,
             commands::remote_workflow::remote_device_register,
-            commands::remote_workflow::remote_device_status,
             commands::remote_workflow::remote_devices_list,
             commands::remote_workflow::remote_device_revoke,
             commands::remote_workflow::remote_run_create,

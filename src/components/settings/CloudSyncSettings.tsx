@@ -302,12 +302,12 @@ export function CloudSyncSettings() {
     if (!canRemoteRun) return;
     setRemoteLoading(true);
     try {
-      const [status, devices, runs] = await Promise.all([
-        invoke<RemoteDevice>('remote_device_status'),
+      // 设备列表已包含「当前设备」标记，不再额外调一次状态接口（少一次并发请求）
+      const [devices, runs] = await Promise.all([
         invoke<RemoteDevice[]>('remote_devices_list'),
         invoke<RemoteRun[]>('remote_run_list'),
       ]);
-      setRemoteDevice(status);
+      setRemoteDevice(devices.find((d) => d.currentDevice && !d.revokedAt) ?? null);
       setRemoteDevices(devices);
       setRemoteRuns(runs.slice(0, 12));
     } catch (e) {
