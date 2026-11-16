@@ -158,13 +158,10 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
   const hasReportableOrg = reportableOrgs.length > 0;
   const canReportNow = canReport && hasReportableOrg;
 
-  // 组织信息（所在组织 / 角色 / 组织等级 / 到期）：优先用 org_list_mine 的完整档位；
+  // 组织信息（所在组织 / 角色 / 组织等级 / 到期）：优先用 org_list_mine 的完整列表，多组织时全部列出；
   // 取不到时退回 /me 携带的组织摘要（只够显示名称与角色）。
-  const orgDetail =
-    (sourceOrganization ? orgOptions?.find((o) => o.id === sourceOrganization.id) : undefined) ??
-    (sourceOrganization ? null : (orgOptions?.[0] ?? null));
-  const orgName = orgDetail?.name ?? sourceOrganization?.name ?? '';
-  const orgRole = orgDetail?.role ?? sourceOrganization?.role ?? '';
+  const myOrgs: OrganizationSummary[] = orgOptions ?? [];
+  const orgFallback = !orgOptions && sourceOrganization ? sourceOrganization : null;
 
   useEffect(() => {
     // 账号切换 / 退出时先清空旧组织能力，避免重新拉取期间沿用上一个账号的可上报状态。
@@ -388,47 +385,81 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
               </div>
             </SettingsCard>
 
-            {/* 组织信息：所在组织 / 角色 / 组织等级 / 到期；升级续费只对管理员与所有者开放 */}
-            {orgName && (
-              <SettingsCard className="mt-3">
-                <div className="min-w-0 flex items-center gap-2">
+            {/* 组织信息：所在组织（多组织全部列出）/ 角色 / 组织等级 / 到期；升级续费只对管理员与所有者开放 */}
+            {(myOrgs.length > 0 || orgFallback) && (
+              <div className="pd-settings-card mt-3 flex flex-col gap-2 rounded-md px-3 py-2">
+                <div className="flex items-center gap-2">
                   <Building2 size={13} style={{ color: 'var(--text-secondary)' }} />
-                  <span className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                  <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                     所在组织
                   </span>
-                  <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
-                    {orgName}
-                  </span>
-                  <span
-                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
-                    style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    {roleLabel(orgRole)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  <span>组织等级：{orgDetail ? orgPlanLabel(orgDetail.planKey) : '—'}</span>
-                  <span>
-                    {orgDetail
-                      ? orgDetail.planKey === 'free' || !orgDetail.planExpiresAt
-                        ? '未开通团队订阅'
-                        : `到期：${expiryText(orgDetail.planExpiresAt)}`
-                      : '—'}
-                  </span>
-                  {canManageOrganization(orgDetail) && (
-                    <SettingsButton
-                      variant="secondary"
-                      onClick={() => void openOrganization({ organizationId: orgDetail!.id })}
-                    >
-                      升级 / 续费
-                    </SettingsButton>
+                  {myOrgs.length > 1 && (
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      共 {myOrgs.length} 个
+                    </span>
                   )}
                 </div>
-              </SettingsCard>
+                <div className="flex flex-col gap-1">
+                  {myOrgs.map((org) => (
+                    <div
+                      key={org.id}
+                      className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5"
+                      style={{ backgroundColor: 'var(--bg-field)' }}
+                    >
+                      <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
+                        {org.name}
+                      </span>
+                      <span
+                        className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+                        style={{
+                          backgroundColor: 'var(--bg-secondary)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        {roleLabel(org.role)}
+                      </span>
+                      <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        组织等级：{orgPlanLabel(org.planKey)}
+                      </span>
+                      <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        {org.planKey === 'free' || !org.planExpiresAt
+                          ? '未开通团队订阅'
+                          : `到期：${expiryText(org.planExpiresAt)}`}
+                      </span>
+                      {canManageOrganization(org) && (
+                        <SettingsButton
+                          variant="secondary"
+                          className="ml-auto"
+                          onClick={() => void openOrganization({ organizationId: org.id })}
+                        >
+                          升级 / 续费
+                        </SettingsButton>
+                      )}
+                    </div>
+                  ))}
+                  {orgFallback && (
+                    <div
+                      className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5"
+                      style={{ backgroundColor: 'var(--bg-field)' }}
+                    >
+                      <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
+                        {orgFallback.name}
+                      </span>
+                      <span
+                        className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+                        style={{
+                          backgroundColor: 'var(--bg-secondary)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        {roleLabel(orgFallback.role)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </>
         ) : (
