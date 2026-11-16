@@ -245,70 +245,101 @@ fn parse_query(query: &str) -> std::collections::HashMap<String, String> {
     map
 }
 
-/// 只接一个回调请求：解析 code / state，回一个提示页，再返回结果
+/// 等待回调：只处理 `GET /callback`，其余连接（浏览器预连接、favicon、代理 CONNECT）回 204 后继续等。
+///
+/// 浏览器一次导航可能并行开多条连接，只 accept 第一条会把真正的回调挤掉：
+/// 真正的回调请求落到已关闭的监听上，页面显示「无法访问此网站」，
+/// 用户就永远看不到「授权成功」。因此这里必须循环到真正的 `/callback` 为止。
 async fn accept_callback(
     listener: tokio::net::TcpListener,
     expected_state: &str,
 ) -> Result<String, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let (mut socket, _) = listener
-        .accept()
-        .await
-        .map_err(|e| format!("等待回调失败：{}", e))?;
+    const WAIT_TOTAL: std::time::Duration = std::time::Duration::from_secs(180);
+    const WAIT_READ: std::time::Duration = std::time::Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + WAIT_TOTAL;
 
-    let mut buf = vec![0u8; 8192];
-    let n = socket
-        .read(&mut buf)
-        .await
-        .map_err(|e| format!("读取回调失败：{}", e))?;
-    let request = String::from_utf8_lossy(&buf[..n]).to_string();
-    let target = request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("");
-    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
-    let params = parse_query(query);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err("等待授权回调超时，请回到 PilotDesk 重新登录。".to_string());
+        }
 
-    let (message, ok) = if let Some(err) = params.get("error") {
-        (format!("授权未完成：{}", err), false)
-    } else if params.get("state").map(String::as_str) != Some(expected_state) {
-        (
-            "state 校验失败，请回到 PilotDesk 重新登录。".to_string(),
-            false,
-        )
-    } else {
-        (
-            "授权成功，可以关闭此页面并回到 PilotDesk。".to_string(),
-            true,
-        )
-    };
+        let (mut socket, _) = tokio::time::timeout(remaining, listener.accept())
+            .await
+            .map_err(|_| "等待授权回调超时，请回到 PilotDesk 重新登录。".to_string())?
+            .map_err(|e| format!("等待回调失败：{}", e))?;
 
-    let html = format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\
+        let mut buf = vec![0u8; 8192];
+        let n = match tokio::time::timeout(WAIT_READ, socket.read(&mut buf)).await {
+            Ok(Ok(n)) => n,
+            // 只连不发（预连接）或读超时：礼貌关闭，继续等真正的回调
+            _ => {
+                let _ = socket
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .await;
+                continue;
+            }
+        };
+        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+        let target = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("");
+
+        // favicon、预连接、代理 CONNECT 等：不是回调，忽略并继续等
+        if !target.starts_with("/callback") {
+            let _ = socket
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await;
+            continue;
+        }
+
+        let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+        let params = parse_query(query);
+
+        let (message, ok) = if let Some(err) = params.get("error") {
+            (format!("授权未完成：{}", err), false)
+        } else if params.get("state").map(String::as_str) != Some(expected_state) {
+            (
+                "state 校验失败，请回到 PilotDesk 重新登录。".to_string(),
+                false,
+            )
+        } else {
+            (
+                "授权成功，已可关闭此页面并回到 PilotDesk。".to_string(),
+                true,
+            )
+        };
+
+        let html = format!(
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>PilotDesk 授权</title></head>\
 <body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;\
 font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;\
-background:#0b1020;color:#e8ecf8\"><p style=\"font-size:15px\">{}</p></body></html>",
-        message
-    );
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        html.as_bytes().len(),
-        html
-    );
-    let _ = socket.write_all(response.as_bytes()).await;
-    let _ = socket.flush().await;
+background:#0b1020;color:#e8ecf8\"><p style=\"font-size:15px;text-align:center\">{}</p></body></html>",
+            message
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html.as_bytes().len(),
+            html
+        );
+        let _ = socket.write_all(response.as_bytes()).await;
+        let _ = socket.flush().await;
 
-    if !ok {
-        return Err(message);
+        if !ok {
+            return Err(message);
+        }
+        return params
+            .get("code")
+            .cloned()
+            .filter(|c| !c.is_empty())
+            .ok_or_else(|| "回调里没有授权码".to_string());
     }
-    params
-        .get("code")
-        .cloned()
-        .filter(|c| !c.is_empty())
-        .ok_or_else(|| "回调里没有授权码".to_string())
 }
 
 // ── 令牌续期 ────────────────────────────────────────────────────
