@@ -314,14 +314,26 @@ async fn accept_callback(
             )
         };
 
+        // 成功时给出「即将自动关闭」的提示并真的关掉：用户不用自己找关闭按钮，
+        // 也不会因为停留在一个 127.0.0.1 页面上误以为网络出了问题。
+        let hint = if ok {
+            "<br><span style=\"font-size:13px;color:#9aa5c4\">本页将在 3 秒后自动关闭。</span>"
+        } else {
+            ""
+        };
+        let script = if ok {
+            "<script>setTimeout(function(){window.close()},3000)</script>"
+        } else {
+            ""
+        };
         let html = format!(
             "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>PilotDesk 授权</title></head>\
 <body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;\
 font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;\
-background:#0b1020;color:#e8ecf8\"><p style=\"font-size:15px;text-align:center\">{}</p></body></html>",
-            message
+background:#0b1020;color:#e8ecf8\"><p style=\"font-size:15px;text-align:center\">{}{}</p>{}</body></html>",
+            message, hint, script
         );
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

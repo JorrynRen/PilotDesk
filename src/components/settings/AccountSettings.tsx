@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Check, ChevronRight, Cloud, Loader2, LogIn, LogOut, UploadCloud } from 'lucide-react';
+import { Building2, Check, ChevronRight, Cloud, Loader2, LogIn, LogOut, UploadCloud } from 'lucide-react';
 
 import { AccountAvatar } from '../common/AccountAvatar';
 import { PlanBadge } from '../common/PlanBadge';
@@ -20,6 +20,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { confirmDialog } from '../../stores/confirmStore';
 import type { HostStatusView } from '../../types/enclave';
 import {
+  canManageOrganization,
   type OrganizationSummary,
   orgSupportsUsageBoard,
 } from '../../utils/orgSharedSpace';
@@ -60,6 +61,15 @@ interface UsageReportResult {
 function roleLabel(role: string): string {
   const map: Record<string, string> = { owner: '所有者', admin: '管理员', member: '成员' };
   return map[role] ?? role;
+}
+
+/** 组织档位的中文名（平台下发 planKey；未知档位回退显示键本身） */
+function orgPlanLabel(planKey: string): string {
+  const key = (planKey ?? '').trim().toLowerCase();
+  if (key === 'team') return '团队版';
+  if (key === 'pro') return '专业版';
+  if (!key || key === 'free') return '免费版';
+  return planKey;
 }
 
 /** 账号设置页 props */
@@ -147,6 +157,14 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
   const reportableOrgs = orgOptions?.filter(orgSupportsUsageBoard) ?? [];
   const hasReportableOrg = reportableOrgs.length > 0;
   const canReportNow = canReport && hasReportableOrg;
+
+  // 组织信息（所在组织 / 角色 / 组织等级 / 到期）：优先用 org_list_mine 的完整档位；
+  // 取不到时退回 /me 携带的组织摘要（只够显示名称与角色）。
+  const orgDetail =
+    (sourceOrganization ? orgOptions?.find((o) => o.id === sourceOrganization.id) : undefined) ??
+    (sourceOrganization ? null : (orgOptions?.[0] ?? null));
+  const orgName = orgDetail?.name ?? sourceOrganization?.name ?? '';
+  const orgRole = orgDetail?.role ?? sourceOrganization?.role ?? '';
 
   useEffect(() => {
     // 账号切换 / 退出时先清空旧组织能力，避免重新拉取期间沿用上一个账号的可上报状态。
@@ -334,7 +352,6 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                 <SettingsButton
                   variant="secondary"
                   onClick={() => void openPlatform('portal')}
-                  title="在浏览器打开官网会员中心（改昵称 / 改密码 / 注销账户）"
                 >
                   修改账户信息
                 </SettingsButton>
@@ -356,11 +373,6 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                 <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   {account.expiresAt ? `到期：${expiryText(account.expiresAt)}` : '长期有效'}
                 </span>
-                {fromOrganization && account.organization && (
-                  <span className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                    权益来源：{account.organization.name}（{roleLabel(account.organization.role)}）
-                  </span>
-                )}
               </div>
               <div className="flex items-center gap-2">
                 <SettingsButton
@@ -375,6 +387,49 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                 </SettingsButton>
               </div>
             </SettingsCard>
+
+            {/* 组织信息：所在组织 / 角色 / 组织等级 / 到期；升级续费只对管理员与所有者开放 */}
+            {orgName && (
+              <SettingsCard className="mt-3">
+                <div className="min-w-0 flex items-center gap-2">
+                  <Building2 size={13} style={{ color: 'var(--text-secondary)' }} />
+                  <span className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                    所在组织
+                  </span>
+                  <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
+                    {orgName}
+                  </span>
+                  <span
+                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+                    style={{
+                      backgroundColor: 'var(--bg-secondary)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    {roleLabel(orgRole)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                  <span>组织等级：{orgDetail ? orgPlanLabel(orgDetail.planKey) : '—'}</span>
+                  <span>
+                    {orgDetail
+                      ? orgDetail.planKey === 'free' || !orgDetail.planExpiresAt
+                        ? '未开通团队订阅'
+                        : `到期：${expiryText(orgDetail.planExpiresAt)}`
+                      : '—'}
+                  </span>
+                  {canManageOrganization(orgDetail) && (
+                    <SettingsButton
+                      variant="secondary"
+                      onClick={() => void openOrganization({ organizationId: orgDetail!.id })}
+                    >
+                      升级 / 续费
+                    </SettingsButton>
+                  )}
+                </div>
+              </SettingsCard>
+            )}
           </>
         ) : (
           <SettingsCard>
