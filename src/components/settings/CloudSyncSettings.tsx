@@ -15,6 +15,7 @@ import {
   Cloud,
   Laptop,
   Loader2,
+  Pencil,
   RefreshCw,
   Trash2,
   Wifi,
@@ -297,6 +298,9 @@ export function CloudSyncSettings() {
   const [remoteDevices, setRemoteDevices] = useState<RemoteDevice[]>([]);
   const [remoteRuns, setRemoteRuns] = useState<RemoteRun[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(false);
+  /** 正在改名的设备 id（null = 无）与输入值 */
+  const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState('');
 
   const refreshRemote = async () => {
     if (!canRemoteRun) return;
@@ -335,22 +339,47 @@ export function CloudSyncSettings() {
     }
   };
 
-  const revokeDevice = async (device: RemoteDevice) => {
+  /** 保存设备别名：只改云端展示名，令牌与在线状态不变 */
+  const saveDeviceName = async (device: RemoteDevice) => {
+    if (device.id == null) return;
+    const name = editingName.trim();
+    if (!name || name === device.name) {
+      setEditingDeviceId(null);
+      return;
+    }
+    setRemoteLoading(true);
+    try {
+      await invoke('remote_device_rename', { deviceId: device.id, name });
+      setEditingDeviceId(null);
+      await refreshRemote();
+      showToast('设备别名已更新', 'success');
+    } catch (e) {
+      showToast(`改名失败：${errorMessage(e)}`, 'error');
+    } finally {
+      setRemoteLoading(false);
+    }
+  };
+
+  /** 删除设备登记记录：删除后该设备停止领取远程工作流，需要时可重新登记 */
+  const deleteDevice = async (device: RemoteDevice) => {
     if (device.id == null) return;
     const confirmed = await confirmDialog({
-      title: '撤销远程设备',
+      title: '删除远程设备',
       message: device.currentDevice
-        ? `撤销「${device.name}」后，本机将停止领取远程工作流，需要时再重新登记。`
-        : `撤销「${device.name}」后，该设备将不能再接收新的远程工作流。`,
-      confirmText: '撤销设备',
+        ? `删除「${device.name}」后，本机将停止领取远程工作流，需要时再重新登记。`
+        : `删除「${device.name}」后，该设备将不能再接收新的远程工作流。`,
+      confirmText: '删除设备',
     });
     if (!confirmed) return;
+    setRemoteLoading(true);
     try {
-      await invoke('remote_device_revoke', { deviceId: device.id });
+      await invoke('remote_device_delete', { deviceId: device.id });
       await refreshRemote();
-      showToast('设备已撤销', 'success');
+      showToast('设备已删除', 'success');
     } catch (e) {
-      showToast(`撤销失败：${errorMessage(e)}`, 'error');
+      showToast(`删除失败：${errorMessage(e)}`, 'error');
+    } finally {
+      setRemoteLoading(false);
     }
   };
 
@@ -660,10 +689,48 @@ export function CloudSyncSettings() {
                           <Laptop size={13} />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
-                            {device.name}
-                            {device.currentDevice ? '（当前设备）' : ''}
-                          </div>
+                          {editingDeviceId === device.id ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                value={editingName}
+                                onChange={(e) => setEditingName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') void saveDeviceName(device);
+                                  if (e.key === 'Escape') setEditingDeviceId(null);
+                                }}
+                                autoFocus
+                                maxLength={80}
+                                aria-label="设备别名"
+                                className="min-w-0 flex-1 rounded px-1.5 py-0.5 text-xs outline-none"
+                                style={{
+                                  background: 'var(--bg-secondary)',
+                                  border: '1px solid var(--border)',
+                                  color: 'var(--text-primary)',
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="text-[10px]"
+                                style={{ color: 'var(--accent)' }}
+                                onClick={() => void saveDeviceName(device)}
+                              >
+                                保存
+                              </button>
+                              <button
+                                type="button"
+                                className="text-[10px]"
+                                style={{ color: 'var(--text-tertiary)' }}
+                                onClick={() => setEditingDeviceId(null)}
+                              >
+                                取消
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
+                              {device.name}
+                              {device.currentDevice ? '（当前设备）' : ''}
+                            </div>
+                          )}
                           <div
                             className="text-[10px]"
                             style={{ color: 'var(--text-tertiary)' }}
@@ -682,16 +749,27 @@ export function CloudSyncSettings() {
                           {device.online ? <Wifi size={11} /> : <WifiOff size={11} />}
                           {device.revokedAt ? '已撤销' : device.online ? '在线' : '离线'}
                         </span>
-                        {!device.revokedAt && (
+                        {editingDeviceId !== device.id && (
                           <button
                             type="button"
                             className="pd-icon-btn p-1"
-                            title="撤销设备"
-                            onClick={() => void revokeDevice(device)}
+                            title="更改设备别名"
+                            onClick={() => {
+                              setEditingDeviceId(device.id);
+                              setEditingName(device.name);
+                            }}
                           >
-                            <Trash2 size={12} />
+                            <Pencil size={12} />
                           </button>
                         )}
+                        <button
+                          type="button"
+                          className="pd-icon-btn p-1"
+                          title="删除设备"
+                          onClick={() => void deleteDevice(device)}
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
                     ))}
                   </div>

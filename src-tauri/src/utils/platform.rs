@@ -212,6 +212,51 @@ pub async fn get_json<T: serde::de::DeserializeOwned>(
         .map_err(|e| AppError::Json(format!("解析平台响应失败：{}", e)))
 }
 
+/// PATCH 一个 JSON 接口（可选 Bearer）
+pub async fn patch_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+    path: &str,
+    body: &B,
+    token: Option<&str>,
+) -> Result<T, AppError> {
+    let mut req = http_client()
+        .patch(format!("{}{}", api_base(), path))
+        .json(body);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| AppError::Network(format!("请求平台失败：{}", e)))?;
+    if !resp.status().is_success() {
+        return Err(error_from(resp).await);
+    }
+    resp.json::<T>()
+        .await
+        .map_err(|e| AppError::Json(format!("解析平台响应失败：{}", e)))
+}
+
+/// DELETE 一个 JSON 接口（可选 Bearer）
+pub async fn delete_json<T: serde::de::DeserializeOwned>(
+    path: &str,
+    token: Option<&str>,
+) -> Result<T, AppError> {
+    let mut req = http_client().delete(format!("{}{}", api_base(), path));
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| AppError::Network(format!("请求平台失败：{}", e)))?;
+    if !resp.status().is_success() {
+        return Err(error_from(resp).await);
+    }
+    resp.json::<T>()
+        .await
+        .map_err(|e| AppError::Json(format!("解析平台响应失败：{}", e)))
+}
+
 /// POST 一个 JSON 接口（可选 Bearer）
 pub async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     path: &str,

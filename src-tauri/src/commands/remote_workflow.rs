@@ -69,6 +69,11 @@ struct RegisterDeviceResponse {
     device_token: String,
 }
 
+#[derive(Deserialize)]
+struct RenameDeviceResponse {
+    device: RemoteDeviceSummary,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteRunView {
@@ -228,14 +233,41 @@ pub async fn remote_devices_list(
         .collect())
 }
 
+/// 改设备别名：只改云端展示名，设备令牌与在线状态不变。
 #[tauri::command]
-pub async fn remote_device_revoke(
+pub async fn remote_device_rename(
+    state: tauri::State<'_, crate::DbState>,
+    device_id: i64,
+    name: String,
+) -> Result<RemoteDeviceView, String> {
+    let access = require_access(state.inner()).await?;
+    let path = format!("/api/v1/me/remote/devices/{device_id}");
+    let response: RenameDeviceResponse =
+        platform::patch_json(&path, &serde_json::json!({ "name": name }), Some(&access))
+            .await
+            .map_err(|e| e.to_string())?;
+    // 同步本地身份里的名称：离线时也能显示改后的别名
+    let conn = state
+        .get_conn()
+        .map_err(|e| format!("数据库连接失败：{}", e))?;
+    if let Some(mut item) = load_identity(&conn).map_err(|e| e.to_string())? {
+        if item.device_id == device_id {
+            item.name = response.device.name.clone();
+            save_identity(&conn, &item).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(to_view(response.device, Some(device_id)))
+}
+
+/// 删除设备登记记录（云端硬删除）；若删的是本机登记，同时清掉本地设备令牌。
+#[tauri::command]
+pub async fn remote_device_delete(
     state: tauri::State<'_, crate::DbState>,
     device_id: i64,
 ) -> Result<(), String> {
     let access = require_access(state.inner()).await?;
-    let path = format!("/api/v1/me/remote/devices/{device_id}/revoke");
-    let _: serde_json::Value = platform::post_json(&path, &serde_json::json!({}), Some(&access))
+    let path = format!("/api/v1/me/remote/devices/{device_id}");
+    let _: serde_json::Value = platform::delete_json(&path, Some(&access))
         .await
         .map_err(|e| e.to_string())?;
     let conn = state
