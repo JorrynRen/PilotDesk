@@ -125,21 +125,26 @@ fn is_transient_read_error(err: &PlatformError) -> bool {
     err.status == 0 || err.status == 429 || err.status >= 500
 }
 
-/// GET 一个 JSON 接口，**瞬时故障自动重试一次**（只用于幂等读取）。
+/// GET 一个 JSON 接口，**瞬时故障自动重试两次**（只用于幂等读取）。
 ///
 /// 客户端经公网隧道访问平台，网关偶发 503「Service Unavailable」；
-/// 一次抖动不该让用户看到「读取设备失败」，重试后仍失败才如实报错。
+/// 一次抖动不该让用户看到「读取设备失败」，退避重试后仍失败才如实报错。
 pub async fn get_json_retry<T: serde::de::DeserializeOwned>(
     path: &str,
     token: Option<&str>,
 ) -> Result<T, AppError> {
-    match get_json_with_status::<T>(path, token).await {
-        Ok(value) => Ok(value),
-        Err(err) if is_transient_read_error(&err) => {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            get_json(path, token).await
+    // 首轮 + 两次重试：隧道抖动通常几百毫秒到一秒内自愈
+    let mut attempt = 0usize;
+    loop {
+        match get_json_with_status::<T>(path, token).await {
+            Ok(value) => return Ok(value),
+            Err(err) if is_transient_read_error(&err) && attempt < 2 => {
+                let delay_ms = if attempt == 0 { 300 } else { 800 };
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                attempt += 1;
+            }
+            Err(err) => return Err(AppError::External(err.message)),
         }
-        Err(err) => Err(AppError::External(err.message)),
     }
 }
 

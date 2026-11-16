@@ -298,6 +298,8 @@ export function CloudSyncSettings() {
   const [remoteDevices, setRemoteDevices] = useState<RemoteDevice[]>([]);
   const [remoteRuns, setRemoteRuns] = useState<RemoteRun[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(false);
+  /** 远程设备/请求读取失败的内联提示（自动加载失败时不弹 toast，避免反复打断） */
+  const [remoteError, setRemoteError] = useState('');
   /** 正在改名的设备 id（null = 无）与输入值 */
   const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -314,8 +316,10 @@ export function CloudSyncSettings() {
       setRemoteDevice(devices.find((d) => d.currentDevice && !d.revokedAt) ?? null);
       setRemoteDevices(devices);
       setRemoteRuns(runs.slice(0, 12));
+      setRemoteError('');
     } catch (e) {
-      showToast(`读取远程设备失败：${errorMessage(e)}`, 'error');
+      // 状态读取失败只做内联提示：平台偶发 503（隧道抖动）不该被反复弹出的 toast 放大
+      setRemoteError(errorMessage(e));
     } finally {
       setRemoteLoading(false);
     }
@@ -614,6 +618,26 @@ export function CloudSyncSettings() {
           />
         ) : (
           <>
+            {remoteError && (
+              <div
+                className="mb-2 flex items-center gap-2 rounded-md px-3 py-2 text-[11px]"
+                style={{
+                  backgroundColor: 'var(--status-warning-bg)',
+                  color: 'var(--status-warning)',
+                }}
+              >
+                <span className="min-w-0 flex-1">读取远程设备失败：{remoteError}</span>
+                <button
+                  type="button"
+                  className="pd-btn shrink-0 text-[10px]"
+                  style={{ color: 'var(--accent)' }}
+                  onClick={() => void refreshRemote()}
+                  disabled={remoteLoading}
+                >
+                  重试
+                </button>
+              </div>
+            )}
             <SettingsCard>
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <Laptop size={15} style={{ color: 'var(--text-secondary)' }} />

@@ -77,10 +77,6 @@ export function UpdateChecker({ u }: { u: Updater }) {
           {error}
         </div>
       )}
-
-      <p className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-        Agent 更新检查请前往「环境配置」页面
-      </p>
     </div>
   );
 }
