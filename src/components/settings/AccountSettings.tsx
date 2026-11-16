@@ -317,22 +317,62 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
             </span>
           </SettingsCard>
         ) : account ? (
-          <SettingsCard>
-            <div className="flex items-center gap-2.5 min-w-0">
-              <AccountAvatar nickname={account.nickname} email={account.email} avatarId={account.avatarId} size={32} radius={8} />
-              <div className="min-w-0">
-                <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
-                  {account.nickname || account.email}
-                </div>
-                <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
-                  {account.email}
+          <>
+            <SettingsCard>
+              <div className="flex items-center gap-2.5 min-w-0">
+                <AccountAvatar nickname={account.nickname} email={account.email} avatarId={account.avatarId} size={32} radius={8} />
+                <div className="min-w-0">
+                  <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                    {account.nickname || account.email}
+                  </div>
+                  <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                    {account.email}
+                  </div>
                 </div>
               </div>
-            </div>
-            <SettingsButton variant="secondary" icon={<LogOut size={13} />} onClick={() => void handleLogout()}>
-              退出登录
-            </SettingsButton>
-          </SettingsCard>
+              <SettingsButton variant="secondary" icon={<LogOut size={13} />} onClick={() => void handleLogout()}>
+                退出登录
+              </SettingsButton>
+            </SettingsCard>
+
+            {/* 会员等级并入平台账号：等级/到期/权益来源与账户信息是同一件事，不再单列区块 */}
+            <SettingsCard className="mt-3">
+              <div className="min-w-0 flex items-center gap-2">
+                <PlanBadge
+                  planKey={account.planKey}
+                  planName={account.planName}
+                  expired={account.expired}
+                  stale={account.stale}
+                />
+                <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                  {account.expiresAt ? `到期：${expiryText(account.expiresAt)}` : '长期有效'}
+                </span>
+                {fromOrganization && account.organization && (
+                  <span className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                    权益来源：{account.organization.name}（{roleLabel(account.organization.role)}）
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <SettingsButton
+                  onClick={() => void openPlatform('portal')}
+                  title="在浏览器打开官网会员中心（改昵称 / 改密码 / 注销账户）"
+                >
+                  修改账户信息
+                </SettingsButton>
+                <SettingsButton
+                  variant="primary"
+                  onClick={openRecommendedUpgrade}
+                >
+                  {fromOrganization
+                    ? '组织与订阅'
+                    : upgradeOffer
+                      ? `了解${upgradeOffer.planName}`
+                      : '升级 / 续费'}
+                </SettingsButton>
+              </div>
+            </SettingsCard>
+          </>
         ) : (
           <SettingsCard>
             <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
@@ -356,6 +396,59 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
               </SettingsButton>
             )}
           </SettingsCard>
+        )}
+
+        {account && upgradeOffer && (
+          <UpgradePrompt
+            className="mt-3"
+            capability={upgradeOffer.capability}
+            plan={upgradeOffer.plan}
+            title={upgradeOffer.title}
+            description={upgradeOffer.description}
+            source="account-settings"
+            onUpgrade={openRecommendedUpgrade}
+          />
+        )}
+
+        {account?.stale && (
+          <p className="mt-2 text-[11px]" style={{ color: '#F59E0B' }}>
+            离线：平台不可达，按上次已知权益显示（7 天宽限内）。
+          </p>
+        )}
+
+        {account && (
+          <div className="mt-3 px-3 py-2.5 rounded-lg" style={{ backgroundColor: 'var(--bg-raised)' }}>
+            <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+              已解锁功能
+            </div>
+            {account.capabilities.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {[...account.capabilities]
+                  .sort(
+                    (a, b) =>
+                      Number(a === 'support.priority') - Number(b === 'support.priority'),
+                  )
+                  .map((key) => (
+                    <span
+                      key={key}
+                      className="px-2 py-0.5 rounded text-[11px]"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                      }}
+                    >
+                      {key === CAP_CLOUD_SYNC
+                        ? cloudSyncEntitlementLabel(account.quotas)
+                        : capabilityLabel(key)}
+                    </span>
+                  ))}
+              </div>
+            ) : (
+              <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                暂无（免费档）。本地功能不设限；个人云同步额度以当前套餐权益为准。
+              </div>
+            )}
+          </div>
         )}
 
         {error && (
@@ -486,103 +579,6 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
           </span>
           <ChevronRight size={13} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
         </button>
-      )}
-
-      {account && (
-        <SettingsSection
-          title="会员等级"
-          description="等级决定哪些功能入口可用；到期后自动回到免费档。"
-          actions={
-            <div className="flex items-center gap-2">
-              <SettingsButton
-                onClick={() => void openPlatform('portal')}
-                title="在浏览器打开官网会员中心（改昵称 / 改密码 / 注销账户）"
-              >
-                修改账户信息
-              </SettingsButton>
-              <SettingsButton
-                variant="primary"
-                onClick={openRecommendedUpgrade}
-              >
-                {fromOrganization
-                  ? '组织与订阅'
-                  : upgradeOffer
-                    ? `了解${upgradeOffer.planName}`
-                    : '升级 / 续费'}
-              </SettingsButton>
-            </div>
-          }
-        >
-          {upgradeOffer && (
-            <UpgradePrompt
-              className="mb-3"
-              capability={upgradeOffer.capability}
-              plan={upgradeOffer.plan}
-              title={upgradeOffer.title}
-              description={upgradeOffer.description}
-              source="account-settings"
-              onUpgrade={openRecommendedUpgrade}
-            />
-          )}
-
-          <SettingsCard>
-            <div className="min-w-0 flex items-center gap-2">
-              <PlanBadge
-                planKey={account.planKey}
-                planName={account.planName}
-                expired={account.expired}
-                stale={account.stale}
-              />
-              <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-                {account.expiresAt ? `到期：${expiryText(account.expiresAt)}` : '长期有效'}
-              </span>
-            </div>
-            {fromOrganization && account.organization && (
-              <span className="text-[11px] shrink-0 ml-2" style={{ color: 'var(--text-secondary)' }}>
-                权益来源：{account.organization.name}（{roleLabel(account.organization.role)}）
-              </span>
-            )}
-          </SettingsCard>
-
-          {account.stale && (
-            <p className="mt-2 text-[11px]" style={{ color: '#F59E0B' }}>
-              离线：平台不可达，按上次已知权益显示（7 天宽限内）。
-            </p>
-          )}
-
-          <div className="mt-2 px-3 py-2.5 rounded-lg" style={{ backgroundColor: 'var(--bg-raised)' }}>
-            <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              已解锁功能
-            </div>
-            {account.capabilities.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {[...account.capabilities]
-                  .sort(
-                    (a, b) =>
-                      Number(a === 'support.priority') - Number(b === 'support.priority'),
-                  )
-                  .map((key) => (
-                    <span
-                      key={key}
-                      className="px-2 py-0.5 rounded text-[11px]"
-                      style={{
-                        backgroundColor: 'var(--bg-secondary)',
-                        color: 'var(--text-primary)',
-                      }}
-                    >
-                      {key === CAP_CLOUD_SYNC
-                        ? cloudSyncEntitlementLabel(account.quotas)
-                        : capabilityLabel(key)}
-                    </span>
-                  ))}
-              </div>
-            ) : (
-              <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                暂无（免费档）。本地功能不设限；个人云同步额度以当前套餐权益为准。
-              </div>
-            )}
-          </div>
-        </SettingsSection>
       )}
     </div>
   );

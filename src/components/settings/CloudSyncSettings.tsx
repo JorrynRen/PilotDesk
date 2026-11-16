@@ -483,6 +483,91 @@ export function CloudSyncSettings() {
             ? `本机现有 ${status.rootCount} 个主工作流、${status.subflowCount} 个子工作流。`
             : ''}
         </p>
+
+        {/* ③ 同步间隔（分钟）：1–1440，后端每轮读取 → 保存后下一轮生效（无需重启） */}
+        <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+          <div className="mb-1.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            同步间隔
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={SYNC_INTERVAL_MIN}
+              max={SYNC_INTERVAL_MAX}
+              value={syncIntervalMin}
+              disabled={!canCloudSync}
+              onChange={(e) => void changeSyncInterval(e.target.value)}
+              className="px-2 py-1 rounded-lg text-xs outline-none disabled:opacity-50"
+              style={{
+                width: 72,
+                backgroundColor: 'var(--bg-secondary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border)',
+              }}
+              title="自动同步间隔（分钟），范围 1–1440"
+            />
+            <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              分钟（1–1440，保存后下一轮生效）
+            </span>
+          </div>
+        </div>
+
+        {/* ④ 冲突与失败明细：默认收起，可展开 */}
+        <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+          <button
+            onClick={() => setDetailsOpen((v) => !v)}
+            className="flex items-center gap-1 text-[11px]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            {detailsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            {detailsOpen ? '收起冲突与失败明细' : '展开冲突与失败明细'}
+          </button>
+
+          {detailsOpen && (
+            <SettingsCard className="mt-2">
+              <div className="space-y-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                <div>
+                  上次结果：{status?.lastResult ? status.lastResult : '暂无记录'}
+                </div>
+
+                {lastRun?.conflictItems && lastRun.conflictItems.length > 0 && (
+                  <div>
+                    本次冲突对象（{lastRun.conflictItems.length}）：你的改动已保存为本地版本，可在工作流「版本」中回滚
+                    <ul className="mt-1 list-disc pl-4" style={{ color: 'var(--text-primary)' }}>
+                      {lastRun.conflictItems.map((it) => (
+                        <li key={it.id}>{it.name}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {lastRun?.failures && lastRun.failures.length > 0 && (
+                  <div style={{ color: '#F59E0B' }}>
+                    本次失败对象（{lastRun.failures.length}）
+                    <ul className="mt-1 list-disc pl-4">
+                      {lastRun.failures.map((f, i) => (
+                        <li key={i}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {lastRun?.updatedItems && lastRun.updatedItems.length > 0 && (
+                  <div>
+                    本次被云端更新（{lastRun.updatedItems.length}）：本地原内容已备份为本地版本
+                    <ul className="mt-1 list-disc pl-4" style={{ color: 'var(--text-primary)' }}>
+                      {lastRun.updatedItems.map((it) => (
+                        <li key={it.id}>{it.name}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {!hasDetails && <div>本次会话暂无冲突或失败记录。</div>}
+              </div>
+            </SettingsCard>
+          )}
+        </div>
       </SettingsSection>
 
       {/* 远程发起：设备登记与请求状态 */}
@@ -677,88 +762,6 @@ export function CloudSyncSettings() {
               </div>
             </SettingsCard>
           </>
-        )}
-      </SettingsSection>
-
-      {/* ③ 同步间隔（分钟）：1–1440，后端每轮读取 → 保存后下一轮生效（无需重启） */}
-      <SettingsSection title="同步间隔">
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min={SYNC_INTERVAL_MIN}
-            max={SYNC_INTERVAL_MAX}
-            value={syncIntervalMin}
-            disabled={!canCloudSync}
-            onChange={(e) => void changeSyncInterval(e.target.value)}
-            className="px-2 py-1 rounded-lg text-xs outline-none disabled:opacity-50"
-            style={{
-              width: 72,
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
-            title="自动同步间隔（分钟），范围 1–1440"
-          />
-          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            分钟（1–1440，保存后下一轮生效）
-          </span>
-        </div>
-      </SettingsSection>
-
-      {/* ④ 冲突与失败明细：默认收起，可展开 */}
-      <SettingsSection title="冲突与失败明细">
-        <button
-          onClick={() => setDetailsOpen((v) => !v)}
-          className="flex items-center gap-1 text-[11px]"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          {detailsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          {detailsOpen ? '收起明细' : '展开明细'}
-        </button>
-
-        {detailsOpen && (
-          <SettingsCard>
-            <div className="space-y-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-              <div>
-                上次结果：{status?.lastResult ? status.lastResult : '暂无记录'}
-              </div>
-
-              {lastRun?.conflictItems && lastRun.conflictItems.length > 0 && (
-                <div>
-                  本次冲突对象（{lastRun.conflictItems.length}）：你的改动已保存为本地版本，可在工作流「版本」中回滚
-                  <ul className="mt-1 list-disc pl-4" style={{ color: 'var(--text-primary)' }}>
-                    {lastRun.conflictItems.map((it) => (
-                      <li key={it.id}>{it.name}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {lastRun?.failures && lastRun.failures.length > 0 && (
-                <div style={{ color: '#F59E0B' }}>
-                  本次失败对象（{lastRun.failures.length}）
-                  <ul className="mt-1 list-disc pl-4">
-                    {lastRun.failures.map((f, i) => (
-                      <li key={i}>{f}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {lastRun?.updatedItems && lastRun.updatedItems.length > 0 && (
-                <div>
-                  本次被云端更新（{lastRun.updatedItems.length}）：本地原内容已备份为本地版本
-                  <ul className="mt-1 list-disc pl-4" style={{ color: 'var(--text-primary)' }}>
-                    {lastRun.updatedItems.map((it) => (
-                      <li key={it.id}>{it.name}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {!hasDetails && <div>本次会话暂无冲突或失败记录。</div>}
-            </div>
-          </SettingsCard>
         )}
       </SettingsSection>
     </div>

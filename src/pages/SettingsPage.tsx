@@ -64,7 +64,7 @@ const SETTINGS_GROUPS: {
     titleKey: 'settings.group.app',
     titleZh: '应用',
     items: [
-      { id: 'account', icon: User, labelKey: 'settings.tab.account', labelZh: '账号' },
+      { id: 'account', icon: User, labelKey: 'settings.tab.account', labelZh: '账号与组织' },
       { id: 'cloudsync', icon: Cloud, labelKey: 'settings.tab.cloudsync', labelZh: '个人云同步' },
       { id: 'general', icon: Settings, labelKey: 'settings.tab.general', labelZh: '通用设置' },
     ],
