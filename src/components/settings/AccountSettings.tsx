@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronRight, Cloud, Loader2, LogIn, LogOut, UploadCloud } from 'lucide-react';
+import { Check, ChevronRight, Cloud, Loader2, LogIn, LogOut, UploadCloud } from 'lucide-react';
 
 import { AccountAvatar } from '../common/AccountAvatar';
 import { PlanBadge } from '../common/PlanBadge';
@@ -330,9 +330,18 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                   </div>
                 </div>
               </div>
-              <SettingsButton variant="secondary" icon={<LogOut size={13} />} onClick={() => void handleLogout()}>
-                退出登录
-              </SettingsButton>
+              <div className="flex items-center gap-2">
+                <SettingsButton
+                  variant="secondary"
+                  onClick={() => void openPlatform('portal')}
+                  title="在浏览器打开官网会员中心（改昵称 / 改密码 / 注销账户）"
+                >
+                  修改账户信息
+                </SettingsButton>
+                <SettingsButton variant="secondary" icon={<LogOut size={13} />} onClick={() => void handleLogout()}>
+                  退出登录
+                </SettingsButton>
+              </div>
             </SettingsCard>
 
             {/* 会员等级并入平台账号：等级/到期/权益来源与账户信息是同一件事，不再单列区块 */}
@@ -354,12 +363,6 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <SettingsButton
-                  onClick={() => void openPlatform('portal')}
-                  title="在浏览器打开官网会员中心（改昵称 / 改密码 / 注销账户）"
-                >
-                  修改账户信息
-                </SettingsButton>
                 <SettingsButton
                   variant="primary"
                   onClick={openRecommendedUpgrade}
@@ -431,12 +434,14 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                   .map((key) => (
                     <span
                       key={key}
-                      className="px-2 py-0.5 rounded text-[11px]"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px]"
                       style={{
                         backgroundColor: 'var(--bg-secondary)',
+                        border: '1px solid var(--border)',
                         color: 'var(--text-primary)',
                       }}
                     >
+                      <Check size={10} style={{ color: 'var(--status-success)' }} />
                       {key === CAP_CLOUD_SYNC
                         ? cloudSyncEntitlementLabel(account.quotas)
                         : capabilityLabel(key)}
