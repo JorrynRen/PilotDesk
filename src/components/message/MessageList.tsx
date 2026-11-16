@@ -48,6 +48,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
   /** 搜索框是否展开：默认收起成图标，点右侧搜索图标展开，失焦后自动收回 */
   const [searchOpen, setSearchOpen] = useState(false);
   const searchWrapRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
   const [isSearchingMessages, setIsSearchingMessages] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -265,6 +266,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
               <div className="relative flex-1 min-w-0">
                 <input
                   type="text"
+                  ref={searchInputRef}
                   autoFocus
                   value={searchQuery}
                   onChange={(e) => handleMessageSearch(e.target.value)}
@@ -279,7 +281,14 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
                 />
                 {searchQuery && (
                   <button
-                    onClick={() => { setSearchQuery(''); setSearchResults(null); setHighlightedMessageId(null); }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setSearchQuery('');
+                      setSearchResults(null);
+                      setHighlightedMessageId(null);
+                      // 清除后把焦点交还输入框：否则焦点停在按钮上，之后点击别处不会再触发失焦收起
+                      searchInputRef.current?.focus();
+                    }}
                     className="absolute right-2 top-1/2 -translate-y-1/2"
                     style={{ color: 'var(--text-tertiary)' }}
                   >
@@ -302,6 +311,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
                 {searchResults.length > 0 && (
                   <>
                     <button
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
                         const next = Math.max(0, searchResultIndex - 1);
                         setSearchResultIndex(next);
@@ -316,6 +326,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="18 15 12 9 6 15"/></svg>
                     </button>
                     <button
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
                         const next = Math.min(searchResults.length - 1, searchResultIndex + 1);
                         setSearchResultIndex(next);
@@ -333,6 +344,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
                 )}
                 {searchResults.length > 0 && (
                   <button
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setSearchResultIndex(0);
                       setHighlightedMessageId(searchResults[0].id);
