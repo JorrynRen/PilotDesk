@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { ArrowLeft, Download, Loader2, Info } from 'lucide-react';
 
 import { MessageBubble } from '../message/MessageBubble';
-import { ProjectWorkspaceContext } from '../project/ProjectWorkspaceContext';
 import { SettingsButton } from '../settings';
 import { useHostPreviewStore } from '../../stores/hostPreviewStore';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -150,14 +149,6 @@ export function HostSessionPreview() {
             style={{ width: `${percent}%`, backgroundColor: 'var(--accent)' }}
           />
         )}
-      </div>
-
-      <div className="shrink-0 flex items-center px-4 py-1" style={{ backgroundColor: 'var(--bg-content)' }}>
-        <ProjectWorkspaceContext
-          projectId={preview.projectId}
-          workRoot={preview.cwd}
-          rootSourceLabel={preview.cwd ? '宿主恢复目录' : undefined}
-        />
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-4">

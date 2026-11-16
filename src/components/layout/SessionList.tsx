@@ -1114,17 +1114,15 @@ function SessionListFn({
       {/* Search / 宿主选择：宿主视图复用同一个输入框做客户端过滤 */}
       {view === 'host' ? (
         <div className="pd-session-search py-2 space-y-1.5">
-          {hostAgents.length > 1 ? (
+          {/* Agent 选择器常驻：单宿主时也保留下拉形态，避免只剩搜索框、看不出当前宿主 */}
+          {hostAgents.length > 0 ? (
             <Select
-              value={hostAgent ?? ''}
+              value={hostAgent ?? hostAgents[0] ?? ''}
               onChange={(v) => switchHostAgent(v || null)}
               options={hostAgents.map((a) => ({ value: a, label: getDisplayName(a) }))}
+              placeholder={t('sessionList.host.selectAgent', '选择宿主 Agent')}
               className="w-full"
             />
-          ) : hostAgents.length === 1 ? (
-            <div className="text-[10px] px-1 truncate" style={{ color: 'var(--text-tertiary)' }}>
-              {getDisplayName(hostAgents[0])}
-            </div>
           ) : null}
           <div className="relative">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
