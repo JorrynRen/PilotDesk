@@ -1293,10 +1293,11 @@ function ApiConfig({
  * 「关于」页的对外链接。
  *
  * `url` 为空 = 地址待补，渲染成不可点的行并标「待补充」；补齐字符串即生效，不需要改逻辑。
+ *
+ * 「官方网站」不在这里硬编码：它来自 Rust 的 `utils::site::OFFICIAL_SITE`
+ * （市场数据的官网源也派生自同一常量），换域名不需要改前端。
  */
 const ABOUT_LINKS: Array<{ label: string; url: string }> = [
-  // 官方网站：地址待提供
-  { label: '官方网站', url: '' },
   // 用户协议、隐私条款、开源软件声明（第三方依赖许可清单）、帮助文档：地址待提供
   { label: '用户协议', url: '' },
   { label: '隐私条款', url: '' },
@@ -1316,6 +1317,16 @@ const ABOUT_LINKS: Array<{ label: string; url: string }> = [
 function AboutSection() {
   const u = useUpdater();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
+  /** 官网地址由后端给出（唯一来源），前端不再写死域名 */
+  const [officialSite, setOfficialSite] = useState('');
+
+  useEffect(() => {
+    invoke<string>('site_official_url')
+      .then(setOfficialSite)
+      .catch(() => setOfficialSite(''));
+  }, []);
+
+  const aboutLinks = [{ label: '官方网站', url: officialSite }, ...ABOUT_LINKS];
 
   /**
    * 打开对外链接：交给**系统默认浏览器**，不在门户标签里内嵌。
@@ -1410,7 +1421,7 @@ function AboutSection() {
               应用内填写
             </span>
           </button>
-          {ABOUT_LINKS.map(({ label, url }) => (
+          {aboutLinks.map(({ label, url }) => (
             <button
               key={label}
               onClick={() => void openExternal(url)}

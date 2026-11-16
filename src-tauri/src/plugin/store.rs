@@ -360,7 +360,7 @@ async fn install_plugin_from_sources(
     host: &Mutex<PluginHost>,
 ) -> Result<String, String> {
     let mut last_err = String::new();
-    for source in crate::utils::market::SERVER_SOURCES {
+    for source in crate::utils::market::SERVER_SOURCES.iter() {
         // base_url 由「源 + 相对 path」动态解析，与源固定绑定
         let base_url = crate::utils::market::build_market_url(source, &online_plugin.path);
 

@@ -3035,6 +3035,7 @@ pub fn run() {
             commands::account::account_status,
             commands::account::account_logout,
             commands::account::account_platform_base,
+            commands::account::site_official_url,
             commands::org_share::org_list_mine,
             commands::org_share::org_list_shared_workflows,
             commands::org_share::org_list_shared_inspirations,

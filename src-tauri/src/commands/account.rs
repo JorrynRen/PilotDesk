@@ -607,6 +607,15 @@ pub fn account_platform_base() -> String {
     platform::api_base().to_string()
 }
 
+/// 官网基址，供「关于」页外链等前端展示使用。
+///
+/// 唯一来源是 `utils::site::OFFICIAL_SITE`（市场数据的官网源也从它派生），
+/// 换域名只改那一行，前端不再各自硬编码。
+#[tauri::command]
+pub fn site_official_url() -> String {
+    crate::utils::site::official_site().to_string()
+}
+
 /// 退出登录：先尽力吊销服务端令牌，再清本地（含飞地本机身份）。
 #[tauri::command]
 pub async fn account_logout(

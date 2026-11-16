@@ -95,6 +95,7 @@ pub fn wrap_user_request(body: &str, include_clock: bool) -> String {
 pub mod market;
 pub mod platform;
 pub mod process;
+pub mod site;
 
 #[cfg(test)]
 mod tests {

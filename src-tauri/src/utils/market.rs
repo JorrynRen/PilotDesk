@@ -6,9 +6,13 @@
 //!
 //! 本地路径管理见 utils/paths.rs。
 
+use std::sync::LazyLock;
+
 use serde_json::Value;
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+
+use crate::utils::site;
 
 /// URL 路径段编码集：保留 RFC 3986 的 unreserved 字符（`- . _ ~`），其余全部百分号编码。
 ///
@@ -25,12 +29,19 @@ fn encode_path_segment(s: &str) -> String {
 }
 
 /// 在线商店服务器源（按优先级排列）
-/// 1. jsdelivr CDN（主源，速度快，全球加速）
-/// 2. GitHub Raw（降级源，直连仓库）
-pub const SERVER_SOURCES: &[&str] = &[
-    "https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main",
-    "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main",
-];
+/// 1. 官网自建源（`<官网>/<slug>`，国内直连）
+/// 2. jsdelivr CDN（主 CDN，全球加速）
+/// 3. GitHub Raw（最后兜底，直连仓库）
+///
+/// 官网源由 `utils::site` 派生（换域名只改那一处），常量上下文无法拼字符串，
+/// 所以这里用 `LazyLock` 而不是 `const`。
+pub static SERVER_SOURCES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    vec![
+        site::official_market_base(),
+        "https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main".to_string(),
+        "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main".to_string(),
+    ]
+});
 
 /// 在线商店路径
 pub const AGENTS_CONFIG_PATH: &str = "/server/market/agents-config/agents-config.json";
@@ -151,7 +162,7 @@ pub(crate) async fn fetch_market_json_with_source(path: &str) -> Result<(Value, 
     for (source, url) in SERVER_SOURCES.iter().zip(urls.iter()) {
         match fetch_url(url).await {
             Ok(body) => match serde_json::from_str::<Value>(&body) {
-                Ok(json) => return Ok((json, (*source).to_string())),
+                Ok(json) => return Ok((json, source.clone())),
                 Err(e) => {
                     last_err = format!("解析 JSON 失败 ({}): {}", url, e);
                 }
