@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import { CheckSquare, Loader2, Sparkles, X } from 'lucide-react';
+import { CheckSquare, Loader2, Search, Sparkles, X } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { MessageSelectionBar } from './MessageSelectionBar';
 import { copyToClipboard, useMessageSelection } from './messageSelection';
@@ -45,6 +45,8 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
   const [atBottom, setAtBottom] = useState(true);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  /** 搜索框是否展开：默认收起成图标，点右侧搜索图标展开，清空内容后自动收回 */
+  const [searchOpen, setSearchOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
   const [isSearchingMessages, setIsSearchingMessages] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -110,6 +112,8 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
     if (!query.trim()) {
       setSearchResults(null);
       setHighlightedMessageId(null);
+      // 内容清空 → 搜索框收回成图标
+      setSearchOpen(false);
       return;
     }
     // Debounce search to avoid invoke on every keystroke
@@ -240,8 +244,8 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
 
   return (
     <div className="relative flex-1 flex flex-col overflow-hidden">
-      {/* 顶部一栏：搜索框 + 检索导航 + 业务操作位（会话页的「转为工作流 / 转为群聊」）。
-          会话标题不再占这一行——标题在左侧列表里已有，省下的横向空间留给搜索与操作。
+      {/* 顶部一栏：默认只显示会话标题（靠左）+ 搜索图标（靠右）；点搜索图标把标题位换成搜索框，
+          清空搜索内容后自动收回图标。业务操作位（「转为工作流 / 转为群聊」等）留在右侧工具栏。
 
           底色用 `--bg-content`（与消息区同底），**不要绑 `--bg-primary`**：primary 的明暗方向在
           浅色族与深色族是**相反**的（浅色最亮、深色最暗），深色族里它又几乎等于由它压暗出来的
@@ -250,36 +254,38 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
           面板上沿/工具栏下缘各靠 1px 分隔线区分即可。 */}
       {messages.length > 0 && (
         <div className="shrink-0 px-4 flex items-center gap-2 border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-content)', height: '36px' }}>
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            <div className="relative flex-1">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => handleMessageSearch(e.target.value)}
-                placeholder="搜索消息..."
-                className="w-full text-xs px-3 py-1 rounded-lg outline-none"
-                style={{
-                  backgroundColor: 'var(--bg-tertiary)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border)',
-                }}
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => { setSearchQuery(''); setSearchResults(null); setHighlightedMessageId(null); }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2"
-                  style={{ color: 'var(--text-tertiary)' }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-              )}
-              {isSearchingMessages && (
-                <div className="absolute right-6 top-1/2 -translate-y-1/2">
-                  <div className="w-3 h-3 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: 'var(--text-tertiary)', borderTopColor: 'transparent' }} />
-                </div>
-              )}
-            </div>
-            {searchResults !== null && (
+          {searchOpen ? (
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className="relative flex-1 min-w-0">
+                <input
+                  type="text"
+                  autoFocus
+                  value={searchQuery}
+                  onChange={(e) => handleMessageSearch(e.target.value)}
+                  placeholder="搜索消息..."
+                  className="w-full text-xs px-3 py-1 rounded-lg outline-none"
+                  style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border)',
+                  }}
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => { setSearchQuery(''); setSearchResults(null); setHighlightedMessageId(null); setSearchOpen(false); }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                )}
+                {isSearchingMessages && (
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2">
+                    <div className="w-3 h-3 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: 'var(--text-tertiary)', borderTopColor: 'transparent' }} />
+                  </div>
+                )}
+              </div>
+              {searchResults !== null && (
               <div className="flex items-center gap-1 shrink-0">
                 <span className="pd-text-10" style={{ color: 'var(--text-tertiary)' }}>
                   {searchResults.length > 0
@@ -335,7 +341,29 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
                 )}
               </div>
             )}
-          </div>
+            </div>
+          ) : (
+            <div className="flex-1 min-w-0">
+              <span
+                className="block truncate text-xs"
+                style={{ color: 'var(--text-secondary)' }}
+                title={session?.title ?? ''}
+              >
+                {session?.title || '当前会话'}
+              </span>
+            </div>
+          )}
+          {!searchOpen && (
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              className="pd-btn shrink-0 p-1 rounded transition-colors hover:opacity-80"
+              style={{ color: 'var(--text-secondary)' }}
+              title="搜索消息"
+            >
+              <Search size={13} />
+            </button>
+          )}
           {/* 低频动作收进统一工具栏：除行尾关闭外全部进「…」，顶部只留最少入口 */}
           <PageToolbar
             collapseAll
