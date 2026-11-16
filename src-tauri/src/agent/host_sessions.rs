@@ -1,15 +1,20 @@
-//! 从 ACP 宿主 Agent **导入**既有会话（只读：`session/list` + `session/load` 回放）。
+//! 从 ACP 宿主 Agent **导入**既有会话（`session/list` + `session/load` 回放 + `session/delete`）。
 //!
-//! 与 `transport::acp` 的会话运行链路**互不复用状态**：这里每次调用都起一个一次性
-//! ACP 进程，握手 → 调一次方法 → 立刻 kill，不注册进 `AgentManager` 进程表。
-//! 这样导出的两条命令都不依赖 Tauri State，便于单测与命令层薄适配。
+//! 与 `transport::acp` 的会话运行链路**互不复用状态**：这里的进程不注册进
+//! `AgentManager` 进程表，函数签名不依赖 Tauri State，便于单测与命令层薄适配。
+//!
+//! 性能：ACP 是有状态长连协议，握手后的进程可直接服务后续请求。本模块按配置 key
+//! 把**已握手**的宿主进程放入全局池复用（`HostPool`），消除"每次操作 = spawn +
+//! 握手 + kill"（实测 200ms~1s，npx 适配器更慢）的延迟；空闲 10min 由后台任务回收。
 //!
 //! 能力判定**不按 agent 名称硬编码**：`initialize` 返回的 `agentCapabilities` 只作参考，
 //! 是否支持 `session/list` 一律以实际调用结果为准（`-32601 method not found` = 不支持）。
 
+use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{json, Map, Value};
@@ -29,6 +34,9 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// stderr 尾部保留长度（失败提示只截尾部，避免把整段日志塞进 Toast）。
 const STDERR_TAIL_CHARS: usize = 500;
+
+/// 池内宿主进程的空闲回收时限：覆盖一次"浏览/挑选宿主会话"的操作窗口即可。
+const HOST_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// 宿主会话列表里的一项（字段名与 ACP `session/list` 对齐）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -72,10 +80,7 @@ pub struct ImportedMessage {
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum DeleteSessionOutcome {
     Ok,
-    Unsupported {
-        capability: String,
-        hint: String,
-    },
+    Unsupported { capability: String, hint: String },
 }
 
 // ──────────────────────────────────────────────
@@ -199,6 +204,292 @@ impl AcpHost {
             )
             .await
     }
+
+    /// spawn + initialize 一步完成——池化复用的前提：进程取回时已是握手后状态。
+    async fn spawn_initialized(
+        agent_id: &str,
+        command: &str,
+        args: &[String],
+        env: Option<&Map<String, Value>>,
+        cwd: &str,
+    ) -> Result<Self, String> {
+        let host = Self::spawn(agent_id, command, args, env, cwd).await?;
+        let init = host.initialize().await?;
+        // 只作日志参考；各方法是否支持一律以实际调用结果为准
+        log::debug!(
+            "[host_sessions] agent={} 声明的能力: {}",
+            agent_id,
+            init["agentCapabilities"]
+        );
+        Ok(host)
+    }
+}
+
+// ──────────────────────────────────────────────
+//  宿主进程池（长连复用）
+// ──────────────────────────────────────────────
+
+/// 池内一个**已握手**的宿主进程。
+struct IdleHost {
+    host: AcpHost,
+    last_used: Instant,
+}
+
+/// 按配置 key 复用已握手的 ACP 宿主进程。
+///
+/// ACP 是有状态长连协议：握手后的进程可直接服务后续的 `session/list` 等请求，
+/// 不必每次操作重新 spawn（实测 spawn + 握手 200ms~1s，npx 适配器更慢）。
+/// 空闲超过 [`HOST_IDLE_TIMEOUT`] 由后台任务回收（进程随 drop 被 `kill_on_drop` 兜底）。
+struct HostPool {
+    pools: StdMutex<HashMap<String, Vec<IdleHost>>>,
+    /// 清理任务是否已启动（保证全局只起一个）
+    cleanup_started: AtomicBool,
+}
+
+static HOST_POOL: OnceLock<Arc<HostPool>> = OnceLock::new();
+
+impl HostPool {
+    fn global() -> Arc<HostPool> {
+        HOST_POOL
+            .get_or_init(|| {
+                Arc::new(HostPool {
+                    pools: StdMutex::new(HashMap::new()),
+                    cleanup_started: AtomicBool::new(false),
+                })
+            })
+            .clone()
+    }
+
+    /// 惰性启动后台清理任务（每分钟扫一次，回收空闲超时的宿主进程）。
+    ///
+    /// `global()` 可能在**同步上下文**被首次调用（如 Agent 卸载时 `evict_agent`），
+    /// 那里没有 tokio runtime，`tokio::spawn` 会 panic——故推迟到首个 async
+    /// 调用点（take，必有 runtime）再启动。任务持有池的强引用、随进程常驻，
+    /// 与 `HOST_POOL` 静态同生命周期。
+    fn ensure_cleanup_task(&self) {
+        if self.cleanup_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if tokio::runtime::Handle::try_current().is_err() {
+            // 同步上下文：复位标志，下次 async 调用再试
+            self.cleanup_started.store(false, Ordering::SeqCst);
+            return;
+        }
+        let pool = HostPool::global();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let mut m = pool.pools.lock().unwrap();
+                for list in m.values_mut() {
+                    list.retain(|h| h.last_used.elapsed() < HOST_IDLE_TIMEOUT);
+                }
+                m.retain(|_, list| !list.is_empty());
+            }
+        });
+    }
+
+    /// 取一个存活宿主进程：已退出的直接丢弃（drop 即 kill），继续试下一个。
+    async fn take(&self, key: &str) -> Option<AcpHost> {
+        self.ensure_cleanup_task();
+        loop {
+            let candidate = {
+                let mut m = self.pools.lock().unwrap();
+                m.get_mut(key)?.pop().map(|h| h.host)
+            }?;
+            if candidate.peer.is_alive().await {
+                return Some(candidate);
+            }
+            log::info!(
+                "[host_sessions] 丢弃已退出的池内进程: agent={}",
+                candidate.agent_id
+            );
+        }
+    }
+
+    /// 操作成功后放回池（失败进程一律丢弃，不入池）。
+    fn put(&self, key: String, host: AcpHost) {
+        let mut m = self.pools.lock().unwrap();
+        m.entry(key).or_default().push(IdleHost {
+            host,
+            last_used: Instant::now(),
+        });
+    }
+}
+
+/// 硬清某 Agent 的所有池内宿主进程（Agent 卸载/删除/配置变更时调用）。
+///
+/// 池化 key 以 `agent_id` 打头（见 `pool_key`），按前缀匹配移除；进程随 drop 被
+/// `kill_on_drop` 兜底。可在同步上下文调用（不触碰 tokio runtime）。
+pub fn evict_agent(agent_id: &str) {
+    let pool = HostPool::global();
+    let prefix = format!("{}\u{1e}", agent_id);
+    let mut m = pool.pools.lock().unwrap();
+    let keys: Vec<String> = m
+        .keys()
+        .filter(|k| k.starts_with(&prefix))
+        .cloned()
+        .collect();
+    if keys.is_empty() {
+        return;
+    }
+    let mut n = 0usize;
+    for k in &keys {
+        if let Some(list) = m.remove(k) {
+            n += list.len();
+        }
+    }
+    log::info!(
+        "[host_sessions] evict agent={} 共 {} 个池内进程",
+        agent_id,
+        n
+    );
+}
+
+/// 池化 key：配置（命令/参数/环境/目录）变了就不能复用旧进程。
+fn pool_key(
+    agent_id: &str,
+    command: &str,
+    args: &[String],
+    env: Option<&Map<String, Value>>,
+    cwd: &str,
+) -> String {
+    let mut env_pairs: Vec<String> = env
+        .map(|e| e.iter().map(|(k, v)| format!("{}={}", k, v)).collect())
+        .unwrap_or_default();
+    env_pairs.sort();
+    [
+        agent_id,
+        command,
+        &args.join("\u{1f}"),
+        &env_pairs.join("\u{1f}"),
+        cwd,
+    ]
+    .join("\u{1e}")
+}
+
+// ──────────────────────────────────────────────
+//  池化执行（取池 → 池内进程失败重试一次 → 回收/丢弃）
+// ──────────────────────────────────────────────
+
+type ChunksSink = Arc<StdMutex<Vec<(String, String)>>>;
+
+/// 一次宿主操作（池化执行器按类型分发；具体实现见下方 `*_inner`）。
+enum Op<'a> {
+    List {
+        filter_cwd: Option<&'a str>,
+        cursor: Option<&'a str>,
+    },
+    Load {
+        cwd: &'a str,
+        session_id: &'a str,
+        chunks: ChunksSink,
+    },
+    Delete {
+        session_id: &'a str,
+    },
+}
+
+enum OpOutcome {
+    List(ListSessionsOutcome),
+    Load(Vec<ImportedMessage>),
+    Delete(DeleteSessionOutcome),
+}
+
+/// 在指定宿主进程上执行一次操作（进程必须已完成 initialize）。
+async fn run_op(host: &AcpHost, op: &Op<'_>) -> Result<OpOutcome, String> {
+    match op {
+        Op::List { filter_cwd, cursor } => list_sessions_inner(host, *filter_cwd, *cursor)
+            .await
+            .map(OpOutcome::List),
+        Op::Load {
+            cwd,
+            session_id,
+            chunks,
+        } => {
+            // 先清空（重试时上一次 attempt 的半截回放不能混入），再注册收集器——
+            // `session/load` 的响应在所有重放通知之后才到，注册必须先于请求。
+            // `peer.on` 按方法名覆盖注册，池化复用不会累积旧 sink。
+            chunks.lock().unwrap().clear();
+            let sink = Arc::clone(chunks);
+            host.peer.on(
+                peer_method::SESSION_UPDATE,
+                Arc::new(move |_peer, _id, params| {
+                    let update = &params["update"];
+                    let kind = update["sessionUpdate"].as_str().unwrap_or("");
+                    if kind != "user_message_chunk" && kind != "agent_message_chunk" {
+                        return;
+                    }
+                    let text = update["content"]["text"].as_str().unwrap_or("");
+                    if text.is_empty() {
+                        return;
+                    }
+                    if let Ok(mut v) = sink.lock() {
+                        v.push((kind.to_string(), text.to_string()));
+                    }
+                }),
+            );
+            load_messages_inner(host, cwd, session_id).await?;
+            let collected = chunks
+                .lock()
+                .map(|mut v| std::mem::take(&mut *v))
+                .unwrap_or_default();
+            Ok(OpOutcome::Load(merge_chunks(collected)))
+        }
+        Op::Delete { session_id } => delete_session_inner(host, session_id)
+            .await
+            .map(OpOutcome::Delete),
+    }
+}
+
+/// 池化执行：优先复用池内已握手进程；池内进程操作失败（多半是池化期间对端悄悄
+/// 退出而探活未能覆盖）则丢弃、换新进程**重试一次**；新进程再失败才透出错误
+/// （附 stderr 尾部）。操作成功的进程放回池，失败的一律 `shutdown` 丢弃。
+async fn run_host_op(
+    agent_id: &str,
+    command: &str,
+    args: &[String],
+    env: Option<&Map<String, Value>>,
+    cwd: &str,
+    op: Op<'_>,
+) -> Result<OpOutcome, String> {
+    let pool = HostPool::global();
+    let key = pool_key(agent_id, command, args, env, cwd);
+    let pooled = pool.take(&key).await;
+    let was_pooled = pooled.is_some();
+    let mut host = match pooled {
+        Some(h) => h,
+        None => AcpHost::spawn_initialized(agent_id, command, args, env, cwd).await?,
+    };
+    match run_op(&host, &op).await {
+        Ok(v) => {
+            pool.put(key, host);
+            Ok(v)
+        }
+        Err(e) if was_pooled => {
+            log::warn!(
+                "[host_sessions] 池内进程请求失败，丢弃并换新进程重试: agent={} err={}",
+                agent_id,
+                e
+            );
+            host.shutdown().await;
+            let mut fresh = AcpHost::spawn_initialized(agent_id, command, args, env, cwd).await?;
+            match run_op(&fresh, &op).await {
+                Ok(v) => {
+                    pool.put(key, fresh);
+                    Ok(v)
+                }
+                Err(e) => {
+                    fresh.shutdown().await;
+                    Err(fresh.with_stderr(e))
+                }
+            }
+        }
+        Err(e) => {
+            host.shutdown().await;
+            Err(host.with_stderr(e))
+        }
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -282,10 +573,19 @@ pub async fn list_sessions(
     filter_cwd: Option<&str>,
     cursor: Option<&str>,
 ) -> Result<ListSessionsOutcome, String> {
-    let mut host = AcpHost::spawn(agent_id, command, args, env, cwd).await?;
-    let result = list_sessions_inner(&host, filter_cwd, cursor).await;
-    host.shutdown().await;
-    result.map_err(|e| host.with_stderr(e))
+    match run_host_op(
+        agent_id,
+        command,
+        args,
+        env,
+        cwd,
+        Op::List { filter_cwd, cursor },
+    )
+    .await?
+    {
+        OpOutcome::List(o) => Ok(o),
+        _ => unreachable!("Op::List 只会产出 OpOutcome::List"),
+    }
 }
 
 async fn list_sessions_inner(
@@ -293,14 +593,6 @@ async fn list_sessions_inner(
     filter_cwd: Option<&str>,
     cursor: Option<&str>,
 ) -> Result<ListSessionsOutcome, String> {
-    let init = host.initialize().await?;
-    // 只作日志参考；是否支持以实际调用结果为准
-    log::debug!(
-        "[host_sessions] agent={} 声明的 list 能力: {}",
-        host.agent_id,
-        &init["agentCapabilities"]["sessionCapabilities"]["list"]
-    );
-
     let mut params = json!({});
     if let Some(dir) = filter_cwd.map(str::trim).filter(|s| !s.is_empty()) {
         params["cwd"] = json!(dir);
@@ -334,41 +626,23 @@ pub async fn load_messages(
     cwd: &str,
     host_session_id: &str,
 ) -> Result<Vec<ImportedMessage>, String> {
-    let mut host = AcpHost::spawn(agent_id, command, args, env, cwd).await?;
-
-    // **发起请求前**就注册：`session/load` 的响应在所有重放通知之后才到
-    let chunks: Arc<StdMutex<Vec<(String, String)>>> = Arc::new(StdMutex::new(Vec::new()));
-    let sink = Arc::clone(&chunks);
-    host.peer.on(
-        peer_method::SESSION_UPDATE,
-        Arc::new(move |_peer, _id, params| {
-            let update = &params["update"];
-            let kind = update["sessionUpdate"].as_str().unwrap_or("");
-            if kind != "user_message_chunk" && kind != "agent_message_chunk" {
-                return;
-            }
-            let text = update["content"]["text"].as_str().unwrap_or("");
-            if text.is_empty() {
-                return;
-            }
-            if let Ok(mut v) = sink.lock() {
-                v.push((kind.to_string(), text.to_string()));
-            }
-        }),
-    );
-
-    let result = load_messages_inner(&host, cwd, host_session_id).await;
-    host.shutdown().await;
-
-    match result {
-        Ok(()) => {
-            let collected = chunks
-                .lock()
-                .map(|mut v| std::mem::take(&mut *v))
-                .unwrap_or_default();
-            Ok(merge_chunks(collected))
-        }
-        Err(e) => Err(host.with_stderr(e)),
+    let chunks: ChunksSink = Arc::new(StdMutex::new(Vec::new()));
+    match run_host_op(
+        agent_id,
+        command,
+        args,
+        env,
+        cwd,
+        Op::Load {
+            cwd,
+            session_id: host_session_id,
+            chunks,
+        },
+    )
+    .await?
+    {
+        OpOutcome::Load(msgs) => Ok(msgs),
+        _ => unreachable!("Op::Load 只会产出 OpOutcome::Load"),
     }
 }
 
@@ -377,7 +651,6 @@ async fn load_messages_inner(
     cwd: &str,
     host_session_id: &str,
 ) -> Result<(), String> {
-    host.initialize().await?;
     host.peer
         .request_with_timeout(
             method::SESSION_LOAD,
@@ -403,17 +676,27 @@ pub async fn delete_session(
     cwd: &str,
     host_session_id: &str,
 ) -> Result<DeleteSessionOutcome, String> {
-    let mut host = AcpHost::spawn(agent_id, command, args, env, cwd).await?;
-    let result = delete_session_inner(&host, host_session_id).await;
-    host.shutdown().await;
-    result.map_err(|e| host.with_stderr(e))
+    match run_host_op(
+        agent_id,
+        command,
+        args,
+        env,
+        cwd,
+        Op::Delete {
+            session_id: host_session_id,
+        },
+    )
+    .await?
+    {
+        OpOutcome::Delete(o) => Ok(o),
+        _ => unreachable!("Op::Delete 只会产出 OpOutcome::Delete"),
+    }
 }
 
 async fn delete_session_inner(
     host: &AcpHost,
     host_session_id: &str,
 ) -> Result<DeleteSessionOutcome, String> {
-    host.initialize().await?;
     match host
         .peer
         .request_with_timeout(

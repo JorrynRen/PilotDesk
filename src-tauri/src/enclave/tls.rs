@@ -59,8 +59,7 @@ pub fn ensure_host_tls_in(dir: &Path) -> Result<HostTls, String> {
         log::info!("[enclave] 已生成主机自签证书：{}", cert_path.display());
     }
 
-    let cert_der =
-        std::fs::read(&cert_path).map_err(|e| format!("读取主机证书失败：{}", e))?;
+    let cert_der = std::fs::read(&cert_path).map_err(|e| format!("读取主机证书失败：{}", e))?;
     let key_der = std::fs::read(&key_path).map_err(|e| format!("读取主机私钥失败：{}", e))?;
     let fingerprint = hex_sha256(&cert_der);
 

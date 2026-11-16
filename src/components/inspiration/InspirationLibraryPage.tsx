@@ -2,17 +2,33 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
-import { Search, Plus, Star, FolderDown, Lightbulb, Upload, Store } from 'lucide-react';
-import { TitleBar, StatusBar } from '../layout';
-import { useTerminal, type ViewMode } from '../../TerminalManager';
+import {
+  AlertCircle,
+  ArrowDownUp,
+  Building2,
+  Download,
+  Lightbulb,
+  Plus,
+  RefreshCw,
+  Search,
+  SearchX,
+  Star,
+  Store,
+  Upload,
+  X,
+} from 'lucide-react';
+import { WorkbenchAssetPage } from '../layout';
+import { PageToolbar } from '../common/PageToolbar';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { InspirationCard } from './InspirationCard';
 import { InspirationForm } from './InspirationForm';
 import { InspirationExportDialog } from './InspirationExportDialog';
+import { InspirationOrgImportDialog } from './InspirationOrgImportDialog';
 import { TagFilter } from './TagFilter';
 import { confirmDialog } from '../../stores/confirmStore';
+import { useAccountStore } from '../../stores/accountStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 
@@ -31,14 +47,13 @@ interface InspirationImportResult {
  * 没有任何在线内容。在线灵感将由「资源市集 › 灵感」提供，两者是"我的"与"获取"的关系。
  */
 export function InspirationLibraryPage() {
-  const { viewMode, setMode } = useTerminal();
   const navigate = useNavigate();
   const {
     inspirations,
-    tags,
     loading,
     error,
     searchQuery,
+    activeTag,
     favoriteOnly,
     fetchInspirations,
     fetchTags,
@@ -49,15 +64,17 @@ export function InspirationLibraryPage() {
     toggleFavorite,
     setSearchQuery,
     setFavoriteOnly,
+    clearFilters,
   } = useInspirationStore();
 
   const [showForm, setShowForm] = useState(false);
   const [editingInspiration, setEditingInspiration] = useState<InspirationItem | null>(null);
   const [prefillContent, setPrefillContent] = useState('');
-  /** 导出为市场 JSON 的目标条目（非空即弹窗） */
+  /** 导出 JSON 文件的目标条目（非空即弹窗） */
   const [exportTarget, setExportTarget] = useState<InspirationItem | null>(null);
   /** 全量导出（备份）进行中 */
   const [exportingZip, setExportingZip] = useState(false);
+  const [showOrgImport, setShowOrgImport] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentSession = useSessionStore((s) => {
@@ -190,185 +207,259 @@ export function InspirationLibraryPage() {
     setShowForm(true);
   };
 
-  // 组合开关点击：切模式并回到主布局（与设置页/知识库同一套处理）
-  const handleModeChange = useCallback((mode: ViewMode) => {
-    setMode(mode);
-    navigate('/');
-  }, [setMode, navigate]);
+  const openOrgImport = async () => {
+    if (!useAccountStore.getState().account) {
+      const shouldLogin = await confirmDialog({
+        title: '登录后使用团队共享',
+        message: '登录后可选择所属组织，并导入该组织共享的灵感。',
+        confirmText: '登录',
+        cancelText: '稍后',
+        danger: false,
+      });
+      if (shouldLogin) {
+        await useAccountStore.getState().login();
+      }
+      return;
+    }
+    setShowOrgImport(true);
+  };
+
+  const hasFilters = Boolean(searchQuery.trim() || activeTag || favoriteOnly);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      {/* 页头：与知识库/资源市集一致 —— 走 TitleBar（模式段 + 右侧图标区），
-          画在壳层那片"底"上、不在内容面板内，因此不画下边框（栏与面板靠底色差 + 圆角区分）。 */}
-      <TitleBar
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        noActiveSegment
-        inspirationsOpen
-        onOpenInspirations={() => navigate('/')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenSettings={() => navigate('/settings')}
-      />
+    <WorkbenchAssetPage contextLabel="灵感库" activeAsset="inspiration">
+      <div className="pd-inspiration-page h-full flex flex-col overflow-hidden">
+        <div className="pd-page-head pd-inspiration-header shrink-0">
+          <div className="pd-inspiration-title">
+            <span className="pd-inspiration-title-icon">
+              <Lightbulb size={15} />
+            </span>
+            <span>灵感库</span>
+            <span className="pd-inspiration-count">{inspirations.length}</span>
+          </div>
 
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
-
-      {/* 标题行 + 操作：与「资源市集」首行同构 —— 容器 pt-1、标题带强调色图标、下边框收口。
-          放在**内容面板内**（而不是 TitleBar 与面板之间那条飘在画布上的工具条），两页才是同级观感。 */}
-      <div className="shrink-0 px-4 pt-1 pb-1 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="flex items-center gap-2 shrink-0">
-          <Lightbulb size={14} style={{ color: 'var(--accent)' }} />
-          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感库</span>
-          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-            {inspirations.length}
-          </span>
-        </div>
-        {/* 搜索并入标题行（原先独占一行），省一行纵向占用；标题块留在左侧，
-            搜索框与右侧操作按钮作为一组靠右对齐（ml-auto 把这一组推到行尾） */}
-        <div className="relative w-56 shrink-0 ml-auto">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => handleSearch(e.target.value)}
-            placeholder="搜索灵感..."
-            className="w-full pl-7 pr-2 py-1 rounded-lg text-xs outline-none"
-            style={{
-              backgroundColor: 'var(--bg-field)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
+          <PageToolbar
+            className="pd-inspiration-actions"
+            actions={[
+              {
+                key: 'favorite',
+                label: favoriteOnly ? '显示全部' : '只看收藏',
+                title: favoriteOnly ? '显示全部灵感' : '只看收藏的灵感',
+                icon: <Star size={13} fill={favoriteOnly ? 'currentColor' : 'none'} />,
+                priority: 1,
+                active: favoriteOnly,
+                tone: favoriteOnly ? '#D99A0B' : undefined,
+                onClick: () => setFavoriteOnly(!favoriteOnly),
+              },
+              {
+                key: 'market',
+                label: '资源市集',
+                title: '前往资源市集浏览灵感',
+                icon: <Store size={13} />,
+                priority: 2,
+                onClick: () => navigate('/market?tab=inspiration'),
+              },
+              {
+                key: 'transfer',
+                label: '导入/导出',
+                title: '导入或导出灵感',
+                icon: <ArrowDownUp size={13} />,
+                priority: 1,
+                alwaysVisible: true,
+                menuItems: [
+                  {
+                    key: 'file-import',
+                    label: '文件导入',
+                    title: '导入 JSON 灵感或 ZIP 备份',
+                    icon: <Download size={13} />,
+                    onClick: () => void handleImport(),
+                  },
+                  {
+                    key: 'org-import',
+                    label: '从组织导入',
+                    title: '从组织共享空间导入灵感',
+                    icon: <Building2 size={13} />,
+                    onClick: () => void openOrgImport(),
+                  },
+                  {
+                    key: 'export-all',
+                    label: exportingZip ? '正在导出…' : '全量导出',
+                    title: '把全部灵感导出为 ZIP 备份',
+                    icon: <Upload size={13} />,
+                    disabled: exportingZip || inspirations.length === 0,
+                    onClick: () => void handleExportZip(),
+                  },
+                ],
+              },
+              {
+                key: 'new',
+                label: '新建灵感',
+                icon: <Plus size={13} />,
+                priority: 0,
+                alwaysVisible: true,
+                variant: 'primary',
+                onClick: openNewForm,
+              },
+            ]}
           />
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* 与资源市集的「我的灵感」入口对称：从灵感库也能直接去市场看别人的分享 */}
-          <button
-            onClick={() => navigate('/market?tab=inspiration')}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
-            title="前往资源市集 › 灵感（浏览他人分享的灵感）"
-          >
-            <Store size={12} />
-            资源市集
-          </button>
-          <button
-            onClick={() => void handleImport()}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
-            title="导入灵感：市场格式的 .json（可多选）或本工具导出的 .zip 备份"
-          >
-            <Upload size={12} />
-            导入
-          </button>
-          <button
-            onClick={() => void handleExportZip()}
-            disabled={exportingZip || inspirations.length === 0}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs disabled:opacity-50"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
-            title="把全部灵感导出为 zip 备份（目录布局与市场同构）"
-          >
-            <FolderDown size={12} />
-            {exportingZip ? '导出中…' : '全量导出'}
-          </button>
-          <button
-            onClick={() => setFavoriteOnly(!favoriteOnly)}
-            className="p-1.5 rounded-lg transition-colors"
-            style={{
-              backgroundColor: favoriteOnly ? '#FBBF2422' : 'var(--bg-field)',
-              color: favoriteOnly ? '#FBBF24' : 'var(--text-secondary)',
+
+        <div className="pd-inspiration-filterbar shrink-0">
+          <div className="pd-inspiration-search">
+            <Search size={13} className="pd-inspiration-search-icon" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="搜索标题、正文或标签"
+              className="search-input"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="pd-inspiration-search-clear pd-btn"
+                title="清除搜索"
+                aria-label="清除搜索"
+                onClick={() => handleSearch('')}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          <div className="pd-inspiration-tags">
+            <TagFilter />
+          </div>
+        </div>
+
+        <div className="pd-inspiration-content flex-1 overflow-y-auto pd-scroll-stable">
+          {error && (
+            <div className="pd-inspiration-error" role="alert">
+              <AlertCircle size={16} />
+              <div className="min-w-0 flex-1">
+                <div className="pd-inspiration-error-title">灵感加载失败</div>
+                <div className="pd-inspiration-error-copy">{error}</div>
+              </div>
+              <button
+                type="button"
+                className="pd-btn pd-inspiration-error-retry"
+                onClick={() => void fetchInspirations()}
+              >
+                <RefreshCw size={12} />
+                重试
+              </button>
+            </div>
+          )}
+
+          {loading && !inspirations.length ? (
+            <div className="pd-inspiration-loading">
+              <RefreshCw size={15} className="pd-animate-spin" />
+              <span>正在读取灵感</span>
+            </div>
+          ) : inspirations.length === 0 ? (
+            <div className="pd-inspiration-empty">
+              <div className="pd-inspiration-empty-icon" data-tone={hasFilters ? 'muted' : 'accent'}>
+                {hasFilters ? <SearchX size={23} /> : <Lightbulb size={23} />}
+              </div>
+              <h3>{hasFilters ? '没有匹配的灵感' : '还没有保存的灵感'}</h3>
+              <p>
+                {hasFilters
+                  ? '换个关键词，或清除当前筛选后再看看。'
+                  : '把可复用的提示词、方法和片段收进来，之后可以随时发送到会话。'}
+              </p>
+              <div className="pd-inspiration-empty-actions">
+                {hasFilters ? (
+                  <>
+                    <button
+                      type="button"
+                      className="pd-btn pd-inspiration-empty-primary"
+                      onClick={() => void clearFilters()}
+                    >
+                      清除筛选
+                    </button>
+                    <button type="button" className="pd-btn pd-inspiration-empty-secondary" onClick={openNewForm}>
+                      <Plus size={12} />
+                      新建灵感
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="pd-btn pd-inspiration-empty-primary"
+                      onClick={openNewForm}
+                    >
+                      <Plus size={12} />
+                      新建灵感
+                    </button>
+                    <button
+                      type="button"
+                      className="pd-btn pd-inspiration-empty-secondary"
+                      onClick={() => navigate('/market?tab=inspiration')}
+                    >
+                      <Store size={12} />
+                      浏览资源市集
+                    </button>
+                    <button
+                      type="button"
+                      className="pd-btn pd-inspiration-empty-secondary"
+                      onClick={() => void openOrgImport()}
+                    >
+                      <Building2 size={12} />
+                      从组织导入
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="pd-inspiration-grid">
+              {inspirations.map((insp) => (
+                <InspirationCard
+                  key={insp.id}
+                  inspiration={insp}
+                  onToggleFavorite={toggleFavorite}
+                  onSendToSession={handleSendToSession}
+                  onDelete={handleDelete}
+                  onEdit={handleEdit}
+                  onExport={setExportTarget}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {(showForm || editingInspiration) && (
+          <InspirationForm
+            initialData={editingInspiration}
+            prefill={prefillContent}
+            sourceAgent={currentSession?.agentType}
+            onSave={handleSaveNew}
+            onUpdate={handleUpdate}
+            onCancel={() => {
+              setShowForm(false);
+              setEditingInspiration(null);
+              setPrefillContent('');
             }}
-            title={favoriteOnly ? '显示全部' : '只看收藏'}
-          >
-            <Star size={14} fill={favoriteOnly ? '#FBBF24' : 'none'} />
-          </button>
-          <button
-            onClick={openNewForm}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs "
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-          >
-            <Plus size={12} />
-            新建
-          </button>
-        </div>
-      </div>
-
-      {/* 标签筛选：搜索已上移到标题行；`TagFilterBar` 在「无标签且未选中」时自身返回 null，
-          所以整行也一并条件渲染，避免留下一条空白带 */}
-      {tags.length > 0 && (
-        <div className="shrink-0 px-4 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
-          <TagFilter />
-        </div>
-      )}
-
-      {/* Grid */}
-      <div className="flex-1 overflow-y-auto p-4 pd-scroll-stable">
-        {error && (
-          <div className="mb-3 px-3 py-2 rounded-lg text-xs" style={{ backgroundColor: 'var(--danger-bg)', color: 'var(--danger)' }}>
-            {error}
-          </div>
+          />
         )}
 
-        {loading && !inspirations.length ? (
-          <div className="flex items-center justify-center h-32">
-            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>加载中...</span>
-          </div>
-        ) : inspirations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-32 gap-2">
-            <span className="text-3xl">💡</span>
-            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {searchQuery ? '未找到匹配的灵感' : '还没有灵感，点击新建开始收集'}
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {inspirations.map((insp) => (
-              <InspirationCard
-                key={insp.id}
-                inspiration={insp}
-                onToggleFavorite={toggleFavorite}
-                onSendToSession={handleSendToSession}
-                onDelete={handleDelete}
-                onEdit={handleEdit}
-                onExport={setExportTarget}
-              />
-            ))}
-          </div>
+        {exportTarget && (
+          <InspirationExportDialog
+            inspiration={exportTarget}
+            onClose={() => setExportTarget(null)}
+          />
+        )}
+
+        {showOrgImport && (
+          <InspirationOrgImportDialog
+            onClose={() => setShowOrgImport(false)}
+            onImported={async () => {
+              await fetchInspirations();
+              await fetchTags();
+            }}
+          />
         )}
       </div>
-
-      {/* Form Modal */}
-      {(showForm || editingInspiration) && (
-        <InspirationForm
-          initialData={editingInspiration}
-          prefill={prefillContent}
-          sourceAgent={currentSession?.agentType}
-          onSave={handleSaveNew}
-          onUpdate={handleUpdate}
-          onCancel={() => {
-            setShowForm(false);
-            setEditingInspiration(null);
-            setPrefillContent('');
-          }}
-        />
-      )}
-
-      {/* 导出为市场 JSON（投稿用） */}
-      {exportTarget && (
-        <InspirationExportDialog
-          inspiration={exportTarget}
-          onClose={() => setExportTarget(null)}
-        />
-      )}
-        </div>
-      </div>
-
-      {/* 全局状态栏：独立路由也要保留（与会话/知识库等模式一致），否则底部少一条、页面像被截断 */}
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
-    </div>
+    </WorkbenchAssetPage>
   );
 }

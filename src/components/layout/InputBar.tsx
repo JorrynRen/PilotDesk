@@ -1,14 +1,16 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Send, Square, Zap, Brain, GraduationCap, Cpu, ChevronDown, ClipboardList, ImagePlus, FileText, Paperclip, FolderOpen, X, Plus, MemoryStick, Bot } from 'lucide-react';
+import { Send, Square, Zap, Brain, GraduationCap, Cpu, ChevronDown, ClipboardList, ImagePlus, FileText, Paperclip, FolderKanban, FolderOpen, Link2, X, Plus, MemoryStick, Bot, Check } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { useNavigate } from 'react-router-dom';
 import type { ChatMode, Session, Attachment } from '../../types';
 import { MODE_LABELS, MODE_COLORS, getModePrompt } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
 import { VoiceInputButton } from '../input/VoiceInputButton';
 import { ProjectMemoryDialog } from '../panels/ProjectMemoryDialog';
+import { ProjectMembershipDialog } from '../project/ProjectPicker';
 import { SecurityModeSelector, type SecurityModeValue } from '../security/SecurityModeSelector';
 import { HostModeSelector } from '../security/HostModeSelector';
 import { Select, type SelectGroup } from '../common/Select';
@@ -18,11 +20,15 @@ import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
-import { useSessionDraftStore, GLOBAL_CWD, cliChoice, apiChoice, parseChoice } from '../../stores/sessionDraftStore';
+import { useSessionDraftStore, cliChoice, apiChoice, parseChoice } from '../../stores/sessionDraftStore';
 import { useAcpModeStore } from '../../stores/acpModeStore';
+import { useProjectStore } from '../../stores/projectStore';
+import { projectLinkedDirectories, projectPrimaryDirectory } from '../../utils/project';
+import { normalizeDisplayPath } from '../../utils/path';
 
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo, isAgentAvailable } from '../../hooks/useEnvInfo';
+import { useSessionWorkspaceInfo } from '../../hooks/useSessionWorkspaceInfo';
 
 
 const MODE_ICONS: Record<ChatMode, typeof Send> = {
@@ -41,7 +47,7 @@ interface InputBarProps {
    */
   onSend: (message: string, mode: ChatMode, attachments?: Attachment[]) => Promise<boolean> | void;
   /**
-   * 无会话时"惰性建会话"：父级按草稿参数（工作目录 + 会话方式）创建并选中会话。
+   * 无会话时"惰性建会话"：父级按草稿会话方式创建并选中会话。
    * 返回新会话（失败/参数不完整返回 null → 本次发送中止且保留输入）。
    */
   onEnsureSession?: () => Promise<Session | null>;
@@ -87,12 +93,13 @@ interface PendingAttachment {
 }
 
 export function InputBar({ session, onSend, onEnsureSession, onStop, isGenerating, pendingInput, onPendingConsumed, securityMode, onSecurityModeChange, placement = 'bottom' }: InputBarProps) {
+  const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<ChatMode>('native');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   /**
    * 尚未落盘的附件（无会话时选择/拖拽/粘贴的都先放这里）：
-   * 建会话需要工作目录，而"无会话"正是快捷开始路径，所以先把附件留在内存，
+   * 无会话正是快捷开始路径，所以先把附件留在内存，
    * 等会话建好（发送时）再落盘到该会话的 attachments 目录。
    */
   const [pending, setPending] = useState<PendingAttachment[]>([]);
@@ -109,6 +116,8 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const [showCwdMenu, setShowCwdMenu] = useState(false);
   const cwdMenuRef = useRef<HTMLDivElement>(null);
+  const [showProjectMembership, setShowProjectMembership] = useState(false);
+  const [draftGlobalWorkspace, setDraftGlobalWorkspace] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [draggingFiles, setDraggingFiles] = useState<{ name: string; kind: 'image' | 'file' }[]>([]);
   const [showInspirationPicker, setShowInspirationPicker] = useState(false);
@@ -130,15 +139,71 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     pendingRef.current = pending;
   }, [pending]);
 
-  // ── 会话方式 / 工作目录（无会话时的"快捷开始"草稿）──
+  // ── 会话方式（无会话时的"快捷开始"草稿）──
   const { providers: apiProviders, fetchProviders } = useApiProviderStore();
   const { getEnabledAgentTypes, getDisplayName, getTheme, getTransport, fetchAgents } = useAgentRegistry();
   const { envInfo } = useEnvInfo();
   const draftChoice = useSessionDraftStore((s) => s.choice);
-  const draftCwd = useSessionDraftStore((s) => s.cwd);
   const setDraftChoice = useSessionDraftStore((s) => s.setChoice);
-  const setDraftCwd = useSessionDraftStore((s) => s.setCwd);
+  const draftProjectId = useSessionDraftStore((s) => s.projectId);
+  const setDraftProjectId = useSessionDraftStore((s) => s.setProjectId);
   const startNewSession = useSessionStore((s) => s.startNewSession);
+  const refreshSessions = useSessionStore((s) => s.refreshSessions);
+  const projects = useProjectStore((s) => s.projects);
+  const loadProjects = useProjectStore((s) => s.loadProjects);
+  const sessionProject = session?.projectId
+    ? projects.find((project) => project.id === session.projectId) ?? null
+    : null;
+  const draftProject = draftProjectId
+    ? projects.find((project) => project.id === draftProjectId) ?? null
+    : null;
+  const displayedProject = sessionProject ?? draftProject;
+  const displayedProjectRoot = projectPrimaryDirectory(displayedProject);
+  const activeProjects = useMemo(
+    () => projects.filter((project) => !project.archivedAt),
+    [projects],
+  );
+  const displayedProjectLinkedDirectories = useMemo(
+    () => projectLinkedDirectories(displayedProject),
+    [displayedProject],
+  );
+  const { info: workspaceInfo } = useSessionWorkspaceInfo(
+    session?.id,
+    session?.projectId ?? '',
+  );
+  const canChangeSessionProject = Boolean(
+    session && !session.origin?.startsWith('workflow'),
+  );
+  const handleSessionProjectChanged = useCallback(async () => {
+    await refreshSessions();
+    await loadProjects();
+  }, [loadProjects, refreshSessions]);
+
+  useEffect(() => {
+    if (projects.length === 0) void loadProjects();
+  }, [loadProjects, projects.length]);
+
+  useEffect(() => {
+    if (session || !draftProjectId || projects.length === 0) return;
+    if (!projects.some((project) => project.id === draftProjectId && !project.archivedAt)) {
+      setDraftProjectId('');
+    }
+  }, [draftProjectId, projects, session, setDraftProjectId]);
+
+  useEffect(() => {
+    if (session?.id) return;
+    let disposed = false;
+    void invoke<string>('resolve_default_workspace')
+      .then((root) => {
+        if (!disposed) setDraftGlobalWorkspace(normalizeDisplayPath(root));
+      })
+      .catch(() => {
+        if (!disposed) setDraftGlobalWorkspace('');
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [session?.id]);
 
   // ── ACP 宿主模式（取代安全模式）──
   // ACP 的权限档位由宿主定义，直接拉宿主的模式列表让用户选；本应用的安全模式只在
@@ -215,36 +280,37 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     if (first) setDraftChoice(first.value);
   }, [draftChoice, choiceGroups, setDraftChoice]);
 
-  /**
-   * 无会话时的发送前置条件（**三者非空才可发送**）：工作目录 + 会话方式 + 消息本身。
-   * 这样 CLI 未安装 / API 未配 Key 的报错在发送前就被挡住了（选项列表本身只列可用项）。
-   */
-  const draftReady = Boolean(draftCwd) && parseChoice(draftChoice) !== null;
+  /** 无会话时的发送前置条件：会话方式已选，消息本身由发送入口再校验。 */
+  const draftReady = parseChoice(draftChoice) !== null;
   const blockReason = choiceGroups.length === 0
     ? '暂无可用的会话方式：请先在「设置」里配置 API 提供商或安装 CLI Agent'
-    : !draftCwd
-      ? '请先选择会话工作目录'
-      : parseChoice(draftChoice) === null
-        ? '请先选择会话方式（CLI Agent / API Agent）'
-        : '';
+    : parseChoice(draftChoice) === null
+      ? '请先选择会话方式（CLI Agent / API Agent）'
+      : '';
   /** 同一拦截原因的**短文案**：占位行只有一行高，长句会被裁掉（见下方 placeholder 注释） */
   const blockHint = choiceGroups.length === 0
     ? '请先在「设置」配置 API 提供商或 CLI Agent'
-    : !draftCwd
-      ? '请先选择会话工作目录'
-      : parseChoice(draftChoice) === null
-        ? '请先选择会话方式'
-        : '';
-  /** 草稿目录的展示名（末级目录名 / 全局工作空间） */
-  const draftCwdLabel = draftCwd === GLOBAL_CWD
-    ? '全局工作空间'
-    : draftCwd
-      ? draftCwd.split(/[\\/]/).pop() || draftCwd
+    : parseChoice(draftChoice) === null
+      ? '请先选择会话方式'
       : '';
   /** 草稿里的 agent 类型（无会话时给技能面板用：CLI 类型或 api） */
   const draftAgentType = parseChoice(draftChoice)?.agentType ?? '';
-  /** 当前目录是否就是"全局工作空间"（会话下 = cwd 为空；草稿下 = 哨兵值），菜单里给该项打标 */
-  const cwdIsGlobal = session ? !session.cwd : draftCwd === GLOBAL_CWD;
+  const workspaceRoot = workspaceInfo?.workRoot
+    || displayedProjectRoot
+    || (!session ? draftGlobalWorkspace : '');
+  const displayWorkspaceRoot = normalizeDisplayPath(workspaceRoot);
+  const displayProjectRoot = normalizeDisplayPath(
+    workspaceInfo?.projectRoot || displayedProjectRoot,
+  );
+  const linkedRootCount =
+    workspaceInfo?.linkedRoots?.length ?? displayedProjectLinkedDirectories.length;
+  const workspaceSource = workspaceInfo?.source === 'hostBound'
+    ? '宿主绑定目录'
+    : workspaceInfo?.source === 'project' || (!workspaceInfo && displayedProject)
+      ? '项目主目录'
+      : workspaceInfo?.source === 'global' && !workspaceInfo.globalWorkspaceConfigured
+        ? '全局工作空间（文档兜底）'
+        : '全局工作空间';
 
   // Load prompt descriptions for tooltip
   const [modeDescriptions, setModeDescriptions] = useState<Record<string, string>>({});
@@ -288,7 +354,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
    * 工具栏宽度自适应：默认宽度（窗口里左侧有会话列表、右侧可能开面板）常常不够放
    * 「消息模式 + 技能 + 记忆 + 附件 + 安全模式 + 工作目录 + 会话方式 + 语音 + 发送」，
    * 之前会被压扁变形。这里按容器实际宽度降级（而不是硬挤）：
-   * - compact（< 760px，按各控件实测宽度算出的临界值）：技能/记忆/附件/语音只留图标；
+   * - compact（< 560px）：语音与两个上下文选择器只留图标；
    * - 工作目录与会话方式**不设固定宽度**（响应式）：按内容自然展开（全屏时完整显示），
    *   空间不足才收缩到下限，截断由 truncate 兜底、完整值在 title 里；
    * - 再窄则由 flex-wrap 换行，保证任何宽度都不变形。
@@ -301,7 +367,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width ?? el.clientWidth;
-      setCompact(w < 760);
+      setCompact(w < 560);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -381,13 +447,12 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   }, [input, mode, attachments, pending, session, draftReady, blockReason, onSend, onEnsureSession, saveToSession]);
 
   /**
-   * 新会话：把输入区切回"快捷开始"草稿态，并把当前会话的目录与会话方式带成草稿默认值
-   * （同一目录继续追问新话题是最常见场景，省掉两次重选）。不建会话——首次发送时才建。
+   * 新会话：把输入区切回"快捷开始"草稿态，并沿用当前会话方式。
+   * 工作根仍按新会话的项目归属动态解析。不建会话——首次发送时才建。
    * 附件按会话隔离，旧会话未发送的附件由"会话切换"副作用统一清理。
    */
   const handleStartNewSession = useCallback(() => {
     if (session) {
-      setDraftCwd(session.cwd || GLOBAL_CWD);
       setDraftChoice(
         session.agentType === 'api' && session.apiProvider && session.apiModel
           ? apiChoice(session.apiProvider, session.apiModel)
@@ -397,7 +462,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     startNewSession();
     // 切回草稿态后直接把光标交回输入框：用户按 Ctrl+N 就是为了立刻打字
     textareaRef.current?.focus();
-  }, [session, setDraftCwd, setDraftChoice, startNewSession]);
+  }, [session, setDraftChoice, startNewSession]);
 
   // 键盘快捷键：Ctrl+I/Ctrl+K 开关面板；Ctrl+N 新会话；Enter 发送（Shift+Enter 换行）。
   // 依赖里带上 handleSendInternal（它自身依赖齐了），避免闭包落后于最新的发送状态。
@@ -480,41 +545,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     await addFromPaths(Array.isArray(selected) ? selected : [selected], 'file');
   }, [addFromPaths]);
 
-  const updateSessionCwd = useSessionStore((s) => s.updateSessionCwd);
   const updateSessionModel = useSessionStore((s) => s.updateSessionModel);
-
-  /**
-   * 工作目录按钮：
-   * - 已有会话 → 切换该会话的项目目录（下一条消息生效）；
-   * - 无会话 → 写"快捷开始"草稿目录（不建会话：会话在首次发送时才创建，避免产生空会话）。
-   *
-   * 「使用全局工作空间」两侧都要有：新会话写哨兵值（创建时交后端解析），已有会话写空串
-   * （运行期同样按默认工作区解析）——空串而不是绝对路径，之后改全局工作区设置会话会跟着变。
-   */
-  const handlePickProjectDir = useCallback(async (useGlobal = false) => {
-    try {
-      if (useGlobal) {
-        if (session) {
-          await updateSessionCwd(session.id, '');
-          showToast('已切换为全局工作空间，下一条消息起生效', 'info');
-        } else {
-          setDraftCwd(GLOBAL_CWD);
-          showToast('新会话将使用全局工作空间', 'info');
-        }
-        return;
-      }
-      const selected = await openDialog({ directory: true, multiple: false, title: '选择会话工作目录' });
-      if (!selected || typeof selected !== 'string') return;
-      if (session) {
-        await updateSessionCwd(session.id, selected);
-        showToast('项目目录已切换，下一条消息起生效', 'info');
-      } else {
-        setDraftCwd(selected);
-      }
-    } catch (e) {
-      showToast(`选择工作目录失败: ${errorMessage(e)}`, 'error');
-    }
-  }, [session, updateSessionCwd, setDraftCwd]);
 
   /** 已有会话当前模型在选择器里的 value（`api:提供商::模型`） */
   const sessionChoice = session && session.agentType === 'api'
@@ -945,7 +976,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                         padding: '0 3px',
                         fontSize: 8,
                         lineHeight: 1,
-                        color: '#fff',
+                        color: 'var(--text-on-accent)',
                         backgroundColor: 'var(--accent)',
                       }}
                     >
@@ -955,22 +986,19 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 </button>
                 {showPlusMenu && (
                   <div
-                    className={`absolute left-0 ${menuPos} overflow-y-auto z-50`}
+                    role="menu"
+                    className={`pd-menu absolute left-0 ${menuPos} z-50 overflow-y-auto`}
                     style={{
-                      padding: 4,
                       maxHeight: 280,
-                      borderRadius: 'var(--radius-lg)',
-                      backgroundColor: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      boxShadow: '0 10px 28px rgba(0,0,0,0.22)',
                       minWidth: 184,
                     }}
                   >
                     {/* 会话模式（二级） */}
                     <button
+                      type="button"
+                      role="menuitem"
                       onClick={() => setPlusSubmenu((v) => (v === 'mode' ? null : 'mode'))}
-                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                      style={{ padding: '6px 8px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
+                      className="pd-menu-item"
                     >
                       {(() => {
                         const Icon = MODE_ICONS[mode];
@@ -987,28 +1015,20 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       />
                     </button>
                     {plusSubmenu === 'mode' && (
-                      <div
-                        style={{
-                          paddingTop: 4,
-                          marginTop: 4,
-                          paddingBottom: 4,
-                          marginBottom: 4,
-                          borderTop: '1px solid var(--border)',
-                          borderBottom: '1px solid var(--border)',
-                        }}
-                      >
+                      <div className="border-y" style={{ margin: '4px 0', padding: '4px 0', borderColor: 'var(--border-light)' }}>
                         {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
                           const Icon = MODE_ICONS[m];
                           const isActive = mode === m;
                           return (
                             <button
                               key={m}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={isActive}
                               onClick={() => { setMode(m); setShowPlusMenu(false); setPlusSubmenu(null); }}
-                              className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                              className="pd-menu-item"
+                              data-active={isActive ? 'true' : undefined}
                               style={{
-                                padding: '6px 8px 6px 14px',
-                                fontSize: 12,
-                                borderRadius: 7,
                                 color: isActive ? MODE_COLORS[m] : 'var(--text-secondary)',
                               }}
                               title={modeDescriptions[m] || '使用默认对话风格'}
@@ -1024,12 +1044,11 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
                     {/* 附件（二级）：图片 / 文件 —— 高频项放在模式之后第二位 */}
                     <button
+                      type="button"
+                      role="menuitem"
                       onClick={() => setPlusSubmenu((v) => (v === 'attach' ? null : 'attach'))}
-                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                      className="pd-menu-item"
                       style={{
-                        padding: '6px 8px',
-                        fontSize: 12,
-                        borderRadius: 7,
                         color: attachCount > 0 ? 'var(--accent)' : 'var(--text-primary)',
                       }}
                     >
@@ -1045,28 +1064,21 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       />
                     </button>
                     {plusSubmenu === 'attach' && (
-                      <div
-                        style={{
-                          paddingTop: 4,
-                          marginTop: 4,
-                          paddingBottom: 4,
-                          marginBottom: 4,
-                          borderTop: '1px solid var(--border)',
-                          borderBottom: '1px solid var(--border)',
-                        }}
-                      >
+                      <div className="border-y" style={{ margin: '4px 0', padding: '4px 0', borderColor: 'var(--border-light)' }}>
                         <button
+                          type="button"
+                          role="menuitem"
                           onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickImages(); }}
-                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
+                          className="pd-menu-item"
                         >
                           <ImagePlus size={11} style={{ flexShrink: 0 }} />
                           <span className="flex-1">选择图片{imageCount > 0 ? `（${imageCount}）` : ''}</span>
                         </button>
                         <button
+                          type="button"
+                          role="menuitem"
                           onClick={() => { setShowPlusMenu(false); setPlusSubmenu(null); void handlePickFiles(); }}
-                          className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                          style={{ padding: '6px 8px 6px 14px', fontSize: 12, borderRadius: 7, color: 'var(--text-secondary)' }}
+                          className="pd-menu-item"
                         >
                           <FileText size={11} style={{ flexShrink: 0 }} />
                           <span className="flex-1">选择文件{fileCount > 0 ? `（${fileCount}）` : ''}</span>
@@ -1076,14 +1088,15 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
                     {/* 技能：打开既有技能面板，Ctrl+K 仍可用 */}
                     <button
+                      type="button"
+                      role="menuitem"
                       onClick={() => {
                         setShowPlusMenu(false);
                         setPlusSubmenu(null);
                         setShowSkillPicker(true);
                         setShowInspirationPicker(false);
                       }}
-                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                      style={{ padding: '6px 8px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
+                      className="pd-menu-item"
                     >
                       <Cpu size={12} style={{ flexShrink: 0 }} />
                       <span className="flex-1">技能</span>
@@ -1092,13 +1105,14 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
                     {/* 项目记忆：打开既有只读预览弹窗 */}
                     <button
+                      type="button"
+                      role="menuitem"
                       onClick={() => {
                         setShowPlusMenu(false);
                         setPlusSubmenu(null);
                         setShowMemoryDialog(true);
                       }}
-                      className="flex items-center gap-2 w-full text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                      style={{ padding: '6px 8px', fontSize: 12, borderRadius: 7, color: 'var(--text-primary)' }}
+                      className="pd-menu-item"
                     >
                       <MemoryStick size={12} style={{ flexShrink: 0 }} />
                       <span className="flex-1">项目记忆</span>
@@ -1130,76 +1144,186 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 />
               ) : null}
 
-              {/* 工作目录：已有会话 → 切换该会话目录；无会话 → 选定"快捷开始"的草稿目录（必选）。
-                  两条路径都给同一个菜单（选目录 / 使用全局工作空间），避免"新建能选全局、已有会话却不能"。
-                  宽度三件套（会话方式同）：
-                  · flex 1 1 0 —— basis 取 0：参与「是否换行」的预估宽度只有 minWidth，
-                    不会因为内容长就先把整行挤到换行；腾出的剩余空间由它瓜分，不够则收缩；
-                  · maxWidth: max-content —— 最多只长到自身内容那么宽（内容自适应，
-                    不会被拉伸成整行）；多出来的空间留在工具栏右侧（发送键之前）；
-                  · minWidth 必须落在**这个 flex 项**上：只写进里面的 button 无效——
-                    项自身仍会被压到 96 以下，而 button 保持 96 → 溢出并压住右边一个工具。
-                  截断由内层 truncate 兜底，完整值在 title 里 */}
-              <div className="relative" ref={cwdMenuRef} style={{ flex: '1 1 0', minWidth: 96, maxWidth: 'max-content' }}>
+              {/* 工作根只读展示：普通会话跟随项目主目录或全局工作空间，
+                  ACP 宿主导入会话由后端使用宿主恢复目录。这里不再提供目录覆盖入口。 */}
+              <div
+                className="relative"
+                ref={cwdMenuRef}
+                style={{
+                  flex: compact ? '0 0 24px' : '1 1 0',
+                  minWidth: compact ? 24 : 96,
+                  maxWidth: compact ? 24 : 'max-content',
+                }}
+              >
                 <button
                   onClick={() => { setShowCwdMenu((v) => !v); setShowPlusMenu(false); }}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors min-w-0 w-full"
+                  className={`flex items-center rounded-lg text-xs transition-colors min-w-0 w-full ${
+                    compact ? 'justify-center p-0' : 'gap-1 px-2 py-1'
+                  }`}
                   style={{
-                    color: (session ? session.cwd : draftCwd) ? 'var(--text-primary)' : '#F59E0B',
-                    border: !session && !draftCwd ? '1px solid rgba(245,158,11,0.5)' : '1px solid transparent',
-                    backgroundColor: 'transparent',
+                    height: compact ? 24 : undefined,
+                    color: 'var(--text-primary)',
+                    border: '1px solid transparent',
+                    backgroundColor: compact ? 'var(--bg-field)' : 'transparent',
                   }}
-                  title={
-                    session
-                      ? session.cwd
-                        ? `项目目录：${session.cwd}\n点击可切换（下一条消息生效）`
-                        : '当前使用全局工作空间，点击可切换'
-                      : draftCwd
-                        ? `新会话工作目录：${draftCwd === GLOBAL_CWD ? '全局工作空间' : draftCwd}\n点击可重选`
-                        : '请选择新会话的工作目录（必选）'
-                  }
+                  aria-label={`工作根：${workspaceSource}${displayWorkspaceRoot ? `，${displayWorkspaceRoot}` : ''}`}
+                  aria-expanded={showCwdMenu}
+                  aria-haspopup="menu"
+                  title={`工作根：${workspaceSource}${displayWorkspaceRoot ? `\n${displayWorkspaceRoot}` : ''}`}
                 >
                   <FolderOpen size={12} style={{ flexShrink: 0 }} />
-                  <span className="truncate">
-                    {session
-                      ? (session.cwd ? session.cwd.split(/[\\/]/).pop() || session.cwd : '全局工作空间')
-                      : (draftCwdLabel || '选择工作目录')}
-                  </span>
+                  {!compact && (
+                    <span className="truncate">{workspaceSource}</span>
+                  )}
                 </button>
                 {showCwdMenu && (
                   <div
-                    className={`absolute left-0 ${menuPos} py-1 rounded-lg z-20`}
+                    role="menu"
+                    className={`pd-menu absolute left-0 ${menuPos} z-20`}
                     style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.22)',
-                      minWidth: 168,
+                      minWidth: 220,
+                      maxHeight: 360,
+                      overflowY: 'auto',
                     }}
                   >
+                    {displayedProject ? (
+                      <div className="pd-cwd-project-summary">
+                        <div className="pd-cwd-project-summary-head">
+                          <FolderKanban size={11} />
+                          <span>{displayedProject.icon || '📁'} {displayedProject.name}</span>
+                        </div>
+                        <div
+                          className="pd-cwd-project-summary-row"
+                          title={displayProjectRoot || undefined}
+                        >
+                          <FolderOpen size={10} />
+                          <span className="shrink-0">主目录</span>
+                          <code>{displayProjectRoot || '未设置'}</code>
+                        </div>
+                        <div className="pd-cwd-project-summary-row">
+                          <Link2 size={10} />
+                          <span className="shrink-0">关联目录</span>
+                          <code>{linkedRootCount} 个</code>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="pd-cwd-project-summary">
+                        <div className="pd-cwd-project-summary-head">
+                          <FolderOpen size={11} />
+                          <span>全局工作空间</span>
+                        </div>
+                        <div
+                          className="pd-cwd-project-summary-row"
+                          title={displayWorkspaceRoot || '正在读取全局工作空间路径'}
+                        >
+                          <FolderOpen size={10} />
+                          <span className="shrink-0">工作根</span>
+                          <code>{displayWorkspaceRoot || '正在读取全局工作空间路径…'}</code>
+                        </div>
+                        <div className="mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                          未归属项目，运行根为全局工作空间。
+                        </div>
+                      </div>
+                    )}
+                    {canChangeSessionProject && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setShowCwdMenu(false);
+                          setShowProjectMembership(true);
+                        }}
+                        className="pd-menu-item"
+                      >
+                        <FolderKanban size={12} />
+                        更改项目归属…
+                      </button>
+                    )}
+                    {!session && (
+                      <>
+                        <div className="pd-menu-label">项目归属</div>
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={!draftProjectId}
+                          aria-current={!draftProjectId ? 'true' : undefined}
+                          onClick={() => {
+                            setDraftProjectId('');
+                            setShowCwdMenu(false);
+                          }}
+                          className="pd-menu-item"
+                        >
+                          <span className="pd-cwd-project-option-icon" aria-hidden="true">
+                            <FolderOpen size={12} />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">全局工作空间</span>
+                          <span className="pd-cwd-project-option-check" aria-hidden="true">
+                            {!draftProjectId && <Check size={12} />}
+                          </span>
+                        </button>
+                        {activeProjects.map((project) => {
+                          const selected = project.id === draftProjectId;
+                          return (
+                            <button
+                              key={project.id}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={selected}
+                              aria-current={selected ? 'true' : undefined}
+                              onClick={() => {
+                                setDraftProjectId(project.id);
+                                setShowCwdMenu(false);
+                              }}
+                              className="pd-menu-item"
+                              title={project.name}
+                            >
+                              <span className="pd-cwd-project-option-icon" aria-hidden="true">
+                                {project.icon || '📁'}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                              <span className="pd-cwd-project-option-check" aria-hidden="true">
+                                {selected && <Check size={12} />}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+                    {workspaceInfo?.source === 'hostBound' && (
+                      <div
+                        className="mx-2 mb-2 rounded-md px-2 py-1.5 text-[10px] leading-relaxed"
+                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--status-warning)' }}
+                      >
+                        <div className="break-all">
+                          工作根：{normalizeDisplayPath(workspaceInfo.workRoot)}
+                        </div>
+                        <div className="mt-1">该会话由宿主声明必须绑定此目录；项目主目录与关联目录只用于记忆和安全路径，不改写工作根。</div>
+                      </div>
+                    )}
                     <button
-                      onClick={() => { setShowCwdMenu(false); void handlePickProjectDir(); }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-primary)' }}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowCwdMenu(false);
+                        navigate(displayedProject
+                          ? `/projects?projectId=${encodeURIComponent(displayedProject.id)}`
+                          : '/projects');
+                      }}
+                      className="pd-menu-item"
                     >
-                      <FolderOpen size={12} />
-                      选择目录…
-                    </button>
-                    <button
-                      onClick={() => { setShowCwdMenu(false); void handlePickProjectDir(true); }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                      style={{ color: 'var(--text-primary)' }}
-                    >
-                      <FolderOpen size={12} />
-                      {cwdIsGlobal ? '使用全局工作空间（√）' : '使用全局工作空间'}
+                      <FolderKanban size={12} />
+                      管理项目与目录…
                     </button>
                   </div>
                 )}
               </div>
 
+              {/* 用弹性占位把模型/会话方式区域稳定推到工具栏右侧。 */}
+              <div aria-hidden="true" style={{ flex: '1 1 0', minWidth: 0 }} />
+
               {/* 会话方式：无会话时可选（CLI / API 分组二级菜单 + 未选项则不允许发送）；
                   API 会话可直接切换模型（对后续消息生效）；CLI 会话仍只读展示（换类型等于换会话）。
-                  宽度规则同「工作目录」：flex 1 1 0（预估宽度只有 minWidth，不挤换行）
-                  + maxWidth max-content（最多长到内容宽，不拉伸）+ minWidth 120（收缩下限） */}
+                  模型选择器不参与 flex 伸展，避免占满剩余空间后自动外边距失效。 */}
               {session && session.agentType === 'api' ? (
                 <Select
                   value={sessionChoice}
@@ -1208,8 +1332,17 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   size="xs"
                   placeholder="选择模型"
                   disabled={sessionModelGroups.length === 0 || isGenerating}
-                  style={{ minWidth: 120, maxWidth: 'max-content', flex: '1 1 0' }}
+                  style={{
+                    minWidth: compact ? 24 : 120,
+                    width: compact ? 24 : undefined,
+                    maxWidth: compact ? 24 : 'max-content',
+                    flex: compact ? '0 0 24px' : '0 1 auto',
+                    marginLeft: 'auto',
+                  }}
                   panelMinWidth={230}
+                  ariaLabel={`当前模型：${choiceLabels.get(sessionChoice) || '未选择'}`}
+                  iconOnly={compact}
+                  triggerIcon={<Cpu size={13} />}
                   title={
                     isGenerating
                       ? `${choiceLabels.get(sessionChoice) || '当前模型'}（生成中，暂不可切换）`
@@ -1218,8 +1351,20 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 />
               ) : session ? (
                 <span
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs truncate"
-                  style={{ color: 'var(--text-tertiary)', height: 24, minWidth: 120, maxWidth: 'max-content', flex: '1 1 0' }}
+                  className={`flex items-center rounded-lg text-xs truncate ${
+                    compact ? 'justify-center p-0' : 'gap-1 px-2 py-1'
+                  }`}
+                  style={{
+                    color: 'var(--text-tertiary)',
+                    height: 24,
+                    minWidth: compact ? 24 : 120,
+                    width: compact ? 24 : undefined,
+                    maxWidth: compact ? 24 : 'max-content',
+                    flex: compact ? '0 0 24px' : '0 1 auto',
+                    marginLeft: 'auto',
+                    backgroundColor: compact ? 'var(--bg-field)' : undefined,
+                  }}
+                  aria-label={`会话方式：${getDisplayName(session.agentType)}`}
                   title={getDisplayName(session.agentType)}
                 >
                   {/* CLI Agent 用其自身图标；兜底用 Bot —— 不能用 Cpu（那是「技能」的图标） */}
@@ -1229,7 +1374,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                     accentColor={getTheme(session.agentType).color}
                     fallback={<Bot size={12} style={{ flexShrink: 0 }} />}
                   />
-                  <span className="truncate">{getDisplayName(session.agentType)}</span>
+                  {!compact && <span className="truncate">{getDisplayName(session.agentType)}</span>}
                 </span>
               ) : (
                 <Select
@@ -1239,8 +1384,17 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   size="xs"
                   placeholder="选择会话方式"
                   disabled={choiceGroups.length === 0}
-                  style={{ minWidth: 120, maxWidth: 'max-content', flex: '1 1 0' }}
+                  style={{
+                    minWidth: compact ? 24 : 120,
+                    width: compact ? 24 : undefined,
+                    maxWidth: compact ? 24 : 'max-content',
+                    flex: compact ? '0 0 24px' : '0 1 auto',
+                    marginLeft: 'auto',
+                  }}
                   panelMinWidth={230}
+                  ariaLabel={`会话方式：${choiceLabels.get(draftChoice) || '未选择'}`}
+                  iconOnly={compact}
+                  triggerIcon={<Bot size={13} />}
                   title={
                     choiceGroups.length === 0
                       ? '暂无可用的会话方式：请先在「设置」里配置 API 提供商或安装 CLI Agent'
@@ -1287,6 +1441,16 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
       {session && <SessionUsageBar sessionId={session.id} agentType={session.agentType ?? null} />}
 
       {showMemoryDialog && <ProjectMemoryDialog onClose={() => setShowMemoryDialog(false)} />}
+      {showProjectMembership && session && (
+        <ProjectMembershipDialog
+          workType="session"
+          workId={session.id}
+          workTitle={session.title}
+          currentProjectId={session.projectId}
+          onClose={() => setShowProjectMembership(false)}
+          onChanged={handleSessionProjectChanged}
+        />
+      )}
     </div>
   );
 }

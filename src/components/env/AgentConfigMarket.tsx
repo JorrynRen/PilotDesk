@@ -7,6 +7,7 @@ import { errorMessage } from '../../utils/errorMessage';
 
 import { SettingsCard, SettingsButton } from '../settings';
 import { AgentIcon } from '../common/AgentIcon';
+import { MarketLoadError } from '../market/MarketLoadError';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
 import type { LifecycleSpec } from '../../types';
@@ -15,7 +16,7 @@ import type { LifecycleSpec } from '../../types';
  * AgentConfigMarket — Agent 市集。
  *
  * 两类接入方式同架陈列：`ACP 协议接入`（官方目录 + 官方缺失的预置）与
- * `本地 CLI 接入`（兼容模式预置）。
+ * `兼容模式接入`（直接以命令行子进程运行）。
  * 「获取」只落草稿（后端记 pending_install 并下载图标），随即跳转到
  * 「设置 › 集成配置」的该 Agent 上继续完成安装 —— 安装本身是本地动作，不在这里静默做。
  */
@@ -58,7 +59,7 @@ interface MarketAgent {
 
 const CATEGORY_TABS: { key: MarketCategory; label: string; hint: string }[] = [
   { key: 'acp', label: 'ACP 协议接入', hint: '通过 Agent Client Protocol 适配器接入' },
-  { key: 'cli', label: '本地 CLI 接入', hint: '以本地命令行子进程方式接入（兼容模式）' },
+  { key: 'cli', label: '兼容模式接入', hint: '无需 ACP 适配器，直接以命令行子进程方式接入' },
 ];
 
 /** 包状态文案：市场草稿的安装进度对用户可见。 */
@@ -252,9 +253,9 @@ export function AgentConfigMarket() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 pd-scroll-stable">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* 分类 + 搜索 + 刷新目录：同一行（页面标题由「资源市集」页签承载，这里不再重复） */}
-      <div className="flex items-center gap-2 mb-3 flex-wrap">
+      <div className="pd-market-toolbar">
         {/* 二级分类：组合开关（一个凹槽容器 + 选中段高亮），与一级页签的 pd-tab 区分开 */}
         <div
           className="inline-flex items-center gap-0.5 p-0.5 rounded-full shrink-0"
@@ -295,55 +296,39 @@ export function AgentConfigMarket() {
           />
           <input
             type="text"
-            className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
-            style={{
-              height: 28, /* 对齐同行 Tab 组高度 */
-              backgroundColor: 'var(--bg-field)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
+            className="pd-market-search"
             placeholder="搜索名称 / 标识 / 包名"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
         </div>
-        <SettingsButton
-          variant="secondary"
-          className="ml-auto"
-          icon={<RefreshCw size={11} className={market.acp.loading || market.cli.loading ? 'animate-spin' : undefined} />}
+        <button
+          type="button"
+          className="pd-market-icon-button pd-btn ml-auto"
           onClick={() => refreshAll(true)}
           disabled={market.acp.loading || market.cli.loading}
           title="刷新两个市场的数据源（ACP 官方目录缓存 24 小时，过期自动后台更新）"
+          aria-label="刷新 Agent 市场目录"
         >
-          刷新目录
-        </SettingsButton>
+          <RefreshCw size={11} className={market.acp.loading || market.cli.loading ? 'animate-spin' : undefined} />
+        </button>
       </div>
 
-      <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
+      <div className="shrink-0 px-4 pb-1 pt-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
         {category === 'acp'
           ? '获取后会在本机安装对应适配器（npm 全局包）；安装完成前该 Agent 不可用于会话。'
-          : '兼容模式配置通过命令行子进程调用，获取后需在本机安装对应的 CLI 工具。'}
+          : '兼容模式配置通过命令行子进程调用，需确保本机已安装对应的 CLI Agent 且可用。'}
       </div>
 
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pd-scroll-stable">
         <div className="space-y-2">
           {/* 每个市场独立报错：一侧数据源故障不影响另一侧的浏览与获取 */}
           {current.error && (
-            <div
-              className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11px]"
-              style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-            >
-              <AlertCircle size={12} style={{ color: 'var(--danger, #dc2626)' }} />
-              <span className="min-w-0 flex-1" style={{ color: 'var(--danger, #dc2626)' }}>
-                {category === 'acp' ? 'ACP 市场' : '本地 CLI 市场'}加载失败：{current.error}
-              </span>
-              <SettingsButton
-                variant="secondary"
-                icon={<RefreshCw size={11} />}
-                onClick={() => fetchCategory(category, category === 'acp')}
-              >
-                重试
-              </SettingsButton>
-            </div>
+            <MarketLoadError
+              error={current.error}
+              fallbackTitle={`${category === 'acp' ? 'ACP 市场' : '兼容模式市场'}加载失败`}
+              onRetry={() => { void fetchCategory(category, category === 'acp'); }}
+            />
           )}
           {visible.length === 0 ? (
             <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>
@@ -449,6 +434,7 @@ export function AgentConfigMarket() {
             })
           )}
         </div>
+      </div>
     </div>
   );
 }

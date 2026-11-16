@@ -13,6 +13,20 @@ import { readFileSync } from "node:fs";
 const pkg = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
 ) as { version: string };
+const tauriConfig = JSON.parse(
+  readFileSync(new URL("./src-tauri/tauri.conf.json", import.meta.url), "utf-8"),
+) as { version: string };
+const cargoManifest = readFileSync(
+  new URL("./src-tauri/Cargo.toml", import.meta.url),
+  "utf-8",
+);
+const cargoVersion = cargoManifest.match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1];
+
+if (!cargoVersion || new Set([pkg.version, tauriConfig.version, cargoVersion]).size !== 1) {
+  throw new Error(
+    `Version mismatch: package.json=${pkg.version}, tauri.conf.json=${tauriConfig.version}, Cargo.toml=${cargoVersion ?? "missing"}`,
+  );
+}
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -47,7 +61,13 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: [
+        "**/src-tauri/**",
+        "**/test-results/**",
+        "**/.codex-target/**",
+        "**/.trae/**",
+        "**/dist/**",
+      ],
     },
   },
 }));

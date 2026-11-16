@@ -509,12 +509,7 @@ pub async fn run_python(
     // ── 确定脚本源：优先 file（脚本文件），否则 code（内联代码写临时文件）──
     let (target, tmp_cleanup): (PathBuf, Option<PathBuf>) = match (file, code) {
         (Some(f), _) if !f.trim().is_empty() => {
-            let p = PathBuf::from(f.trim());
-            let abs = if p.is_absolute() {
-                p
-            } else {
-                std::path::Path::new(cwd).join(&p)
-            };
+            let abs = crate::utils::paths::normalize_absolute_path(f.trim(), cwd);
             if !abs.exists() {
                 return Err(format!("Python 脚本文件不存在: {}", abs.display()));
             }

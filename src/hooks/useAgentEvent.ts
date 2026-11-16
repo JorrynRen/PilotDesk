@@ -75,7 +75,6 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
       message: string,
       mode?: string,
       agentType?: string,
-      cwd?: string,
       systemPrompt?: string,
       agentSessionId?: string,
       temperature?: number,
@@ -91,7 +90,6 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           agentType: agentType || defaultAgentType,
           message,
           mode: mode || 'native',
-          cwd: cwd || null,
           systemPrompt: systemPrompt || null,
           agentSessionId: agentSessionId || null,
           temperature: temperature ?? null,
@@ -119,12 +117,11 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
   );
 
   const createAgentSession = useCallback(
-    async (sessionId: string, agentType: string, cwd?: string) => {
+    async (sessionId: string, agentType: string) => {
       try {
         await invoke('agent_create_session', {
           sessionId,
           agentType,
-          cwd: cwd || null,
         });
       } catch (err) {
         // 门禁拦下的原因（未安装 / 启动命令不可用 / ACP 未登录等）必须让用户看到，
@@ -182,7 +179,6 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           agentType: 'api',
           message,
           mode: 'native',
-          cwd: null,
           systemPrompt: null,
           agentSessionId: null,
         });

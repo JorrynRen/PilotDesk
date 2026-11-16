@@ -17,6 +17,7 @@ PilotDesk 是一个 **Agent 统一桌面客户端**，将多个 AI Agent（Claud
 
 > 前端 UI 中显示的版本号（如状态栏 `PilotDesk vX.Y.Z`）**无需手改**：`vite.config.ts` 会在构建时读取 `package.json` 的 `version`，
 > 注入为 `import.meta.env.VITE_APP_VERSION`，各组件统一从该处读取。
+> `npm run build` 还会校验上述三处版本；任一不一致会直接终止构建，避免打出显示版本与安装包版本不同的产物。
 
 发版步骤：
 

@@ -259,7 +259,11 @@ fn extract_images(
             .as_nanos();
         let file = dir.join(format!("{}_{}_{}.{}", prefix, ts, saved, ext));
         if std::fs::write(&file, &bytes).is_ok() {
-            paths.push(file.to_string_lossy().to_string());
+            paths.push(
+                crate::utils::paths::normalize_absolute_path(&file.to_string_lossy(), "")
+                    .to_string_lossy()
+                    .to_string(),
+            );
             saved += 1;
         }
     }
@@ -328,12 +332,7 @@ impl ToolHandler for ParseDocumentTool {
             .unwrap_or("json")
             .to_string();
 
-        let path = PathBuf::from(file.trim());
-        let abs = if path.is_absolute() {
-            path
-        } else {
-            PathBuf::from(&self.cwd).join(&path)
-        };
+        let abs = crate::utils::paths::normalize_absolute_path(file.trim(), &self.cwd);
         if !abs.exists() {
             return Err(format!("文档不存在: {}", abs.display()));
         }
@@ -371,12 +370,11 @@ impl ToolHandler for ParseDocumentTool {
 impl ParseDocumentTool {
     /// 图片落盘目录（按会话隔离，复用附件模型 `<cwd>/attachments/<session_id>`）。
     fn image_dir(&self) -> PathBuf {
-        let base = if self.session_id.is_empty() {
-            self.cwd.clone()
+        if self.session_id.is_empty() {
+            crate::utils::paths::normalize_absolute_path(&self.cwd, "")
         } else {
-            format!("{}/attachments/{}", self.cwd, self.session_id)
-        };
-        PathBuf::from(&base)
+            crate::utils::paths::resolve_attachments_dir(&self.cwd, &self.session_id)
+        }
     }
 
     async fn parse_pdf(

@@ -7,15 +7,18 @@ import { useAccountStore } from './stores/accountStore';
 import { useSkillStore } from './stores/skillStore';
 import { useAgentEvent } from './hooks/useAgentEvent';
 import { useCrashReporter } from './hooks/useCrashReporter';
+import { useRightPanelWindowCompensation } from './hooks/useRightPanelWindowCompensation';
+import { useIdleMaintenance } from './hooks/useIdleMaintenance';
 import { notifyElevationOnce } from './utils/elevation';
 import { commandDispatcher } from './plugin/CommandDispatcher';
 import { usePluginStore, applyCommandParamDefaults } from './stores/pluginStore';
 import { errorMessage } from './utils/errorMessage';
 import { pluginRegistry } from './plugin/PluginRegistry';
-import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar, NotificationCenter, CommandCenter } from './components/layout';
+import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar, NotificationCenter, CommandCenter, WorkbenchRail } from './components/layout';
 import { CustomTabHost } from './components/custom/CustomTabHost';
 import { TooltipLayer } from './components/common/TooltipLayer';
-import { useCustomTabsStore } from './stores/customTabsStore';
+import { useCustomTabsStore, PORTAL_TAB_ID } from './stores/customTabsStore';
+import { useCommandCenterStore } from './stores/commandCenterStore';
 import { subscribeGroupChat, useGroupChatStore } from './stores/groupChatStore';
 import { subscribeNotifications } from './stores/notificationEvents';
 import { TerminalProvider } from './TerminalProvider';
@@ -23,6 +26,8 @@ import { useTerminal } from './TerminalManager';
 import { ImagePreview } from './components/message/ImagePreview';
 import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { FeedbackDialog } from './components/feedback/FeedbackDialog';
+import { EnclaveMessenger } from './components/enclave/EnclaveMessenger';
+import type { ViewMode } from './TerminalManager';
 import './styles/ui.css';
 
 /**
@@ -61,8 +66,14 @@ const EnclaveOrgPage = lazy(() =>
 const EnclaveKbPage = lazy(() =>
   import('./pages/EnclaveKbPage').then((m) => ({ default: m.EnclaveKbPage })),
 );
+const EnclaveApiSharePage = lazy(() =>
+  import('./pages/EnclaveApiSharePage').then((m) => ({ default: m.EnclaveApiSharePage })),
+);
 const EnclaveReportPage = lazy(() =>
   import('./pages/EnclaveReportPage').then((m) => ({ default: m.EnclaveReportPage })),
+);
+const ProjectsPage = lazy(() =>
+  import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })),
 );
 const WorkflowEditorPage = lazy(() =>
   import('./pages/WorkflowEditorPage').then((m) => ({ default: m.WorkflowEditorPage })),
@@ -83,7 +94,7 @@ function PageFallback() {
   return <div className="flex-1 min-h-0" />;
 }
 
-function MainLayout() {
+function MainLayout({ active }: { active: boolean }) {
   // 各模式各自的右侧面板开合状态（会话/终端用 RightPanel；群聊用其页内专属右侧面板；
   // 工作流/自定义无右栏，不显示折叠按钮）
   const [sidePanelOpen, setSidePanelOpen] = useState<{ session: boolean; terminal: boolean; groupchat: boolean }>({
@@ -92,15 +103,29 @@ function MainLayout() {
     terminal: true,
     groupchat: true,
   });
+  const [sessionListOpen, setSessionListOpen] = useState(false);
   const { viewMode, setMode, terminalEverOpened } = useTerminal();
   const rightPanelMode =
     viewMode === 'session' || viewMode === 'terminal' || viewMode === 'groupchat' ? viewMode : null;
   const rightPanelOpen = rightPanelMode ? sidePanelOpen[rightPanelMode] : false;
+  // 主工作台离开 `/` 后只隐藏、不卸载，以保留门户 iframe 等页面内状态。
+  // 隐藏期间必须撤销右侧栏宽度补偿，避免资产页继承主工作台的窗口宽度。
+  useRightPanelWindowCompensation(rightPanelMode, rightPanelOpen && active);
   const toggleRightPanel = () => {
     if (!rightPanelMode) return;
     setSidePanelOpen((prev) => ({ ...prev, [rightPanelMode]: !prev[rightPanelMode] }));
   };
   const navigate = useNavigate();
+
+  const handleModeChange = (mode: ViewMode) => {
+    setSessionListOpen(false);
+    setMode(mode);
+  };
+
+  const openPortal = () => {
+    useCustomTabsStore.getState().setActiveTab(PORTAL_TAB_ID);
+    handleModeChange('custom');
+  };
 
   // Agent Event status monitoring (replaces WebSocket)
   useAgentEvent({
@@ -120,11 +145,19 @@ function MainLayout() {
     useCustomTabsStore.getState().load();
   }, []);
 
+  // 顶栏「运行与待办」跨全部路由常驻：低频校准待处理与运行态，事件到达后的下一次轮询即可反映。
+  useEffect(() => {
+    const refreshRuntime = () => void useCommandCenterStore.getState().pollLive();
+    refreshRuntime();
+    const timer = window.setInterval(refreshRuntime, 20_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   /**
    * 离开「会话 / 群聊」模式即清空各自列表的选中项：两者每次进入都是「未选中任何条目」的干净状态，
    * 由用户自行点选。
    *
-   * 之所以在"离开时"清、而不是"进入时"清：指挥中心 / 通知中心 / 会话转群聊都是「先选中再 setMode」，
+   * 之所以在"离开时"清、而不是"进入时"清：运行与待办 / 通知中心 / 会话转群聊都是「先选中再 setMode」，
    * 进入时清空会把这些显式跳转的落点一起抹掉；离开时清则只清残留（否则上次选中的条目会在下次进入时
    * 仍高亮，看起来像"默认选中"）。仅清本地选中，不发后端请求、不动任何数据。
    */
@@ -140,23 +173,33 @@ function MainLayout() {
   }, [viewMode]);
 
   return (
-    <div className="pilotdesk-window-shell">
+    <div className={`pilotdesk-window-shell${active ? '' : ' hidden'}`} aria-hidden={!active}>
       <div className="pilotdesk-window-content flex flex-col h-full">
         <TitleBar
           mode={viewMode}
-          onModeChange={setMode}
+          onModeChange={handleModeChange}
           onOpenSettings={() => navigate('/settings')}
           onOpenKnowledge={() => navigate('/knowledge')}
           onOpenEnclave={() => navigate('/enclave')}
-          onOpenMarket={() => navigate('/market')}
-          onOpenInspirations={() => navigate('/inspirations')}
           onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
           rightPanelOpen={rightPanelMode ? rightPanelOpen : undefined}
+          workbench
         />
-        {/* 工作区：这一层的底色就是壳层的"底"（--bg-canvas，见 globals.css）。
-            只留左右各 8px 与面板之间 8px —— **上下不加内边距**：顶栏/状态栏自身高度已经足够，
-            再留 8px 只会把三栏压矮，且上边那条缝会被读成"又一条横带"。 */}
-        <div className="flex-1 flex overflow-hidden relative px-2 gap-2">
+        <div className="workbench-body">
+          <WorkbenchRail
+            mode={viewMode}
+            onModeChange={handleModeChange}
+            onOpenKnowledge={() => navigate('/knowledge')}
+            onOpenEnclave={() => navigate('/enclave')}
+            onOpenMarket={() => navigate('/market')}
+            onOpenInspirations={() => navigate('/inspirations')}
+            onOpenPortal={openPortal}
+            onOpenProjects={() => navigate('/projects')}
+            onOpenSettings={() => navigate('/settings')}
+            sessionListOpen={sessionListOpen}
+            onToggleSessionList={() => setSessionListOpen((open) => !open)}
+          />
+          <div className="workbench-workspace">
           {/* 群聊模式：本页自带左/中/右三栏，所以这一层**不当面板**——留透明露出壳层的"底"，
               由页面内部的三栏各自圆角成面板（与其它模式观感一致）。 */}
           {isGroupChat && (
@@ -168,7 +211,7 @@ function MainLayout() {
           )}
           {/* 工作流模式：嵌入主布局（复用工作流管理页，去除自身 TitleBar/StatusBar），全宽 */}
           {isWorkflow && (
-            <div className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
+            <div className="workbench-surface flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
               <Suspense fallback={<PageFallback />}>
                 <WorkflowPage embedded />
               </Suspense>
@@ -176,14 +219,14 @@ function MainLayout() {
           )}
           {/* 门户标签模式：固定壳。CustomTabHost 常挂载（CSS 隐藏切换），
               避免每次进出卸载导致已打开标签页的 iframe 状态丢失 */}
-          <div className={`flex-1 flex flex-col overflow-hidden rounded-lg ${isCustom ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
+          <div className={`workbench-surface flex-1 flex flex-col overflow-hidden rounded-lg ${isCustom ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
             <CustomTabHost />
           </div>
           {/* 终端模式：中间终端 + 右侧面板（保留原始布局：会话列表隐藏）。
               TerminalPanel 在**首次进入终端模式**时才挂载（xterm 不进首屏）；挂载后常驻，
               非终端模式仅用 display:none 隐藏，切回时 xterm 会话 DOM/内容原样保留。 */}
           {terminalEverOpened && (
-            <div className={`flex-1 flex flex-col overflow-hidden rounded-lg ${isTerminal ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
+            <div className={`workbench-surface workbench-center-surface workbench-terminal-surface flex-1 flex flex-col overflow-hidden rounded-lg ${isTerminal ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
               <Suspense fallback={<PageFallback />}>
                 <TerminalPanel />
               </Suspense>
@@ -193,11 +236,22 @@ function MainLayout() {
           {/* 会话模式（默认）：三栏布局 */}
           {isSession && (
             <>
-              <SessionList style={undefined} />
+              {sessionListOpen && (
+                <button
+                  type="button"
+                  className="workbench-session-backdrop"
+                  aria-label="关闭会话列表"
+                  onClick={() => setSessionListOpen(false)}
+                />
+              )}
+              <div className={`workbench-session-pane ${sessionListOpen ? 'is-open' : ''}`}>
+                <SessionList onSessionSelected={() => setSessionListOpen(false)} />
+              </div>
               <MainPanel style={undefined} />
               <RightPanel isOpen={rightPanelOpen} mode="session" />
             </>
           )}
+          </div>
         </div>
         <StatusBar
           onOpenSettings={() => navigate('/settings')}
@@ -210,6 +264,10 @@ function MainLayout() {
 
 function App() {
   const location = useLocation();
+  const isMainRoute = location.pathname === '/';
+
+  // 知识/记忆的闲时维护挂在 App 壳上：不依赖用户是否打开设置页或某个工作模式。
+  useIdleMaintenance();
 
   // 崩溃上报（阶段一）：启动时把上次运行的崩溃预填进反馈弹窗，并把前端异常写入日志
   useCrashReporter();
@@ -262,8 +320,8 @@ function App() {
     subscribeNotifications();
   }, []);
 
-  // 说明：原「空状态自动弹出指挥中心」的逻辑已移除。无选中会话时，
-  // 会话默认页（MainPanel）现在内嵌了指挥中心内容（variant="inline"），
+  // 说明：原「空状态自动弹出运行与待办」的逻辑已移除。无选中会话时，
+  // 会话默认页（MainPanel）现在内嵌了精简运行摘要（variant="inline"），
   // 不需要再额外弹一个模态盖在它上面。
 
   // Update window title based on current route
@@ -281,10 +339,14 @@ function App() {
       document.title = `${base} - 工作流管理`;
     } else if (path === '/settings') {
       document.title = `${base} - 设置`;
+    } else if (path === '/projects') {
+      document.title = `${base} - 项目管理`;
     } else if (path === '/knowledge') {
       document.title = `${base} - 知识库`;
     } else if (path === '/enclave/kb') {
       document.title = `${base} - 团队知识库`;
+    } else if (path === '/enclave/api-share') {
+      document.title = `${base} - API 共享`;
     } else if (path === '/enclave/reports') {
       document.title = `${base} - 团队报告`;
     } else if (path === '/enclave/org') {
@@ -363,13 +425,16 @@ function App() {
       <FeedbackDialog />
       {/* 全局通知中心（顶栏铃铛触发；App 级挂载，所有模式/页面都能打开） */}
       <NotificationCenter />
-      {/* 全局指挥中心模态（工作流页「待处理」触发；会话默认页另有一份内嵌内容） */}
+      {/* 飞地一对一传讯：App 级常驻，切飞地子路由不卸载；覆盖显示，不参与布局。 */}
+      <EnclaveMessenger />
+      {/* 全局运行与待办浮层（顶栏或工作流页「待处理」触发；会话默认页只保留摘要） */}
       <CommandCenter />
       {/* 全局接管原生 title：统一延迟/换行/最大宽度，并保证不溢出窗口 */}
       <TooltipLayer />
+      {/* 主工作台跨路由常驻：资产页仅覆盖显示，不能卸载门户标签及其 iframe。 */}
+      <MainLayout active={isMainRoute} />
       <Suspense fallback={<PageFallback />}>
         <Routes>
-          <Route path="/" element={<MainLayout />} />
           {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
           <Route path="/inspirations" element={<InspirationLibraryPage />} />
           {/* 资源市集：插件 / 工作流模板 / Agent 配置 / 灵感 的统一获取入口 */}
@@ -378,7 +443,9 @@ function App() {
           <Route path="/workflow" element={<ModeRedirect mode="workflow" />} />
           <Route path="/groupchat" element={<ModeRedirect mode="groupchat" />} />
           <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
-          <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          {/* 项目管理：仅承载工作归属、目录和快速创建，不是新的工作模式 */}
+          <Route path="/projects" element={<ProjectsPage />} />
           {/* 知识库：独立路由（顶部组合菜单的「知识库」段进入） */}
           <Route path="/knowledge" element={<KnowledgePage />} />
           {/* 飞地：独立路由（顶部组合菜单的「飞地」段进入） */}
@@ -387,6 +454,8 @@ function App() {
           <Route path="/enclave/org" element={<EnclaveOrgPage />} />
           {/* 飞地团队知识库：任务产出自动沉淀，成员可检索 */}
           <Route path="/enclave/kb" element={<EnclaveKbPage />} />
+          {/* 飞地 API 共享：路由网关、邀请、连接令牌与用量 */}
+          <Route path="/enclave/api-share" element={<EnclaveApiSharePage />} />
           {/* 飞地团队报告：周报 / 月报与成员绩效数据（只读派生） */}
           <Route path="/enclave/reports" element={<EnclaveReportPage />} />
         </Routes>

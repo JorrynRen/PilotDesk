@@ -386,7 +386,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="settings-page-stack">
       {/* Prerequisites：必需项缺失会阻断 Agent 能力，推荐项缺失只影响对应功能，两者都给安装引导 */}
       <SettingsSection title="前置依赖">
         <div className="space-y-2">

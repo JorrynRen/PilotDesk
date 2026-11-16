@@ -150,11 +150,13 @@ pub fn is_closed_status(s: &str) -> bool {
 // ── 汇总容器：有子任务的任务不再自己执行 ────────────────────────
 
 /// 子任务 id + 状态（只支持一层父子，因此不递归）。
-fn child_rows(conn: &Connection, org_id: &str, parent_id: &str) -> Result<Vec<(String, String)>, String> {
+fn child_rows(
+    conn: &Connection,
+    org_id: &str,
+    parent_id: &str,
+) -> Result<Vec<(String, String)>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, status FROM org_tasks WHERE org_id = ?1 AND parent_task_id = ?2",
-        )
+        .prepare("SELECT id, status FROM org_tasks WHERE org_id = ?1 AND parent_task_id = ?2")
         .map_err(|e| format!("查询子任务失败：{}", e))?;
     let rows = stmt
         .query_map(params![org_id, parent_id], |r| {
@@ -241,11 +243,7 @@ fn sync_container_status(conn: &Connection, org_id: &str, parent_id: &str) -> Re
 }
 
 /// 子任务状态变化后，同步其父容器的派生状态。
-pub fn sync_parent_container(
-    conn: &Connection,
-    org_id: &str,
-    task_id: &str,
-) -> Result<(), String> {
+pub fn sync_parent_container(conn: &Connection, org_id: &str, task_id: &str) -> Result<(), String> {
     let row = load_task(conn, org_id, task_id)?;
     if let Some(parent) = row.parent_task_id.as_deref() {
         sync_container_status(conn, org_id, parent)?;
@@ -256,11 +254,7 @@ pub fn sync_parent_container(
 /// 容器作废：级联作废未收敛的子任务（待办 / 进行中 / 待确认）。
 ///
 /// 已完成 / 已归档的子任务保留原状 —— 它们已经产出的成果与知识库沉淀不追溯删除。
-fn cascade_cancel_children(
-    conn: &Connection,
-    org_id: &str,
-    parent_id: &str,
-) -> Result<(), String> {
+fn cascade_cancel_children(conn: &Connection, org_id: &str, parent_id: &str) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
     for (id, status) in child_rows(conn, org_id, parent_id)? {
         if matches!(
@@ -275,9 +269,7 @@ fn cascade_cancel_children(
         )
         .map_err(|e| format!("级联作废子任务失败：{}", e))?;
         // 子任务可能曾确认过产出、恢复汇报后又被放弃：保留条目，只标记「来源任务已作废」
-        if let Err(e) =
-            crate::enclave::knowledge::mark_task_output_cancelled(conn, org_id, &id)
-        {
+        if let Err(e) = crate::enclave::knowledge::mark_task_output_cancelled(conn, org_id, &id) {
             log::warn!("[Enclave] 级联作废时标记知识条目失败：{}", e);
         }
     }
@@ -417,6 +409,15 @@ pub struct UpdateTaskInput {
     pub target_kb_id: Option<String>,
 }
 
+/// 当前账号仍需处理的任务汇总。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingTaskSummary {
+    pub assigned_pending: usize,
+    pub awaiting_review: usize,
+    pub total: usize,
+}
+
 /// 依赖变更预览：先给出影响，再由用户确认保存。
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -494,7 +495,10 @@ const SELECT_COLS: &str = "id, org_id, parent_task_id, title, description, creat
 
 fn load_task(conn: &Connection, org_id: &str, task_id: &str) -> Result<TaskRow, String> {
     conn.query_row(
-        &format!("SELECT {} FROM org_tasks WHERE id = ?1 AND org_id = ?2", SELECT_COLS),
+        &format!(
+            "SELECT {} FROM org_tasks WHERE id = ?1 AND org_id = ?2",
+            SELECT_COLS
+        ),
         params![task_id, org_id],
         map_row,
     )
@@ -529,6 +533,47 @@ fn reconcile_containers(conn: &Connection, org_id: &str) -> Result<(), String> {
 pub fn list_tasks(conn: &Connection, org_id: &str, actor: &str) -> Result<Vec<TaskView>, String> {
     let org_role = require_org_role(conn, org_id)?;
     list_tasks_with_role(conn, org_id, actor, org_role)
+}
+
+pub fn pending_summary(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+) -> Result<PendingTaskSummary, String> {
+    let org_role = require_org_role(conn, org_id)?;
+    pending_summary_with_role(conn, org_id, actor, org_role)
+}
+
+pub fn pending_summary_with_role(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    org_role: Role,
+) -> Result<PendingTaskSummary, String> {
+    let tasks = list_tasks_with_role(conn, org_id, actor, org_role)?;
+    let assigned_pending = tasks
+        .iter()
+        .filter(|task| {
+            task.child_count == 0
+                && !task.blocked
+                && task.status == STATUS_PENDING
+                && (task.assignee_id.as_deref() == Some(actor)
+                    || (task.assignee_id.is_none() && task.creator_id == actor))
+        })
+        .count();
+    let awaiting_review = tasks
+        .iter()
+        .filter(|task| {
+            task.child_count == 0
+                && task.status == STATUS_SUBMITTED
+                && (task.creator_id == actor || task.assignee_id.as_deref() == Some(actor))
+        })
+        .count();
+    Ok(PendingTaskSummary {
+        assigned_pending,
+        awaiting_review,
+        total: assigned_pending + awaiting_review,
+    })
 }
 
 /// 主机侧远程请求：角色由连接方身份解析后传入。
@@ -593,7 +638,9 @@ fn all_status(conn: &Connection, org_id: &str) -> Result<HashMap<String, String>
         .prepare("SELECT id, status FROM org_tasks WHERE org_id = ?1")
         .map_err(|e| format!("查询任务失败：{}", e))?;
     let map = stmt
-        .query_map(params![org_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .query_map(params![org_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
         .map_err(|e| format!("查询任务失败：{}", e))?
         .collect::<rusqlite::Result<HashMap<_, _>>>()
         .map_err(|e| format!("读取任务失败：{}", e))?;
@@ -810,8 +857,16 @@ pub fn deps_preview(
     }
     Ok(DepsPreview {
         cycle_ids: Vec::new(),
-        newly_blocked_ids: if now && !was { vec![task_id.to_string()] } else { Vec::new() },
-        newly_unblocked_ids: if was && !now { vec![task_id.to_string()] } else { Vec::new() },
+        newly_blocked_ids: if now && !was {
+            vec![task_id.to_string()]
+        } else {
+            Vec::new()
+        },
+        newly_unblocked_ids: if was && !now {
+            vec![task_id.to_string()]
+        } else {
+            Vec::new()
+        },
         error: None,
     })
 }
@@ -828,11 +883,7 @@ fn require_org_role(conn: &Connection, org_id: &str) -> Result<Role, String> {
 ///
 /// 空 = 默认库（沉淀时再懒创建）；非空必须是本组织的库。默认库的 id 显式传入时
 /// 归一成空串，保证「默认 / 自定义」只有一种表示。
-fn resolve_target_kb(
-    conn: &Connection,
-    org_id: &str,
-    raw: Option<&str>,
-) -> Result<String, String> {
+fn resolve_target_kb(conn: &Connection, org_id: &str, raw: Option<&str>) -> Result<String, String> {
     let raw = raw.unwrap_or("").trim();
     if raw.is_empty() {
         return Ok(String::new());
@@ -1071,9 +1122,7 @@ pub fn set_status_checked(
     if container {
         match status {
             STATUS_IN_PROGRESS => {
-                return Err(
-                    "汇总任务的状态由子任务派生，不能手动恢复；请重新打开子任务".to_string(),
-                )
+                return Err("汇总任务的状态由子任务派生，不能手动恢复；请重新打开子任务".to_string())
             }
             STATUS_PENDING => {
                 return Err("汇总任务的状态由子任务派生，不能手动放回待办".to_string())
@@ -1179,7 +1228,11 @@ pub fn set_status(
             let names: Vec<String> = row
                 .blocked_by
                 .iter()
-                .filter_map(|id| status_by_id.get(id).map(|s| format!("{}（{}）", id, status_label(s))))
+                .filter_map(|id| {
+                    status_by_id
+                        .get(id)
+                        .map(|s| format!("{}（{}）", id, status_label(s)))
+                })
                 .collect();
             return Err(format!(
                 "存在未完成的前置任务，暂不能开始：{}",
@@ -1219,8 +1272,7 @@ pub fn set_status(
     }
     // 作废 = 该任务不再推进：知识条目保留，只标记「来源任务已作废」（派生动作，失败不阻塞作废）
     if to == STATUS_CANCELLED {
-        if let Err(e) =
-            crate::enclave::knowledge::mark_task_output_cancelled(conn, org_id, task_id)
+        if let Err(e) = crate::enclave::knowledge::mark_task_output_cancelled(conn, org_id, task_id)
         {
             log::warn!("[Enclave] 作废任务标记知识条目失败：{}", e);
         }
@@ -1337,7 +1389,8 @@ pub fn delete_task(
         )
         .map_err(|e| format!("删除任务失败：{}", e))?;
     }
-    tx.commit().map_err(|e| format!("提交删除事务失败：{}", e))?;
+    tx.commit()
+        .map_err(|e| format!("提交删除事务失败：{}", e))?;
 
     // 知识条目与任务脱钩后的溯源快照（任务行已删，标题只能从删除前留存）
     if let Err(e) = mark_detached_knowledge(conn, org_id, &targets) {
@@ -1400,11 +1453,7 @@ fn mark_detached_knowledge(
 }
 
 /// 从其它任务的 `blocked_by` 中移除已删除的任务 id。
-fn cleanup_blocked_by(
-    conn: &Connection,
-    org_id: &str,
-    removed: &[String],
-) -> Result<(), String> {
+fn cleanup_blocked_by(conn: &Connection, org_id: &str, removed: &[String]) -> Result<(), String> {
     let rows: Vec<(String, String)> = {
         let mut stmt = conn
             .prepare(
@@ -1455,7 +1504,10 @@ pub fn set_deps(
 ) -> Result<TaskView, String> {
     let row = load_task(conn, org_id, task_id)?;
     if is_closed_status(&row.status) {
-        return Err(format!("任务已{}，不能再修改依赖", status_label(&row.status)));
+        return Err(format!(
+            "任务已{}，不能再修改依赖",
+            status_label(&row.status)
+        ));
     }
     let org_role = require_org_role(conn, org_id)?;
     let role = resolve_task_role(
@@ -1493,7 +1545,10 @@ pub fn set_collaborators(
 ) -> Result<TaskView, String> {
     let row = load_task(conn, org_id, task_id)?;
     if is_closed_status(&row.status) {
-        return Err(format!("任务已{}，不能再调整参与者", status_label(&row.status)));
+        return Err(format!(
+            "任务已{}，不能再调整参与者",
+            status_label(&row.status)
+        ));
     }
     let org_role = require_org_role(conn, org_id)?;
     let role = resolve_task_role(
@@ -1512,10 +1567,7 @@ pub fn set_collaborators(
     let mut out = Vec::new();
     for id in collaborators {
         let id = id.trim();
-        if id.is_empty()
-            || id == row.creator_id
-            || row.assignee_id.as_deref() == Some(id)
-        {
+        if id.is_empty() || id == row.creator_id || row.assignee_id.as_deref() == Some(id) {
             continue;
         }
         if seen.insert(id.to_string()) {
@@ -1577,11 +1629,15 @@ mod tests {
         assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Assignee).is_ok());
         assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Creator).is_ok());
         assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Manager).is_err());
-        assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Collaborator).is_err());
+        assert!(
+            can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Collaborator).is_err()
+        );
         // 进行中 → 待确认：参与者（创建者 / 负责人 / 协作者）都可提交汇报
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Assignee).is_ok());
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Creator).is_ok());
-        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Collaborator).is_ok());
+        assert!(
+            can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Collaborator).is_ok()
+        );
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Watcher).is_err());
         // 待确认 → 已完成 / 退回
         assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Creator).is_ok());
@@ -1594,13 +1650,17 @@ mod tests {
         // 作废：进行中（创建者 / 负责人）
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_CANCELLED, TaskRole::Creator).is_ok());
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_CANCELLED, TaskRole::Assignee).is_ok());
-        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_CANCELLED, TaskRole::Collaborator).is_err());
+        assert!(
+            can_transition(STATUS_IN_PROGRESS, STATUS_CANCELLED, TaskRole::Collaborator).is_err()
+        );
         // 作废为终态
         assert!(can_transition(STATUS_CANCELLED, STATUS_IN_PROGRESS, TaskRole::Creator).is_err());
         // 恢复汇报：已完成 / 已归档 → 进行中（创建者 / 负责人）
         assert!(can_transition(STATUS_DONE, STATUS_IN_PROGRESS, TaskRole::Assignee).is_ok());
         assert!(can_transition(STATUS_ARCHIVED, STATUS_IN_PROGRESS, TaskRole::Creator).is_ok());
-        assert!(can_transition(STATUS_ARCHIVED, STATUS_IN_PROGRESS, TaskRole::Collaborator).is_err());
+        assert!(
+            can_transition(STATUS_ARCHIVED, STATUS_IN_PROGRESS, TaskRole::Collaborator).is_err()
+        );
         // 同态与非法跃迁
         assert!(can_transition(STATUS_DONE, STATUS_DONE, TaskRole::Creator).is_err());
         assert!(can_transition(STATUS_PENDING, STATUS_DONE, TaskRole::Creator).is_err());
@@ -1658,10 +1718,22 @@ mod tests {
         assert!(task_allows(TaskRole::Creator, Action::TaskAssign));
         assert!(!task_allows(TaskRole::Assignee, Action::TaskAssign));
         for role in [TaskRole::Manager, TaskRole::Collaborator, TaskRole::Watcher] {
-            assert!(!task_allows(role, Action::TaskEdit), "{:?} 不应能编辑", role);
-            assert!(!task_allows(role, Action::TaskStatus), "{:?} 不应能改状态", role);
+            assert!(
+                !task_allows(role, Action::TaskEdit),
+                "{:?} 不应能编辑",
+                role
+            );
+            assert!(
+                !task_allows(role, Action::TaskStatus),
+                "{:?} 不应能改状态",
+                role
+            );
         }
-        for role in [TaskRole::Creator, TaskRole::Assignee, TaskRole::Collaborator] {
+        for role in [
+            TaskRole::Creator,
+            TaskRole::Assignee,
+            TaskRole::Collaborator,
+        ] {
             assert!(task_allows(role, Action::ReportSubmit));
             assert!(task_allows(role, Action::FileUpload));
         }
@@ -1678,11 +1750,23 @@ mod tests {
             assignee_id: Some("2"),
             collaborators: &collaborators,
         };
-        assert_eq!(resolve_task_role(Role::Owner, "1", &actors), TaskRole::Creator);
-        assert_eq!(resolve_task_role(Role::Owner, "2", &actors), TaskRole::Assignee);
+        assert_eq!(
+            resolve_task_role(Role::Owner, "1", &actors),
+            TaskRole::Creator
+        );
+        assert_eq!(
+            resolve_task_role(Role::Owner, "2", &actors),
+            TaskRole::Assignee
+        );
         // 非任务相关人的 owner/admin 才是 Manager
-        assert_eq!(resolve_task_role(Role::Owner, "9", &actors), TaskRole::Manager);
-        assert_eq!(resolve_task_role(Role::Member, "9", &actors), TaskRole::Watcher);
+        assert_eq!(
+            resolve_task_role(Role::Owner, "9", &actors),
+            TaskRole::Manager
+        );
+        assert_eq!(
+            resolve_task_role(Role::Member, "9", &actors),
+            TaskRole::Watcher
+        );
     }
 
     #[test]

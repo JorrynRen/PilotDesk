@@ -93,8 +93,8 @@ pub fn wrap_user_request(body: &str, include_clock: bool) -> String {
     }
 }
 pub mod market;
-pub mod process;
 pub mod platform;
+pub mod process;
 
 #[cfg(test)]
 mod tests {
@@ -106,7 +106,10 @@ mod tests {
         let body = "修复登录问题";
         let without_clock = wrap_user_request(body, false);
         assert!(!without_clock.contains("【当前真实时钟】"));
-        assert_eq!(without_clock, "<user_request>\n修复登录问题\n</user_request>");
+        assert_eq!(
+            without_clock,
+            "<user_request>\n修复登录问题\n</user_request>"
+        );
 
         let with_clock = wrap_user_request(body, true);
         assert!(with_clock.contains("【当前真实时钟】"));

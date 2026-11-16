@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Lock, Maximize2, Minus, Plus } from 'lucide-react';
 import type { TaskView } from '../../types/enclave';
+import { useNowSeconds } from '../../hooks/useNowSeconds';
 import { STATUS_COLOR, STATUS_LABEL } from './taskStatusMeta';
 import { buildTaskTopology } from './taskTopologyLayout';
 
@@ -68,7 +69,7 @@ export function TaskTopologyMap({
   const [view, setView] = useState<View>({ scale: 1, x: 0, y: 0 });
 
   const layout = useMemo(() => buildTaskTopology(tasks, flat), [tasks, flat]);
-  const nowSec = Math.floor(Date.now() / 1000);
+  const nowSec = useNowSeconds();
   /** 空态与地图是两个不同的宿主元素，切换时需要重新挂观察器 */
   const hasTasks = tasks.length > 0;
 

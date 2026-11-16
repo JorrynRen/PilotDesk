@@ -1069,7 +1069,6 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         const systemPrompt = await getModePrompt(mode);
         sendChat(
           sid, message, mode, 'api',
-          sess.cwd || undefined,
           systemPrompt,
           undefined,
           sess.temperature,
@@ -1087,7 +1086,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         const acpMode = getTransport(sess.agentType) === 'acp'
           ? useAcpModeStore.getState().resolvePinned(sess.id, sess.agentType)
           : null;
-        sendChat(sid, message, mode, sess.agentType, sess.cwd || undefined, systemPrompt, agentSessionId, undefined, undefined, attachments, securityMode, acpMode);
+        sendChat(sid, message, mode, sess.agentType, systemPrompt, agentSessionId, undefined, undefined, attachments, securityMode, acpMode);
       }
       return true;
     },
@@ -1095,7 +1094,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   );
 
   /**
-   * 「快捷开始」：无会话时按草稿（工作目录 + 会话方式）创建并选中会话。
+   * 「快捷开始」：无会话时按草稿会话方式创建并选中会话。
    * 供 InputBar 在首次发送时调用；失败返回 null（InputBar 据此保留输入内容）。
    *
    * **幂等**：若当前会话就是上一次"快捷开始"刚建出来的那个，直接复用 —— 否则连按 Enter /
@@ -1111,21 +1110,23 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     }
     const params = useSessionDraftStore.getState().resolve();
     if (!params) {
-      showToast('请先选择会话工作目录与会话方式', 'info');
+      showToast('请先选择会话方式', 'info');
       return null;
     }
     try {
       const session = await createSession(
         params.agentType,
-        params.cwd || undefined,
         null,
         params.apiProvider || undefined,
         params.apiModel || undefined,
+        undefined,
+        undefined,
+        params.projectId || undefined,
       );
       autoCreatedSessionRef.current = session.id;
       // CLI 会话还要把 sidecar 会话拉起来，否则首条消息发不出去
       if (session.agentType !== 'api') {
-        await createAgentSession(session.id, session.agentType, params.cwd || undefined);
+        await createAgentSession(session.id, session.agentType);
       }
       await selectSession(session.id);
       return session;
@@ -1229,7 +1230,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
 
   return (
     <div
-      className="flex-1 flex flex-col overflow-hidden relative rounded-lg"
+      className="pd-main-panel flex-1 flex flex-col overflow-hidden relative rounded-lg"
       // 壳层风格：内容区是最亮的那块面板（浮在 --bg-canvas 上），不画左右分隔线
       style={{ backgroundColor: 'var(--bg-content)', ...style }}
     >
@@ -1299,7 +1300,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         {/* 会话默认页（未选中任何会话）：问候语 → 输入区置顶 → 其下常驻指挥中心内容。
             原 MessageList 的"无会话空态"由此取代 —— 一进来就能看到"什么在等我在跑"，
             发出第一条消息后 currentSession 落定，本页自动切回常规聊天视图（输入区回到底部）。 */}
-        <div className="shrink-0 px-4 pt-4 pb-1 text-lg font-medium" style={{ color: 'var(--text-primary)' }}>
+        <div className="pd-session-greeting shrink-0" style={{ color: 'var(--text-primary)' }}>
           {greeting}，欢迎回来！
         </div>
         <InputBar {...inputBarProps} placement="top" />

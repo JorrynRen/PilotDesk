@@ -286,7 +286,7 @@ impl NodeExecutorTrait for AgentExecutor {
 
         // 将 resolved_input 转为 HashMap 作为模板上下文
         // resolved_input 已经是 engine.rs 中 resolve_node_input 解析后的确定值
-        let prompt = if let Value::Object(map) = &resolved_input {
+        let mut prompt = if let Value::Object(map) = &resolved_input {
             let ctx: std::collections::HashMap<String, serde_json::Value> =
                 map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             // 宽松解析：未解析的占位符按空处理（避免把 {{...}} 原文当提示词发给 Agent）
@@ -304,15 +304,21 @@ impl NodeExecutorTrait for AgentExecutor {
         };
         let temp_session_id = format!("wf_{}_{}", execution_id, node.id);
 
-        // 产物目录：`<全局工作区>/outputs/<工作流名>`（与群聊 `<工作区>/outputs/<房间名>` 同构，
-        // 按名字归类、不按执行实例分层、不做清理）。
+        // 工作根：项目主目录，未归属项目时回退全局工作区。
         //
-        // 它同时承担三个角色，与群聊一致：节点的 cwd（工具相对路径解析）、AgentLoop 的
-        // 授权边界（目录内路径免审批）、以及写进 artifacts_path 的产物落点。
+        // 产物目录：`<工作根>/outputs/<工作流名>`（与群聊同构，按名字归类、不按执行实例分层、
+        // 不做清理）。两者职责分离：工作根决定 cwd、相对路径与命令执行基准；产物目录只负责
+        // 落盘和额外安全授权。
         //
         // 顺带取出本次执行对应的定义 id：新建会话行时写进 `origin`（`workflow:{定义id}`），
         // 供用量统计按工作流归因（执行记录删除后仍可追溯，见 commands/usage.rs）。
-        let (definition_id, workspace_dir): (Option<String>, String) = {
+        let (definition_id, project_id, workspace, artifact_dir, workspace_roots): (
+            Option<String>,
+            Option<String>,
+            crate::commands::projects::WorkspaceResolution,
+            String,
+            Vec<String>,
+        ) = {
             let conn = self
                 .pool
                 .get()
@@ -325,15 +331,46 @@ impl NodeExecutorTrait for AgentExecutor {
                         .ok()
                         .flatten()
                 });
-            let (def_id, def_name) = match def {
-                Some(d) => (Some(d.id), d.name),
-                None => (None, String::new()),
-            };
-            let dir = crate::utils::paths::workflow_artifacts_dir(&conn, &def_name)
-                .to_string_lossy()
-                .to_string();
-            (def_id, dir)
+            let (definition_id, project_id, workspace, artifact_dir, workspace_roots) =
+                if let Some(definition) = def {
+                    let context = crate::commands::projects::resolve_workspace_context(
+                        &conn,
+                        crate::commands::projects::WorkspaceOwner::workflow(&definition.id),
+                    )?;
+                    let artifact_dir = context.artifact_root();
+                    let workspace_roots = context.workspace.runtime_roots([artifact_dir.clone()]);
+                    (
+                        Some(context.owner_id),
+                        context.project_id,
+                        context.workspace,
+                        artifact_dir,
+                        workspace_roots,
+                    )
+                } else {
+                    let workspace = crate::commands::projects::resolve_unowned_workspace(&conn)?;
+                    let artifact_dir = workspace.artifact_root("", "workflow");
+                    let workspace_roots = workspace.runtime_roots([artifact_dir.clone()]);
+                    (None, None, workspace, artifact_dir, workspace_roots)
+                };
+            (
+                definition_id,
+                project_id,
+                workspace,
+                artifact_dir,
+                workspace_roots,
+            )
         };
+        let work_root = workspace.work_root.clone();
+
+        prompt.push_str(&format!(
+            "\n\n{}\n\n<workflow_artifact_dir>\n\
+             本次工作流产物必须写入：{}\n\
+             相对路径与命令执行基准仍是工作根；上述产物目录仅决定最终文件落点。\n\
+             该目录由系统创建，写文件时缺失的上级目录会自动补齐，无需用 mkdir 创建。\n\
+             </workflow_artifact_dir>",
+            crate::commands::projects::workspace_context_prompt(&workspace, Some(&artifact_dir),),
+            artifact_dir
+        ));
 
         // 读取会话延续参数
         let session_mode = node
@@ -385,13 +422,15 @@ impl NodeExecutorTrait for AgentExecutor {
                 .execute_api(
                     node,
                     &prompt,
-                    &workspace_dir,
+                    &workspace,
+                    &artifact_dir,
                     &temp_session_id,
                     session_mode,
                     resume_session_id,
                     execution_id,
                     emitter,
                     definition_id.as_deref(),
+                    project_id.as_deref(),
                 )
                 .await;
         }
@@ -431,15 +470,18 @@ impl NodeExecutorTrait for AgentExecutor {
             crate::agent::descriptor::AgentDescriptor::from_agents_row(&conn, agent_type)
                 .map_err(|e| AppError::Db(e.to_string()))?
         };
-        if let Some(desc) = descriptor.as_ref().filter(|d| {
-            d.transport != crate::agent::transport::TransportKind::Subprocess
-        }) {
+        if let Some(desc) = descriptor
+            .as_ref()
+            .filter(|d| d.transport != crate::agent::transport::TransportKind::Subprocess)
+        {
             return self
                 .execute_transport(
                     node,
                     desc,
                     &prompt,
-                    &workspace_dir,
+                    &work_root,
+                    &artifact_dir,
+                    &workspace_roots,
                     &temp_session_id,
                     agent_session_id_param,
                     execution_id,
@@ -456,7 +498,7 @@ impl NodeExecutorTrait for AgentExecutor {
                 &agent_config,
                 &prompt,
                 &Default::default(),
-                &workspace_dir,
+                &work_root,
                 &temp_session_id,
                 move |chunk| {
                     let _ = emitter_owned.emit(
@@ -483,12 +525,12 @@ impl NodeExecutorTrait for AgentExecutor {
 
         // output 只存 agent 原始返回文本，session_id 放 NodeOutput.session_id 字段
         // input_data 存最终提示词（覆盖 running 时写入的输入映射）
-        // artifacts_path 存工作区路径（agent 运行时生成工件的位置）
+        // artifacts_path 只记录产物落点；Agent cwd 始终是项目工作根。
         Ok(NodeOutput {
             output: Value::String(normalize_agent_output(&once.text, &node.id)),
             session_id: once.agent_session_id,
             input_data: Some(prompt.clone()),
-            artifacts_path: Some(workspace_dir),
+            artifacts_path: Some(artifact_dir),
         })
     }
 }
@@ -502,7 +544,8 @@ impl AgentExecutor {
         &self,
         node: &NodeDef,
         prompt: &str,
-        workspace_dir: &str,
+        workspace: &crate::commands::projects::WorkspaceResolution,
+        artifact_dir: &str,
         temp_session_id: &str,
         session_mode: &str,
         resume_session_id: Option<&str>,
@@ -510,6 +553,8 @@ impl AgentExecutor {
         emitter: &tauri::AppHandle,
         // 本次执行对应的工作流定义 id（新建会话行写进 origin 供用量归因；derive 失败为 None）
         definition_id: Option<&str>,
+        // 工作流所属项目与运行时全部安全根（项目目录 + 产物目录）
+        project_id: Option<&str>,
     ) -> Result<NodeOutput, AppError> {
         // 延续会话的「模型来源」（仅 resume 生效，默认跟随会话 = 沿用会话行里的模型）：
         //   "node"     → 本轮用节点配置的 厂商/模型 发请求（只延续会话上下文，不改写会话行）
@@ -585,7 +630,6 @@ impl AgentExecutor {
             crate::commands::session::create_session_inner(
                 &conn,
                 "api".to_string(),
-                Some(workspace_dir.to_string()),
                 Some(format!("{}{}", WORKFLOW_SESSION_TITLE_PREFIX, node.label)),
                 api_provider.clone(),
                 api_model.clone(),
@@ -600,6 +644,7 @@ impl AgentExecutor {
                     Some(id) => format!("workflow:{}", id),
                     None => "workflow".to_string(),
                 }),
+                project_id.map(str::to_string),
             )
             .map_err(|e| AppError::Db(e.to_string()))?
             .id
@@ -620,12 +665,8 @@ impl AgentExecutor {
             node_label: node.label.clone(),
             manager: self.approvals.clone(),
         };
-        // 产物目录写进系统提示：agent 才知道该往哪落盘（工具的相对路径也基于该目录解析）
-        let system_prompt = format!(
-            "{}\n<workflow_output_dir>\n本次工作流的产物目录：{}\n请把产物写入该目录；相对路径也基于它解析。\n\
-             该目录已由系统创建，写文件会自动补齐缺失的上级目录，无需（也不要用 mkdir）创建。\n</workflow_output_dir>",
-            WORKFLOW_APPROVAL_PROMPT, workspace_dir
-        );
+        // 工作区与产物位置已在用户提示词中统一注入；系统提示只保留工作流审批纪律。
+        let system_prompt = WORKFLOW_APPROVAL_PROMPT.to_string();
         let result = crate::run_api_agent_inner(
             &self.pool,
             emitter,
@@ -639,9 +680,13 @@ impl AgentExecutor {
             security_mode,
             true, // persist_turn：节点没有前端调用方，本轮用户提示由后端补写
             Some(approval_target),
-            // 产物目录只对本轮运行生效：延续会话时也用它覆盖被续会话的 cwd，
-            // 从而与本节点的 cwd/授权边界一致，且不改写会话行。
-            Some(workspace_dir.to_string()),
+            // 工作流项目工作区只对本轮生效；若目标是 ACP 宿主绑定会话，
+            // run_api_agent_body 会保留宿主目录这一最高优先级。
+            Some(crate::WorkspaceRunOverride {
+                workspace: workspace.clone(),
+                extra_roots: vec![artifact_dir.to_string()],
+                artifact_root: Some(artifact_dir.to_string()),
+            }),
             provider_override,
             model_override,
         )
@@ -652,7 +697,7 @@ impl AgentExecutor {
             output: Value::String(normalize_agent_output(&text, &node.id)),
             session_id: Some(session_id),
             input_data: Some(prompt.to_string()),
-            artifacts_path: Some(workspace_dir.to_string()),
+            artifacts_path: Some(artifact_dir.to_string()),
         })
     }
 
@@ -666,7 +711,9 @@ impl AgentExecutor {
         node: &NodeDef,
         descriptor: &crate::agent::descriptor::AgentDescriptor,
         prompt: &str,
-        workspace_dir: &str,
+        work_root: &str,
+        artifact_dir: &str,
+        workspace_roots: &[String],
         session_key: &str,
         resume_id: Option<&str>,
         execution_id: &str,
@@ -746,7 +793,8 @@ impl AgentExecutor {
             session_id: session_key.to_string(),
             agent_id: descriptor.agent_id.clone(),
             transport: descriptor.transport,
-            cwd: workspace_dir.to_string(),
+            cwd: work_root.to_string(),
+            workspace_roots: workspace_roots.to_vec(),
             conn: descriptor.conn.clone(),
             secret: None,
             resume_id: resume_id.map(str::to_string),
@@ -784,7 +832,8 @@ impl AgentExecutor {
                 // 用量：宿主上报才落库（通道 `acp:<agent_type>`，归因沿用 `wf_{execution}_{node}`）
                 if let Some(u) = out.usage {
                     if let Ok(conn) = self.pool.get() {
-                        let (provider, model) = crate::agent::split_model_label(out.model.as_deref());
+                        let (provider, model) =
+                            crate::agent::split_model_label(out.model.as_deref());
                         let _ = crate::api_agent::agent_loop::record_usage_row(
                             &conn,
                             session_key,
@@ -828,7 +877,7 @@ impl AgentExecutor {
             output: Value::String(normalize_agent_output(&text, &node.id)),
             session_id: agent_session_id,
             input_data: Some(prompt.to_string()),
-            artifacts_path: Some(workspace_dir.to_string()),
+            artifacts_path: Some(artifact_dir.to_string()),
         })
     }
 }

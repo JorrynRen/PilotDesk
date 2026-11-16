@@ -115,7 +115,16 @@ impl ToolHandler for GrepTool {
                 };
                 for (ln, line) in content.lines().enumerate() {
                     if re.is_match(line) {
-                        out.push_str(&format!("{}:{}: {}\n", rel, ln + 1, line.trim()));
+                        let display_path = crate::utils::paths::normalize_absolute_path(
+                            &full.to_string_lossy(),
+                            &cwd,
+                        );
+                        out.push_str(&format!(
+                            "{}:{}: {}\n",
+                            display_path.display(),
+                            ln + 1,
+                            line.trim()
+                        ));
                         match_count += 1;
                         if match_count >= MAX_MATCHES {
                             break 'outer;

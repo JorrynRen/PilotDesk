@@ -931,6 +931,9 @@ pub async fn uninstall_agent(
             }),
         );
         crate::commands::agent_market::uninstall_binary(&state, &agent_type)?;
+        // 卸载后池内按旧配置 spawn 的进程不可复用，硬清
+        agent_mgr.lock().await.evict_acp_pool(&agent_type);
+        crate::agent::host_sessions::evict_agent(&agent_type);
         let _ = app.emit(
             "install-progress",
             serde_json::json!({
@@ -992,6 +995,10 @@ pub async fn uninstall_agent(
         let pending = crate::agent::lifecycle::PkgState::pending(crate::utils::now());
         crate::commands::agent_market::set_pkg_state_inner(&conn, &agent_type, &pending)?;
     }
+
+    // 卸载后池内按旧配置 spawn 的进程不可复用，硬清
+    mgr.evict_acp_pool(&agent_type);
+    crate::agent::host_sessions::evict_agent(&agent_type);
 
     clear_env_cache();
     Ok(())

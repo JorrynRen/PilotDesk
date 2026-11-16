@@ -230,6 +230,17 @@ impl JsonRpcPeer {
             .unwrap_or_else(|_| Instant::now())
     }
 
+    /// 子进程是否仍在运行（`try_wait`：`Ok(None)` = 仍在运行）。
+    ///
+    /// 无法确定（锁被占用 / 查询失败）一律视为**不可用**，让调用方走换新逻辑——
+    /// 池化复用取回进程时的快速探活手段，避免对已死进程空等整个请求超时。
+    pub async fn is_alive(&self) -> bool {
+        match self.inner.child.try_lock() {
+            Ok(mut child) => matches!(child.try_wait(), Ok(None)),
+            Err(_) => false,
+        }
+    }
+
     /// 发送通知（无 id、不等响应）。
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), String> {
         let r = self
@@ -294,7 +305,10 @@ impl JsonRpcPeer {
                         } else {
                             // 无主响应：要么是超时/取消后迟到的响应，要么是对端 id 不匹配。
                             // 必须打日志——否则"回合结束响应被丢弃"完全看不见。
-                            log::warn!("[jsonrpc] 收到无主响应（无对应在途请求，已丢弃）：id={}", k);
+                            log::warn!(
+                                "[jsonrpc] 收到无主响应（无对应在途请求，已丢弃）：id={}",
+                                k
+                            );
                         }
                     }
                     None => log::warn!(

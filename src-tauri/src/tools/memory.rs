@@ -26,7 +26,7 @@ impl ToolHandler for SaveMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "保存一条键值对记忆到持久化知识库（新增路径）。格式：key=名称，value=内容，category=分类（fact/preference/skill/event），important=是否重要（重要记忆不会被自动清理），tags=逗号分隔的检索标签（如 java,构建工具），便于日后按意图检索到该记忆。保存前请先用 search_memory 检查是否已有同名或等价记忆。若 key 已存在：内容等价/包含/近似时会合并进该条（标签并集、重要标记只增不减），**内容与现值无关时不会覆盖，而是报错提示改用 update_memory**；改内容、改名、改分类、删标签、取消重要标记都只能用 update_memory。"
+        "保存一条跨会话可复用的键值记忆到 KV 记忆库。该工具是机会式使用：只在用户明确要求记住，或明确陈述、确认了长期偏好、稳定事实、长期约束、项目决策时调用；没有合适内容时不要调用（结果就是新增 0 条），不要在每轮或轮末例行检查。格式：key=名称，value=内容，category=分类（fact/preference/skill/event），important=是否重要（仅在用户明确表示重要或必须长期保留时设为 true；pin 只阻止自动清理），tags=逗号分隔的检索标签（如 java,构建工具）。保存前不必强制调用 search_memory；后端会自动检查同名与等价内容。若 key 已存在：内容等价/包含/近似时会合并进该条（标签并集、重要标记只增不减），**内容与现值无关时不会覆盖，而是报错提示改用 update_memory**；改内容、改名、改分类、删标签、取消重要标记都只能用 update_memory。不要保存通用知识、临时任务要求或密码、API Key、令牌、私钥等敏感凭证。"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -48,7 +48,7 @@ impl ToolHandler for SaveMemoryTool {
                 },
                 "important": {
                     "type": "boolean",
-                    "description": "是否为重要记忆（默认 false；true 时记忆置顶保护，自动清理永不删除）"
+                    "description": "是否为重要记忆（默认 false；仅当用户明确表示重要或必须长期保留时设为 true。true 时置顶保护，自动清理永不删除）"
                 },
                 "tags": {
                     "type": "string",
@@ -496,7 +496,7 @@ impl ToolHandler for UpdateMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "修改一条已存在的记忆（新增请用 save_memory）。只需传要改的字段，未传的字段保持原值：new_key=改名、value=改内容、category=改分类、tags=整体替换标签（传空串即清空）、important=设置或取消重要标记。key 不存在会报错且不会新建；new_key 已被占用会报错且不会覆盖另一条。本工具不做内容级去重合并——删标签、取消重要标记只能经它完成（save_memory 的标签是并集、重要标记只增不减）。改 value 前先用 search_memory 读到全文，否则会丢内容。"
+        "修改一条已存在的记忆（新增请用 save_memory）。只需传要改的字段，未传的字段保持原值：new_key=改名、value=改内容、category=改分类、tags=整体替换标签（传空串即清空）、important=设置或取消重要标记。key 不存在会报错且不会新建；new_key 已被占用会报错且不会覆盖另一条。删标签、取消重要标记只能经它完成（save_memory 的标签是并集、重要标记只增不减）。改 value 前先用 search_memory 读到全文，否则会丢内容。更新后会检查其它记忆：若正文归一化后完全相同，会保留当前 key，合并标签、重要标记与使用热度，并自动删除重复行；返回结果会列出被收敛的 key。"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -599,8 +599,20 @@ impl ToolHandler for UpdateMemoryTool {
             tags: tags.map(String::from),
             pin: important,
         };
-        let UpdateOutcome { before, after } = self.store.update_memory(key, &patch)?;
-        Ok(render_update(&before, &after))
+        let UpdateOutcome {
+            before,
+            after,
+            deduped_keys,
+        } = self.store.update_memory(key, &patch)?;
+        let mut output = render_update(&before, &after);
+        if !deduped_keys.is_empty() {
+            output.push_str(&format!(
+                "\n- 已自动收敛同内容重复项: {}（保留 key={}）",
+                deduped_keys.join("、"),
+                after.key
+            ));
+        }
+        Ok(output)
     }
 }
 

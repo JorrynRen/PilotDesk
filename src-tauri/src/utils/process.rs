@@ -325,10 +325,7 @@ pub fn resolve_windows_program(program: &str) -> (String, Vec<String>) {
             // 垫片格式无法解析：退回经 cmd 启动（此路径参数会多经一层 cmd 解析）
             return (
                 "cmd".to_string(),
-                vec![
-                    "/C".to_string(),
-                    shim.to_string_lossy().to_string(),
-                ],
+                vec!["/C".to_string(), shim.to_string_lossy().to_string()],
             );
         }
     }
@@ -442,7 +439,9 @@ mod windows_shim_tests {
     fn codex_shim_yields_js_target() {
         let targets = extract_shim_targets(CODEX_CMD, r"C:\npm");
         assert!(
-            targets.iter().any(|t| t.ends_with(r"@openai\codex\bin\codex.js")),
+            targets
+                .iter()
+                .any(|t| t.ends_with(r"@openai\codex\bin\codex.js")),
             "targets={:?}",
             targets
         );

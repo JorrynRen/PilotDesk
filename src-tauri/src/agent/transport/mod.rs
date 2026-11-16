@@ -116,10 +116,7 @@ pub enum UnifiedAgentEvent {
     /// 已取消 → `agent-cancelled`
     Cancelled { session_id: String },
     /// 对端失活被终止 → `agent-idle-aborted`（**明确终态**：不是超时、不是普通失败）
-    IdleAborted {
-        session_id: String,
-        idle_secs: u64,
-    },
+    IdleAborted { session_id: String, idle_secs: u64 },
     /// 失败 → `agent-error`
     Error { session_id: String, error: String },
 }
@@ -270,6 +267,9 @@ pub struct AgentConn {
     pub transport: TransportKind,
     /// 工作目录（空串表示使用默认工作区）
     pub cwd: String,
+    /// 项目主目录与全部关联目录。ACP 在宿主声明支持时通过
+    /// `additionalDirectories` 激活；CLI 仍以 `cwd` 为相对路径基准。
+    pub workspace_roots: Vec<String>,
     /// transport 专属参数（JSON）。**密钥不在此处**——走凭据引用（见设计文档 §4.3）。
     pub conn: serde_json::Value,
     /// 运行时注入的凭据（密钥）：由调用方从独立存储解析后注入，**不落库、不进 `conn`**。
@@ -502,8 +502,9 @@ pub fn build_session(
     config: Option<crate::agent::config::AgentConfig>,
 ) -> Option<Box<dyn AgentSession>> {
     match kind {
-        TransportKind::Subprocess => config
-            .map(|c| Box::new(subprocess::SubprocessSession::new(c)) as Box<dyn AgentSession>),
+        TransportKind::Subprocess => {
+            config.map(|c| Box::new(subprocess::SubprocessSession::new(c)) as Box<dyn AgentSession>)
+        }
         TransportKind::Acp => Some(Box::new(acp::AcpSession::new())),
         TransportKind::Http => Some(Box::new(http::HttpSession::new())),
         TransportKind::InProcess | TransportKind::Mcp | TransportKind::Webview => None,
@@ -545,11 +546,7 @@ mod factory_tests {
             TransportKind::Webview,
             TransportKind::InProcess,
         ] {
-            assert!(
-                build_session(k, None).is_none(),
-                "{:?} 不应构造出会话",
-                k
-            );
+            assert!(build_session(k, None).is_none(), "{:?} 不应构造出会话", k);
         }
     }
 

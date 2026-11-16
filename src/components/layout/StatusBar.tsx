@@ -4,9 +4,7 @@ import { useEnvInfo, isAgentInstalled, isAgentAvailable, type AgentDetectStatus 
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useI18n } from '../../hooks/useI18n';
 import type { AgentConfig } from '../../types';
-
-// 版本号单一来源：由 vite.config.ts 从根 package.json 注入（见该文件注释）
-const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
+import { APP_VERSION } from '../../utils/appVersion';
 
 interface StatusBarProps {
   onOpenSettings?: () => void;
@@ -33,7 +31,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
     const status = agentStatus[agent.agentType];
     if (status !== 'done' && status !== 'error') {
       // pending / detecting — colon only, spinner indicates progress
-      return { status: 'detecting', label: '', dotColor: '#9CA3AF' };
+      return { status: 'detecting', label: '', dotColor: 'var(--text-tertiary)' };
     }
     // 与「环境检测」页同口径（AgentHealth）：版本号缺失 ≠ 未安装。
     // 版本探测命令超时 / 网络失败时 version 为 null，但 installed 仍为真；
@@ -41,13 +39,13 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
     const installed = isAgentInstalled(envInfo, agent.agentType);
     const available = isAgentAvailable(envInfo, agent.agentType);
     if (!installed) {
-      return { status: 'error', label: t('statusBar.notInstalled', '未安装'), dotColor: '#9CA3AF' };
+      return { status: 'error', label: t('statusBar.notInstalled', '未安装'), dotColor: 'var(--text-tertiary)' };
     }
     if (!available) {
-      return { status: 'error', label: t('statusBar.notAvailable', '不可用'), dotColor: '#9CA3AF' };
+      return { status: 'error', label: t('statusBar.notAvailable', '不可用'), dotColor: 'var(--text-tertiary)' };
     }
     // 版本号只用于展示：取不到时显示「就绪」，不降级成未安装
-    return { status: 'done', label: version || t('statusBar.ready', '就绪'), dotColor: agent.color || '#9CA3AF' };
+    return { status: 'done', label: version || t('statusBar.ready', '就绪'), dotColor: agent.color || 'var(--text-tertiary)' };
   };
 
   // 聚合展示所需的派生状态：逐个判定后汇总；版本号只进 tooltip，不常驻占位
@@ -66,7 +64,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
 
   return (
     <footer
-      className="flex items-center justify-between px-4 h-8 text-[10px] shrink-0 select-none"
+      className="pd-statusbar flex items-center justify-between shrink-0 select-none"
       // 壳层风格：状态栏同顶栏——去掉底色与上边框，并入壳层那片底
       style={{ color: 'var(--text-secondary)' }}
     >
@@ -93,14 +91,15 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
             }}
             className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
             title={agentTooltip}
-            style={{ color: notReady.length > 0 ? '#F59E0B' : 'var(--text-tertiary)' }}
+            aria-label={agentTooltip}
+            style={{ color: notReady.length > 0 ? 'var(--status-warning)' : 'var(--text-tertiary)' }}
           >
             {detecting ? (
-              <Loader2 size={10} className="animate-spin" style={{ color: '#9CA3AF' }} />
+              <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
             ) : (
               <span
                 className="w-1.5 h-1.5 rounded-full"
-                style={{ backgroundColor: notReady.length > 0 ? '#F59E0B' : '#22C55E' }}
+                style={{ backgroundColor: notReady.length > 0 ? 'var(--status-warning)' : 'var(--status-success)' }}
               />
             )}
             {detecting

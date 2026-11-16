@@ -143,12 +143,12 @@ interface SessionState {
   startNewSession: () => void;
   createSession: (
     agentType: string,
-    cwd?: string,
     title?: string | null,
     apiProvider?: string,
     apiModel?: string,
     temperature?: number,
     maxTokens?: number,
+    projectId?: string,
   ) => Promise<Session>;
   renameSession: (id: string, newTitle: string) => Promise<void>;
   /**
@@ -156,8 +156,6 @@ interface SessionState {
    * `expectedTitle` = 调用时前端显示的标题；不可用/失败时保留原标题，不做改动。
    */
   suggestSessionTitle: (id: string, expectedTitle: string) => Promise<void>;
-  /** 切换会话工作目录（项目根），对后续消息生效 */
-  updateSessionCwd: (id: string, cwd: string) => Promise<void>;
   /**
    * 切换 API 会话的提供商/模型，对**后续**消息生效（运行期每轮从会话行读取）。
    * 后端"比较后再写"：`expected*` 与库中不一致时不覆盖，返回 false 并把当前值同步回本地。
@@ -297,15 +295,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ currentSessionId: null, messages: [], messageIds: new Set() });
   },
 
-  createSession: async (agentType, cwd, title, apiProvider, apiModel, temperature, maxTokens) => {
+  createSession: async (agentType, title, apiProvider, apiModel, temperature, maxTokens, projectId) => {
     const session = await invoke<Session>('create_session', {
       agentType,
-      cwd: cwd || null,
       title: title || null,
       apiProvider: apiProvider || null,
       apiModel: apiModel || null,
       temperature: temperature ?? null,
       maxTokens: maxTokens ?? null,
+      projectId: projectId || null,
     });
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -351,15 +349,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // 标题只是辅助信息：生成失败就保留机械标题，不打扰用户
       console.warn('[sessionStore] 生成会话标题失败:', err);
     }
-  },
-
-  updateSessionCwd: async (id, cwd) => {
-    await invoke('update_session_cwd', { sessionId: id, cwd });
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, cwd } : s
-      ),
-    }));
   },
 
   updateSessionModel: async (id, apiProvider, apiModel) => {

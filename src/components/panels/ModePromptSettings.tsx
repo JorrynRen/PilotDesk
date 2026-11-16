@@ -63,8 +63,7 @@ export function ModePromptSettings() {
       {(['native', 'fast', 'think', 'expert', 'plan'] as ChatMode[]).map((mode) => (
         <div
           key={mode}
-          className="mb-3 last:mb-0 rounded-lg p-3"
-          style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+          className="pd-settings-field-group mb-3 last:mb-0"
         >
           <div className="flex items-center justify-between mb-2">
             <span style={{ color: 'var(--accent)', fontSize: '12px', fontWeight: 500 }}>

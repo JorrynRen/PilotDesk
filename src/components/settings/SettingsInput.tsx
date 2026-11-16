@@ -15,13 +15,6 @@ export function SettingsInput({
   multiline,
   rows,
 }: SettingsInputProps) {
-  const baseStyle: React.CSSProperties = {
-    backgroundColor: 'var(--bg-field)',
-    color: 'var(--text-primary)',
-    border: '1px solid var(--border)',
-    outline: 'none',
-  };
-
   if (multiline) {
     return (
       <textarea
@@ -29,8 +22,7 @@ export function SettingsInput({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows ?? 3}
-        className={`w-full px-3 py-2 rounded-lg text-xs outline-none resize-none ${className}`}
-        style={baseStyle}
+        className={`pd-settings-input w-full resize-y font-sans ${className}`}
       />
     );
   }
@@ -41,8 +33,7 @@ export function SettingsInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={`flex-1 px-3 py-2 rounded-lg text-sm outline-none ${className}`}
-      style={baseStyle}
+      className={`pd-settings-input flex-1 ${className}`}
     />
   );
 }

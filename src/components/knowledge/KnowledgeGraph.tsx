@@ -2082,18 +2082,17 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               </button>
               {paletteOpen && (
                 <div
-                  className="absolute right-0 mt-1 p-1 rounded-lg shadow-lg space-y-0.5"
-                  style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+                  role="menu"
+                  className="pd-menu absolute right-0 mt-1"
                 >
                   {BACKDROP_OPTIONS.map((o) => (
                     <button
                       key={o.value}
+                      type="button"
+                      role="menuitem"
                       onClick={() => chooseBackdrop(o.value)}
-                      className="w-full flex items-center gap-1.5 px-2 py-1 rounded text-[10px] whitespace-nowrap"
-                      style={{
-                        color: o.value === backdrop ? 'var(--accent)' : 'var(--text-secondary)',
-                        backgroundColor: o.value === backdrop ? 'var(--bg-hover)' : 'transparent',
-                      }}
+                      className="pd-menu-item"
+                      data-active={o.value === backdrop ? 'true' : undefined}
                     >
                       <span
                         className="w-3 h-3 rounded-sm shrink-0"

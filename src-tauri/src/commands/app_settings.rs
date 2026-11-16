@@ -57,10 +57,7 @@ pub const CLOCK_ANCHOR_ENABLED_KEY: &str = "clock_anchor_enabled";
 /// 读取时间感知开关：缺省、读取失败、非法值一律回退开启（保持原有行为）。
 pub fn load_clock_anchor_enabled(conn: &rusqlite::Connection) -> bool {
     match get_setting(conn, CLOCK_ANCHOR_ENABLED_KEY) {
-        Ok(Some(v)) => !matches!(
-            v.trim().to_lowercase().as_str(),
-            "0" | "false" | "off"
-        ),
+        Ok(Some(v)) => !matches!(v.trim().to_lowercase().as_str(), "0" | "false" | "off"),
         _ => true,
     }
 }
@@ -133,7 +130,7 @@ const SETTING_DEFAULTS: &[(&str, &str)] = &[
     // 意图检索注入开关：缺省启用（'1'）；置 '0' 即用户显式关闭。
     (crate::api_agent::memory_intent::SETTING_ENABLED, "1"),
     // 意图路由请求超时（秒）：与 DEFAULT_ROUTE_TIMEOUT_SECS 同值。
-    (crate::api_agent::memory_intent::SETTING_TIMEOUT_SECS, "4"),
+    (crate::api_agent::memory_intent::SETTING_TIMEOUT_SECS, "60"),
     // 时间感知（时钟锚点）：缺省启用。
     (CLOCK_ANCHOR_ENABLED_KEY, "1"),
 ];
@@ -244,6 +241,10 @@ mod tests {
     #[test]
     fn two_plane_default_vs_custom() {
         let conn = mem_conn();
+        assert_eq!(
+            effective_setting(&conn, crate::api_agent::memory_intent::SETTING_TIMEOUT_SECS),
+            "60"
+        );
         assert_eq!(
             effective_setting(&conn, "mode_prompt_fast"),
             "快速简洁回答，直接给出结论，无需详细解释推理过程"

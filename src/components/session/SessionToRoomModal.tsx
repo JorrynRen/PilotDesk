@@ -6,7 +6,16 @@
 // 成员字段与 agentConfig 组装口径与群聊「新建房间」弹窗（GroupChatPage.CreateRoomModal）逐字一致。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Plus, Users, X, XCircle } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ListChecks,
+  Plus,
+  SlidersHorizontal,
+  Sparkles,
+  Trash2,
+  Users,
+} from 'lucide-react';
 import {
   useSessionStore,
   type PlanCandidateOrigin,
@@ -17,6 +26,7 @@ import {
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { Select } from '../common/Select';
+import { ConversionDialogShell } from '../common/ConversionDialogShell';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { isApiSession } from '../../utils/sessionType';
@@ -181,6 +191,8 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
   const [directorProvider, setDirectorProvider] = useState('');
   const [directorModel, setDirectorModel] = useState('');
   const [drafts, setDrafts] = useState<DraftParticipant[]>([]);
+  /** 是否允许主持人在运行期按任务需要自动补充 CLI 参与者 */
+  const [allowAutoCli, setAllowAutoCli] = useState(true);
   /** 负责人：'' = 不指定（自动分配，主持人可改派），否则为某个 api/cli 参与者的 id */
   const [assigneeId, setAssigneeId] = useState('');
   /** 用户是否改过清单：未改动前不做防抖重导出（避免来源被无谓刷成"已编辑"） */
@@ -281,6 +293,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
       setPreviewError(null);
       setError(null);
       setAssigneeId('');
+      setAllowAutoCli(true);
       setTitle(sessionTitle || '');
       setTopic('');
       setList([]);
@@ -365,16 +378,6 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
       setFocusId(null);
     });
   }, [focusId]);
-
-  // Esc 关闭（创建过程中不响应，避免半途打断）
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !creating) onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, creating, onClose]);
 
   const cliAgents = useMemo(
     () => agents.filter((a) => a.agentType !== 'api' && a.isEnabled),
@@ -623,8 +626,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
       topic: topic.trim(),
       participants,
       directorId: 'director',
-      // 与新建房间弹窗的默认一致：允许主持人按需自动补充 CLI 参与者
-      allowAutoCli: 1,
+      allowAutoCli: allowAutoCli ? 1 : 0,
     };
 
     try {
@@ -646,123 +648,129 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
   const orderMap = new Map(list.map((t, i) => [t.id, i + 1]));
 
   return (
-    <div
-      className="fixed inset-0 z-[120] flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-      onClick={() => { if (!creating) onClose(); }}
-    >
-      <div
-        className="w-[620px] max-h-[80vh] max-w-[calc(100vw-32px)] flex flex-col rounded-xl p-4 pb-5 gap-3"
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* 标题栏 */}
-        <div className="flex items-center justify-between shrink-0">
-          <span className="text-sm font-medium flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
-            <Users size={14} style={{ color: 'var(--accent)' }} />
-            转为圆桌
+    <ConversionDialogShell
+      icon={<Users size={17} />}
+      kicker="会话转化"
+      title="转为圆桌"
+      size="room"
+      busy={creating}
+      onClose={onClose}
+      description={(
+        <>
+          将「{sessionTitle || '未命名会话'}」整理为多 Agent 协作任务。
+          核对任务与执行配置后创建，完成后会直接进入圆桌。
+        </>
+      )}
+      headerAction={(
+        <span className="pd-conversion-status">
+          <span className="pd-conversion-status-dot" />
+          {listMode === 'ai' ? '模型提炼' : '来源清单'}
+        </span>
+      )}
+      footer={(
+        <>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            已选择 {submitTasks.length} / {list.length} 个任务
           </span>
+          <span className="pd-conversion-footer-spacer flex-1" />
           <button
-            className="pd-btn pd-btn-sm"
-            style={{ color: 'var(--text-secondary)' }}
+            type="button"
+            className="pd-btn"
             onClick={onClose}
             disabled={creating}
-            title="关闭"
           >
-            <X size={14} />
+            取消
           </button>
+          <button
+            type="button"
+            className="pd-btn pd-btn-primary"
+            disabled={creating || loading || !!previewError || !plan || submitTasks.length === 0}
+            onClick={handleCreate}
+            title={submitTasks.length === 0 ? '至少保留一个任务' : '创建后自动进入该圆桌'}
+          >
+            <Sparkles size={12} />
+            {creating ? '创建中…' : '创建并进入圆桌'}
+          </button>
+        </>
+      )}
+    >
+      {loading && (
+        <div className="flex flex-1 items-center justify-center py-14">
+          <div className="pilotdesk-spinner" />
+          <span className="ml-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>正在整理会话与任务预览…</span>
         </div>
+      )}
 
-        <span className="text-[10px] leading-relaxed shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-          把会话「{sessionTitle || '未命名会话'}」的任务清单转为圆桌，由多 Agent 协作执行。
-          勾选并编辑下列任务后创建，创建后自动进入该圆桌，可继续调整成员或直接开始讨论。
-        </span>
+      {!loading && previewError && (
+        <div className="pd-conversion-error" role="alert">{previewError}</div>
+      )}
 
-        {/* 加载中 */}
-        {loading && (
-          <div className="flex-1 flex items-center justify-center py-10">
-            <div className="pilotdesk-spinner" />
-            <span className="ml-2 text-xs" style={{ color: 'var(--text-secondary)' }}>正在生成预览...</span>
-          </div>
-        )}
-
-        {!loading && (
-          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-1 pb-1 pd-scroll-stable">
-            {/* 预览失败：展示后端文案（可读中文） */}
-            {previewError && (
-              <div
-                className="rounded-lg p-3 text-xs leading-relaxed shrink-0"
-                style={{
-                  backgroundColor: 'var(--bg-tertiary)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--status-danger, #ef4444)',
-                }}
-              >
-                {previewError}
+      {!loading && !previewError && plan && (
+        <div className="pd-conversion-room-layout">
+          <div className="pd-conversion-column">
+            <section className="pd-conversion-section">
+              <div className="pd-conversion-section-head">
+                <div className="pd-conversion-section-heading">
+                  <h3 className="pd-conversion-section-title">
+                    <ListChecks size={13} />
+                    任务清单
+                  </h3>
+                  <p className="pd-conversion-section-desc">
+                    勾选需要交付的任务。依赖决定执行顺序，无依赖的任务可并行。
+                  </p>
+                </div>
               </div>
-            )}
-
-            {!previewError && plan && (
-              <>
-
-                {/* 任务清单（可勾选 + 可编辑） */}
-                <div className="flex flex-col gap-1 shrink-0">
-                  <div className="flex items-center gap-2">
-                    {/* 两态切换：来源清单（export 候选）/ 模型提炼（后端专用调用） */}
-                    <div
-                      className="flex items-center gap-0.5 p-0.5 rounded-lg shrink-0"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
-                    >
-                      <button
-                        className="pd-btn pd-btn-sm px-2 py-0.5 text-[10px] rounded"
-                        style={listMode === 'source'
-                          ? { backgroundColor: 'var(--accent-light)', color: 'var(--accent)', border: '1px solid var(--accent)' }
-                          : { color: 'var(--text-tertiary)', border: '1px solid transparent' }}
-                        onClick={switchToSourceList}
-                        disabled={switching || extracting}
-                        title="来源清单：会话计划 + 会话消息（可勾选与编辑）"
-                      >
-                        {switching ? '加载中…' : '来源清单'}
-                      </button>
-                      <button
-                        className="pd-btn pd-btn-sm px-2 py-0.5 text-[10px] rounded"
-                        style={listMode === 'ai'
-                          ? { backgroundColor: 'var(--accent-light)', color: 'var(--accent)', border: '1px solid var(--accent)' }
-                          : { color: 'var(--text-tertiary)', border: '1px solid transparent' }}
-                        onClick={extractWithAi}
-                        disabled={extracting || switching}
-                        title="让模型读取本会话并整理任务清单（需要配置了提供商的 API 会话）"
-                      >
-                        {extracting ? '提炼中…' : '模型提炼'}
-                      </button>
-                    </div>
-                    <span className="text-[10px] font-medium shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                      任务清单（{submitTasks.length}/{list.length}）
-                    </span>
+              <div className="pd-conversion-section-body">
+                <div className="pd-conversion-task-toolbar">
+                  <div className="pd-conversion-segment" aria-label="任务清单来源">
                     <button
-                      className="pd-btn pd-btn-sm ml-auto shrink-0"
-                      onClick={addTask}
-                      style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
+                      type="button"
+                      data-active={listMode === 'source'}
+                      onClick={switchToSourceList}
+                      disabled={switching || extracting}
+                      title="从会话计划与会话消息生成候选任务"
                     >
-                      <Plus size={11} /> 新增任务
+                      {switching ? '加载中…' : '来源清单'}
+                    </button>
+                    <button
+                      type="button"
+                      data-active={listMode === 'ai'}
+                      onClick={extractWithAi}
+                      disabled={extracting || switching}
+                      title="使用当前会话的 Agent 整理任务清单"
+                    >
+                      <Sparkles size={10} />
+                      {extracting ? '提炼中…' : '模型提炼'}
                     </button>
                   </div>
-                  {source && (
-                    <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                      {sourceNote(source, ignoredCount, origins)}
-                    </span>
-                  )}
-                  {confirmedCount > 0 && (
-                    <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                      本会话已有 {confirmedCount} 条需求确认，答复已并入总目标，运行期无需再确认
-                    </span>
-                  )}
-                  {list.length === 0 ? (
-                    <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                      {listMode === 'ai' ? '模型没有给出任务，可点「＋ 新增任务」手动补充。' : '未识别到任务，可点「＋ 新增任务」手动补充。'}
-                    </span>
-                  ) : (
-                    <div className="flex flex-col gap-1">
+                  <span className="pd-conversion-count">
+                    {submitTasks.length}/{list.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="pd-conversion-inline-button ml-auto"
+                    onClick={addTask}
+                  >
+                    <Plus size={11} /> 新增
+                  </button>
+                </div>
+                {source && (
+                  <span className="text-[9.5px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                    {sourceNote(source, ignoredCount, origins)}
+                  </span>
+                )}
+                {confirmedCount > 0 && (
+                  <span className="text-[9.5px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                    已吸收 {confirmedCount} 条历史需求确认，运行期无需重复确认
+                  </span>
+                )}
+                {list.length === 0 ? (
+                  <div className="pd-conversion-empty">
+                    {listMode === 'ai' ? '模型没有给出任务。' : '未识别到任务。'}
+                    可点击「新增」手动补充。
+                  </div>
+                ) : (
+                  <div className="pd-conversion-task-list">
                       {list.map((t) => {
                         const originLabel = t.origin ? ORIGIN_LABEL[t.origin] : undefined;
                         const pos = orderMap.get(t.id) ?? 0;
@@ -770,85 +778,60 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                           ? '无（可并行）'
                           : t.deps.map((d) => `T${orderMap.get(d) ?? '?'}`).join('、');
                         return (
-                          <div
-                            key={t.id}
-                            className="flex flex-col rounded-lg"
-                            style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
-                          >
-                            <div className="flex items-center gap-2 px-2 py-1">
-                              <span
-                                className="shrink-0 text-[9px] tabular-nums"
-                                style={{ color: 'var(--text-tertiary)', minWidth: 16 }}
-                              >
-                                T{pos}
-                              </span>
+                          <div key={t.id} className="pd-conversion-task">
+                            <div className="pd-conversion-task-main">
+                              <span className="pd-conversion-task-index">T{pos}</span>
                               <input
                                 type="checkbox"
-                                className="shrink-0 cursor-pointer"
+                                className="pd-conversion-task-check cursor-pointer"
                                 checked={t.checked}
                                 onChange={() => toggleTask(t.id)}
-                                style={{ accentColor: 'var(--accent)' }}
                                 title={t.checked ? '取消勾选（不参与转换）' : '勾选后参与转换'}
                               />
-                              {originLabel && (
-                                <span
-                                  className="shrink-0 text-[9px] leading-none px-1 py-0.5 rounded"
-                                  style={{
-                                    backgroundColor: 'var(--bg-tertiary)',
-                                    border: '1px solid var(--border)',
-                                    color: 'var(--text-tertiary)',
-                                  }}
-                                  title={`候选来源：${originLabel}`}
-                                >
-                                  {originLabel}
-                                </span>
-                              )}
                               <input
                                 ref={(el) => {
                                   if (el) inputRefs.current.set(t.id, el);
                                   else inputRefs.current.delete(t.id);
                                 }}
-                                className="flex-1 min-w-0 bg-transparent text-[11px] leading-relaxed outline-none"
+                                className="pd-conversion-task-input"
                                 style={{ color: t.checked ? 'var(--text-primary)' : 'var(--text-tertiary)' }}
                                 value={t.title}
                                 onChange={(e) => editTaskTitle(t.id, e.target.value)}
                                 placeholder="任务标题"
                               />
                               <button
-                                className="pd-btn pd-btn-sm shrink-0 px-1"
+                                type="button"
+                                className="pd-conversion-row-action"
                                 onClick={() => moveTask(t.id, -1)}
                                 disabled={pos <= 1}
-                                style={{ color: 'var(--text-tertiary)' }}
                                 title="上移（与上一行交换）"
                               >
                                 <ArrowUp size={12} />
                               </button>
                               <button
-                                className="pd-btn pd-btn-sm shrink-0 px-1"
+                                type="button"
+                                className="pd-conversion-row-action"
                                 onClick={() => moveTask(t.id, 1)}
                                 disabled={pos >= list.length}
-                                style={{ color: 'var(--text-tertiary)' }}
                                 title="下移（与下一行交换）"
                               >
                                 <ArrowDown size={12} />
                               </button>
                               <button
-                                className="pd-btn pd-btn-sm shrink-0"
+                                type="button"
+                                className="pd-conversion-row-action"
                                 onClick={() => removeTask(t.id)}
-                                style={{ color: 'var(--text-tertiary)' }}
                                 title="删除该任务"
                               >
-                                <X size={12} />
+                                <Trash2 size={11} />
                               </button>
                             </div>
-                            <div className="flex items-center gap-2 px-2 pb-1">
-                              <span className="shrink-0" style={{ minWidth: 16 }} />
+                            <div className="pd-conversion-task-meta">
+                              {originLabel && <span className="pd-conversion-origin">{originLabel}</span>}
                               <button
-                                className="pd-btn pd-btn-sm text-[10px] px-1.5 py-0.5 rounded"
-                                style={{
-                                  border: '1px solid var(--border)',
-                                  color: t.deps.length > 0 ? 'var(--accent)' : 'var(--text-tertiary)',
-                                }}
+                                type="button"
+                                className="pd-conversion-deps"
+                                data-active={t.deps.length > 0}
                                 disabled={!t.checked}
                                 onClick={() => {
                                   if (!t.checked) return;
@@ -857,49 +840,49 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                                 }}
                                 title={t.checked ? '设置前置依赖；不设置 = 无依赖（可与其它任务并行）' : '先勾选该任务，才能设置依赖'}
                               >
-                                依赖：{depText}
+                                前置：{depText}
                               </button>
                             </div>
                             {openDepsFor === t.id && (
                               <div
-                                className="mx-2 mb-1.5 p-2 rounded-lg flex flex-col gap-1"
+                                className="mx-2 mb-2 flex flex-col gap-1.5 rounded-md p-2"
                                 style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
                               >
                                 <div className="flex items-center gap-2">
-                                  <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                                    前置任务（勾选 = 必须先完成）
+                                  <span className="shrink-0 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+                                    勾选必须先完成的任务
                                   </span>
                                   <button
-                                    className="pd-btn pd-btn-sm ml-auto shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                                    type="button"
+                                    className="pd-conversion-inline-button ml-auto"
+                                    style={{ height: 22, minWidth: 0, padding: '0 6px', fontSize: 9 }}
                                     onClick={() => clearDeps(t.id)}
                                     disabled={t.deps.length === 0}
-                                    style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
                                   >
-                                    清空（可并行）
+                                    清空
                                   </button>
                                 </div>
                                 {list.filter((o) => o.id !== t.id && o.checked).map((o) => (
-                                  <label key={o.id} className="flex items-center gap-1.5 cursor-pointer">
+                                  <label key={o.id} className="flex cursor-pointer items-center gap-1.5">
                                     <input
                                       type="checkbox"
-                                      className="shrink-0 cursor-pointer"
+                                      className="pd-conversion-task-check cursor-pointer"
                                       checked={t.deps.includes(o.id)}
                                       onChange={() => toggleDep(t.id, o.id)}
-                                      style={{ accentColor: 'var(--accent)' }}
                                     />
                                     <span
-                                      className="shrink-0 text-[10px] tabular-nums"
+                                      className="shrink-0 text-[9px] tabular-nums"
                                       style={{ color: 'var(--text-secondary)' }}
                                     >
                                       T{orderMap.get(o.id)}
                                     </span>
-                                    <span className="truncate text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                                    <span className="truncate text-[9.5px]" style={{ color: 'var(--text-tertiary)' }}>
                                       {o.title || '未命名任务'}
                                     </span>
                                   </label>
                                 ))}
                                 {cycleHintId === t.id && (
-                                  <span className="text-[10px]" style={{ color: 'var(--status-danger, #ef4444)' }}>
+                                  <span className="text-[9.5px]" style={{ color: 'var(--status-danger, #ef4444)' }}>
                                     会造成循环依赖，已忽略
                                   </span>
                                 )}
@@ -916,41 +899,60 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                     </span>
                   )}
                 </div>
+              </section>
+            </div>
 
-                {/* 标题 / 议题（默认取预览值，可编辑） */}
-                <label className="flex flex-col gap-1 text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  圆桌标题
-                  <input
-                    className="px-3 py-2 rounded-lg text-xs outline-none"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="例如：PilotDesk 架构评审"
-                  />
-                </label>
+            <div className="pd-conversion-column">
+              <section className="pd-conversion-section">
+                <div className="pd-conversion-section-head">
+                  <div className="pd-conversion-section-heading">
+                    <h3 className="pd-conversion-section-title">
+                      <SlidersHorizontal size={13} />
+                      圆桌信息
+                    </h3>
+                    <p className="pd-conversion-section-desc">标题用于识别；议题作为本次协作的共同目标。</p>
+                  </div>
+                </div>
+                <div className="pd-conversion-section-body">
+                  <label className="pd-conversion-field">
+                    圆桌标题
+                    <input
+                      className="pd-conversion-input"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="例如：PilotDesk 架构评审"
+                    />
+                  </label>
+                  <label className="pd-conversion-field">
+                    <span className="flex items-center justify-between gap-2">
+                      讨论议题
+                      {refreshing && <small>更新中…</small>}
+                    </span>
+                    <textarea
+                      className="pd-conversion-input"
+                      rows={4}
+                      value={topic}
+                      onChange={(e) => { topicTouchedRef.current = true; setTopic(e.target.value); }}
+                      placeholder="留空时以进入圆桌后的第一条指令作为目标"
+                    />
+                    <small>默认取会话标题与摘要，可继续修改。</small>
+                  </label>
+                </div>
+              </section>
 
-                <label className="flex flex-col gap-1 text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  讨论议题
-                  <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                    默认取会话标题与摘要，可自行修改；它会作为圆桌的目标锚点，也是本次创建任务的共同目标。
-                    {refreshing && '（预览更新中…）'}
-                  </span>
-                  <textarea
-                    className="px-3 py-2 rounded-lg text-xs outline-none resize-none"
-                    rows={3}
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                    value={topic}
-                    onChange={(e) => { topicTouchedRef.current = true; setTopic(e.target.value); }}
-                    placeholder="留空时以进入圆桌后的第一条指令作为目标"
-                  />
-                </label>
-
-                {/* 主持人模型（规划与裁决）—— 与新建房间弹窗同口径 */}
-                <div className="flex flex-col gap-1 text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  主持人模型（规划与裁决）
-                  <div className="flex gap-2">
+              <section className="pd-conversion-section">
+                <div className="pd-conversion-section-head">
+                  <div className="pd-conversion-section-heading">
+                    <h3 className="pd-conversion-section-title">
+                      <Sparkles size={13} />
+                      主持人模型
+                    </h3>
+                    <p className="pd-conversion-section-desc">负责规划、裁决与任务分派。</p>
+                  </div>
+                </div>
+                <div className="pd-conversion-section-body">
+                  <div className="grid grid-cols-2 gap-2">
                     <Select
-                      className="flex-1"
                       value={directorProvider}
                       onChange={(v) => { setDirectorProvider(v); setDirectorModel(''); }}
                       placeholder="选择提供商"
@@ -960,7 +962,6 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                       ]}
                     />
                     <Select
-                      className="flex-1"
                       value={directorModel}
                       onChange={setDirectorModel}
                       placeholder="选择模型"
@@ -972,67 +973,89 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                     />
                   </div>
                 </div>
+              </section>
 
-                {/* 成员配置 */}
-                <div className="flex flex-col gap-2 shrink-0">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>参与者（可添加 API / CLI Agent）</span>
-                    <div className="flex gap-1">
-                      <button
-                        className="pd-btn pd-btn-sm"
-                        onClick={() => addDraft('api')}
-                        style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-                      >
-                        <Plus size={11} /> API
-                      </button>
-                      <button
-                        className="pd-btn pd-btn-sm"
-                        onClick={() => addDraft('cli')}
-                        style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-                      >
-                        <Plus size={11} /> CLI
-                      </button>
+              <section className="pd-conversion-section">
+                <div className="pd-conversion-section-head">
+                  <div className="pd-conversion-section-heading">
+                    <h3 className="pd-conversion-section-title">
+                      <Users size={13} />
+                      参与者
+                    </h3>
+                    <p className="pd-conversion-section-desc">可组合 API 与 CLI Agent 分工协作。</p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      className="pd-conversion-inline-button"
+                      onClick={() => addDraft('api')}
+                    >
+                      <Plus size={10} /> API
+                    </button>
+                    <button
+                      type="button"
+                      className="pd-conversion-inline-button"
+                      onClick={() => addDraft('cli')}
+                    >
+                      <Plus size={10} /> CLI
+                    </button>
+                  </div>
+                </div>
+                <div className="pd-conversion-section-body">
+                  <div className="pd-conversion-toggle-row">
+                    <div>
+                      <strong>允许主持人自动补充 CLI Agent</strong>
+                      <small>关闭后不自动补充 CLI 参与者，手动添加不受影响。</small>
                     </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={allowAutoCli}
+                      aria-label="允许主持人自动补充 CLI Agent"
+                      className="pd-settings-toggle"
+                      data-checked={allowAutoCli}
+                      onClick={() => setAllowAutoCli((value) => !value)}
+                    >
+                      <span className="pd-settings-toggle-knob" />
+                    </button>
                   </div>
 
                   {drafts.length === 0 && (
-                    <div className="px-3 py-2 rounded-lg text-[11px]" style={{ color: 'var(--text-tertiary)', backgroundColor: 'var(--bg-tertiary)' }}>
-                      尚未添加参与者。至少可保留 Director + 用户，也可添加多个 API/CLI 参与者。
+                    <div className="pd-conversion-empty">
+                      当前仅保留主持人。可按需要添加 API 或 CLI 参与者。
                     </div>
                   )}
 
                   {drafts.map((d, i) => (
-                    <div
-                      key={d.id}
-                      className="rounded-lg p-3 flex flex-col gap-2"
-                      style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-primary)' }}
-                    >
-                      <div className="flex gap-2 items-center">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}>
+                    <div key={d.id} className="pd-conversion-participant">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="pd-conversion-origin" style={{ color: 'var(--accent)', borderColor: 'color-mix(in srgb, var(--accent) 30%, var(--border))' }}>
                           {d.type === 'api' ? 'API' : 'CLI'}
                         </span>
                         <input
-                          className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-                          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                          className="pd-conversion-input"
                           placeholder="显示名（如 Hermes Agent）"
                           value={d.displayName}
                           onChange={(e) => updateDraft(i, { displayName: e.target.value })}
                         />
-                        <button className="pd-btn pd-btn-sm" onClick={() => removeDraft(i)} style={{ color: 'var(--text-tertiary)' }}>
-                          <XCircle size={13} />
+                        <button
+                          type="button"
+                          className="pd-conversion-row-action"
+                          onClick={() => removeDraft(i)}
+                          title="移除参与者"
+                        >
+                          <Trash2 size={11} />
                         </button>
                       </div>
                       <input
-                        className="px-3 py-2 rounded-lg text-xs outline-none"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                        className="pd-conversion-input"
                         placeholder="角色（如 架构师 / 质疑者 / 执行者）"
                         value={d.systemRole}
                         onChange={(e) => updateDraft(i, { systemRole: e.target.value })}
                       />
                       {d.type === 'api' ? (
-                        <div className="flex gap-2">
+                        <div className="grid grid-cols-2 gap-2">
                           <Select
-                            className="flex-1"
                             value={d.provider}
                             onChange={(v) => updateDraft(i, { provider: v, model: '' })}
                             placeholder="选择提供商"
@@ -1042,7 +1065,6 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                             ]}
                           />
                           <Select
-                            className="flex-1"
                             value={d.model}
                             onChange={(v) => updateDraft(i, { model: v })}
                             placeholder="选择模型"
@@ -1066,63 +1088,25 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                       )}
                     </div>
                   ))}
-                </div>
 
-                {/* 统一执行者：本弹窗最底部的字段，下拉固定向上展开 —— 向下展开时选项会被弹窗/视口裁掉 */}
-                <div className="flex flex-col gap-1 text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  统一执行者（可选）
-                  <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                    角色分工：主持人负责规划与裁决、并在运行期分派任务；这里可选一个统一执行者 —— 留空则按成员自动分配（每个任务轮转一个 Agent 执行者，主持人仍可在讨论中改派）；指定后本次创建的所有任务都交给该参与者执行。
-                  </span>
-                  <Select
-                    value={assigneeId}
-                    onChange={setAssigneeId}
-                    placeholder="不指定（自动分配，主持人可改派）"
-                    disabled={creating}
-                    prefer="up"
-                    options={assigneeOptions}
-                  />
+                  <label className="pd-conversion-field">
+                    统一执行者 <small>可选；留空时按成员轮转分派</small>
+                    <Select
+                      value={assigneeId}
+                      onChange={setAssigneeId}
+                      placeholder="不指定（自动分配，主持人可改派）"
+                      disabled={creating}
+                      prefer="up"
+                      options={assigneeOptions}
+                    />
+                  </label>
                 </div>
+              </section>
 
-                {error && (
-                  <div
-                    className="px-3 py-2 rounded-lg text-[11px] shrink-0"
-                    style={{ color: 'var(--status-danger, #ef4444)', backgroundColor: 'var(--status-danger-bg, rgba(239,68,68,0.1))' }}
-                  >
-                    {error}
-                  </div>
-                )}
-              </>
-            )}
+              {error && <div className="pd-conversion-error">{error}</div>}
+            </div>
           </div>
-        )}
-
-        {/* 操作区 */}
-        <div className="flex justify-end gap-2 shrink-0">
-          <button
-            className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
-            style={{
-              border: '1px solid var(--border)',
-              background: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-            }}
-            onClick={onClose}
-            disabled={creating}
-          >
-            取消
-          </button>
-          <button
-            className="pd-btn pd-btn-primary px-3 py-1.5 text-xs rounded transition-colors"
-            /* 主按钮补 1px 边框：否则 auto 高度下会比左侧「取消」矮 2px */
-            style={{ border: '1px solid var(--accent)' }}
-            disabled={creating || loading || !!previewError || !plan || submitTasks.length === 0}
-            onClick={handleCreate}
-            title={submitTasks.length === 0 ? '至少保留一个任务' : '创建后自动进入该圆桌'}
-          >
-            {creating ? '创建中…' : '创建并进入圆桌'}
-          </button>
-        </div>
-      </div>
-    </div>
+      )}
+    </ConversionDialogShell>
   );
 }

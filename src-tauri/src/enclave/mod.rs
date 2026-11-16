@@ -9,6 +9,7 @@
 //!   任务/汇报/产出/文件**以主机为准**（本模块写入 `enclave.db`）。
 //! - **不缓存**：成员端不缓存团队数据（离线不可用），因此没有 `enclave_cache.db`。
 
+pub mod api_share;
 pub mod authz;
 pub mod backup;
 pub mod comments;
@@ -17,6 +18,7 @@ pub mod files;
 pub mod gate;
 pub mod host;
 pub mod knowledge;
+pub mod messenger;
 pub mod notify;
 pub mod org;
 pub mod progress;
@@ -61,6 +63,8 @@ pub struct EnclaveState {
     pub host: host::HostRuntime,
     /// 成员端发现到的主机（内存缓存，按 org_id；不落库）。
     pub discovered: Mutex<HashMap<String, host::DiscoveredHost>>,
+    /// 主库连接池（API 共享网关读取 Provider 密钥与模型；不复制进 `enclave.db`）。
+    main_db: Mutex<Option<crate::DbPool>>,
 }
 
 impl EnclaveState {
@@ -71,7 +75,21 @@ impl EnclaveState {
             last_snapshot_at: AtomicI64::new(0),
             host: host::HostRuntime::default(),
             discovered: Mutex::new(HashMap::new()),
+            main_db: Mutex::new(None),
         }
+    }
+
+    /// 绑定主库连接池。仅在应用启动时调用一次；测试二进制可不绑定。
+    pub fn attach_main_db(&self, pool: crate::DbPool) {
+        *self.main_db.lock().unwrap_or_else(|e| e.into_inner()) = Some(pool);
+    }
+
+    /// 取主库连接池（网关代理 Provider 请求时使用）。
+    pub fn main_db(&self) -> Option<crate::DbPool> {
+        self.main_db
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// 最近一次治理快照成功同步时间（unix 秒，0 = 从未成功）。供命令层读新鲜度用。

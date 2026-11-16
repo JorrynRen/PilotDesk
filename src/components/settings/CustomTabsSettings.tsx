@@ -17,12 +17,13 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useCustomTabsStore, validateCustomTabInput, TITLEBAR_LIMIT_MIN, TITLEBAR_LIMIT_MAX, CUSTOM_TAB_GROUP_MAX, TAB_ICON_OPTIONS, type CustomTab } from '../../stores/customTabsStore';
+import { useCustomTabsStore, validateCustomTabInput, CUSTOM_TAB_GROUP_MAX, TAB_ICON_OPTIONS, type CustomTab } from '../../stores/customTabsStore';
 import { Select } from '../common/Select';
 import { TabIcon } from '../common/TabIcon';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { CollapsibleNote } from './KvMemorySettings';
+import { SettingsButton, SettingsSection } from './index';
 
 /**
  * 门户标签管理（设置页 tab 内容）。
@@ -75,15 +76,18 @@ function SortableTabRow({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.6 : 1,
-    backgroundColor: isDragging ? 'var(--accent)' + '22' : 'var(--bg-secondary)',
-    border: '1px solid var(--border)',
+    ...(isDragging
+      ? {
+          backgroundColor: 'var(--accent-light)',
+          borderColor: 'var(--accent)',
+        }
+      : {}),
   };
 
-  const inputCls = 'px-2 py-1.5 rounded text-xs outline-none';
-  const inputStyle = { backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' };
+  const inputCls = 'pd-settings-input';
 
   return (
-    <div ref={setNodeRef} style={style} className="p-3 rounded-xl transition-all">
+    <div ref={setNodeRef} style={style} className="pd-settings-card p-3 rounded-md transition-all">
       <div className="flex items-center gap-2">
         {/* 拖动把手 */}
         <span
@@ -107,14 +111,12 @@ function SortableTabRow({
                 onChange={(e) => onEditLabelChange(e.target.value)}
                 placeholder="标签名称"
                 className={`flex-1 min-w-[90px] ${inputCls}`}
-                style={inputStyle}
               />
               <input
                 value={editUrl}
                 onChange={(e) => onEditUrlChange(e.target.value)}
                 placeholder="URL / 本地文件 / 本地目录"
                 className={`flex-[2] min-w-[140px] ${inputCls}`}
-                style={inputStyle}
                 onKeyDown={(e) => { if (e.key === 'Enter') onSave(tab.id); }}
               />
             </div>
@@ -125,7 +127,6 @@ function SortableTabRow({
                 placeholder="分组（可留空 = 未分组）"
                 maxLength={CUSTOM_TAB_GROUP_MAX}
                 className={`flex-1 min-w-[90px] ${inputCls}`}
-                style={inputStyle}
               />
               <Select
                 value={editIcon}
@@ -210,14 +211,7 @@ function SortableTabRow({
  * CRUD + 拖动排序，数据持久化到 app_settings（复用现有 KV 表）。
  */
 export function CustomTabsSettings() {
-  const { tabs, addTab, updateTab, removeTab, reorderTabs, titleBarLimit, setTitleBarLimit } = useCustomTabsStore();
-
-  // 顶栏平铺显示个数（0–3）：拖动 / 键盘调整时只更新本地态，松手（或失焦）后才落库，
-  // 避免拖动过程中每次 onChange 都写库。
-  const [limitDraft, setLimitDraft] = useState(titleBarLimit);
-  const commitLimit = useCallback(() => {
-    if (limitDraft !== titleBarLimit) void setTitleBarLimit(limitDraft);
-  }, [limitDraft, titleBarLimit, setTitleBarLimit]);
+  const { tabs, addTab, updateTab, removeTab, reorderTabs } = useCustomTabsStore();
 
   // 新增表单（group/icon 添加后保留，便于连续录入同一分组的多个地址）
   const [label, setLabel] = useState('');
@@ -295,12 +289,14 @@ export function CustomTabsSettings() {
   }, [tabs, reorderTabs]);
 
   return (
-    <div>
-      <div className="mb-4">
-        <h3 className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>门户标签</h3>
+    <div className="settings-page-stack">
+      <SettingsSection
+        title="门户标签"
+        description="把常用站点或本地页面固定到标题栏与门户页，便于快速切换。"
+      >
         {/* 说明条目多，默认折叠：点标题才展开，避免首屏被文字占满 */}
         <CollapsibleNote title="使用说明">
-        <ul className="text-xs space-y-1 list-disc pl-4" style={{ color: 'var(--text-tertiary)' }}>
+        <ul className="pd-settings-note space-y-1 list-disc pl-4">
           <li>
             <span style={{ color: 'var(--text-secondary)' }}>用途</span>：承载在线版 Agent 站点（如 chat.deepseek.com），也支持本地文件 / 目录等常用页面。
           </li>
@@ -324,77 +320,43 @@ export function CustomTabsSettings() {
           </li>
         </ul>
         </CollapsibleNote>
-      </div>
-
-      {/* 顶栏平铺显示个数：设置组合开关里平铺几个门户标签，其余收进「更多」下拉 */}
-      <div
-        className="mb-4 p-3 rounded-xl"
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <label htmlFor="custom-tabs-titlebar-limit" className="text-xs" style={{ color: 'var(--text-primary)' }}>
-            顶部显示个数
-          </label>
-          <span className="text-xs font-medium tabular-nums" style={{ color: 'var(--accent)' }}>{limitDraft}</span>
-        </div>
-        <input
-          id="custom-tabs-titlebar-limit"
-          type="range"
-          min={TITLEBAR_LIMIT_MIN}
-          max={TITLEBAR_LIMIT_MAX}
-          step={1}
-          value={limitDraft}
-          onChange={(e) => setLimitDraft(Number(e.target.value))}
-          onMouseUp={commitLimit}
-          onTouchEnd={commitLimit}
-          onBlur={commitLimit}
-          className="w-full mt-2"
-          style={{ accentColor: 'var(--accent)' }}
-        />
-        <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-          0 表示不在顶栏显示门户标签（仍可从「更多」进入）；最多 3 个。
-        </p>
-      </div>
+      </SettingsSection>
 
       {/* 新增表单 */}
-      <div
-        className="p-3 rounded-xl"
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+      <SettingsSection
+        title="添加标签"
+        description="支持网络地址、本地 HTML 文件与本地目录；未写协议时自动按 https 处理。"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             value={label}
             onChange={(e) => { setLabel(e.target.value); if (formError) setFormError(''); }}
             placeholder="标签名称"
-            className="flex-1 min-w-[100px] px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' }}
+            className="pd-settings-input flex-1 min-w-[120px]"
           />
           <input
             value={url}
             onChange={(e) => { setUrl(e.target.value); if (formError) setFormError(''); }}
             placeholder="URL / 本地文件 / 本地目录（如 https://example.com、E:\doc\index.html 或 E:\doc）"
-            className="flex-[2] min-w-[180px] px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' }}
+            className="pd-settings-input flex-[2] min-w-[220px]"
             onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
           />
-          <button
+          <SettingsButton
+            variant="primary"
             onClick={handleAdd}
-            className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-medium transition-all active:scale-[.98]"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+            icon={<Plus size={13} />}
           >
-            <Plus size={13} />
             添加
-          </button>
+          </SettingsButton>
         </div>
         {/* 分组 + 图标（可选）：分组用于门户页归类，图标用于门户卡片与顶栏展示 */}
-        <div className="flex items-center gap-2 mt-2">
+        <div className="flex flex-wrap items-center gap-2 mt-3">
           <input
             value={group}
             onChange={(e) => setGroup(e.target.value)}
             placeholder="分组（可留空 = 未分组，用于门户页归类）"
             maxLength={CUSTOM_TAB_GROUP_MAX}
-            className="flex-1 min-w-[120px] px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' }}
+            className="pd-settings-input flex-1 min-w-[180px]"
           />
           <Select
             value={icon}
@@ -402,23 +364,26 @@ export function CustomTabsSettings() {
             options={TAB_ICON_OPTIONS}
             placeholder="图标（默认地球）"
             size="md"
-            className="min-w-[140px] shrink-0"
+            className="min-w-[160px] shrink-0"
           />
         </div>
-      </div>
+      </SettingsSection>
       {/* 新增校验错误：就地展示 */}
       {formError && (
-        <div className="mt-1.5 px-1 text-[11px] leading-relaxed" style={{ color: 'var(--danger, #EF4444)' }}>
+        <div className="pd-settings-note px-1" style={{ color: 'var(--danger)' }}>
           {formError}
         </div>
       )}
 
       {/* 标签列表 */}
-      <div className="mt-4">
+      <SettingsSection
+        title="已添加的标签"
+        description={tabs.length > 0 ? `共 ${tabs.length} 项，可拖动左侧手柄调整显示顺序。` : undefined}
+      >
       {tabs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-12">
+        <div className="pd-settings-empty">
           <Globe size={26} style={{ color: 'var(--text-tertiary)' }} />
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>暂无门户标签，在上方添加</p>
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>暂无门户标签，在上方添加</p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -450,7 +415,7 @@ export function CustomTabsSettings() {
           </DndContext>
         </div>
       )}
-      </div>
+      </SettingsSection>
     </div>
   );
 }

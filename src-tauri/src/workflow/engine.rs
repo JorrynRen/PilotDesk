@@ -942,7 +942,10 @@ impl WorkflowEngine {
                 match super::get_definition(conn, &subflow_def_id) {
                     Ok(Some(sub_def)) => {
                         // 子流已进回收站：报明确错误（恢复或替换节点），不再递归探测其内部
-                        if matches!(super::is_definition_deleted(conn, &subflow_def_id), Ok(true)) {
+                        if matches!(
+                            super::is_definition_deleted(conn, &subflow_def_id),
+                            Ok(true)
+                        ) {
                             checks.push(ValidationCheck {
                                 check_type: "subflow_deleted".into(),
                                 severity: "error".into(),
@@ -3840,6 +3843,7 @@ impl WorkflowEngine {
             created_at: def.created_at,
             updated_at: crate::utils::now(),
             enabled: def.enabled,
+            project_id: def.project_id.clone(),
         };
 
         // 8. 发送开始事件（mode 与后续帧同形：带 type 的对象）
@@ -5326,6 +5330,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             enabled: true,
+            project_id: None,
         }
     }
 

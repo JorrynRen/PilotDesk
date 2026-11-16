@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   Settings, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw, Shapes, Rainbow, MessageSquare,
+  Loader2, Zap, GripVertical, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Cloud, ExternalLink, RefreshCw, Shapes, Rainbow, MessageSquare,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
@@ -39,14 +39,10 @@ import { McpSettings } from '../components/settings/McpSettings';
 import { SearchSettings } from '../components/settings/SearchSettings';
 import { FileHistorySettings } from '../components/settings/FileHistorySettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
-import { useAccountStore } from '../stores/accountStore';
 import { useFeedbackStore } from '../stores/feedbackStore';
+import { APP_VERSION } from '../utils/appVersion';
 import { sendApiRequest } from '../utils/apiClient';
-import { useTerminal, type ViewMode } from '../TerminalManager';
-
-interface SettingsPageProps {
-  onBack: () => void;
-}
+import { WorkbenchAssetPage } from '../components/layout';
 
 // 一级 tab：17 → 12。低频且同类的项收进「一级 tab + 子页签」：
 //   关于 → 通用设置 · 环境检测 → Agent 集成配置
@@ -69,7 +65,7 @@ const SETTINGS_GROUPS: {
     titleZh: '应用',
     items: [
       { id: 'account', icon: User, labelKey: 'settings.tab.account', labelZh: '账号' },
-      { id: 'cloudsync', icon: Cloud, labelKey: 'settings.tab.cloudsync', labelZh: '我的云同步' },
+      { id: 'cloudsync', icon: Cloud, labelKey: 'settings.tab.cloudsync', labelZh: '个人云同步' },
       { id: 'general', icon: Settings, labelKey: 'settings.tab.general', labelZh: '通用设置' },
     ],
   },
@@ -141,7 +137,7 @@ function SubTabs<T extends string>({
 
 
 
-import { SettingsSection, SettingsButton } from '../components/settings';
+import { SettingsButton, SettingsSection, SettingsToggle } from '../components/settings';
 import { AccountSettings } from '../components/settings/AccountSettings';
 import { CloudSyncSettings } from '../components/settings/CloudSyncSettings';
 import { confirmDialog } from '../stores/confirmStore';
@@ -161,7 +157,6 @@ import { Select } from '../components/common/Select';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import { isAutoRunNotifyEnabled, setAutoRunNotifyEnabled } from '../stores/notificationEvents';
-import { TitleBar, StatusBar } from '../components/layout';
 
 // ============================================================
 // 1. General Settings
@@ -288,20 +283,20 @@ function GeneralSettings() {
 
 
   return (
-    <div className="space-y-6">
+    <div className="settings-page-stack">
       {/* Theme */}
       <SettingsSection title="主题模式">
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1.5">
           {themeOptions.map(({ value, icon: Icon, label, title }) => (
             <button
               key={value}
               onClick={() => setTheme(value)}
               title={title}
-              className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs transition-colors"
+              className="pd-settings-choice"
               style={{
                 color: theme === value ? '#fff' : 'var(--text-secondary)',
                 backgroundColor: theme === value ? 'var(--accent)' : 'var(--bg-field)',
-                border: '1px solid var(--border)',
+                border: `1px solid ${theme === value ? 'var(--accent)' : 'var(--border)'}`,
               }}
             >
               <Icon size={12} />
@@ -309,17 +304,18 @@ function GeneralSettings() {
             </button>
           ))}
         </div>
-        <div className="mt-3">
-          <ThemeCustomizer />
-        </div>
       </SettingsSection>
+      <ThemeCustomizer />
 
       {/* 全局工作空间 */}
-      <SettingsSection title="全局工作空间">
-        <div className="flex items-center gap-2">
+      <SettingsSection
+        title="全局工作空间"
+        description="未归属项目的会话、圆桌与工作流使用此目录兜底；归属项目后自动使用项目主目录。"
+      >
+        <div className="pd-settings-control-row">
           <div
-            className="flex-1 px-3 py-2 rounded-lg text-sm truncate"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            className="pd-settings-input flex-1 truncate font-sans"
+            style={{ color: 'var(--text-primary)' }}
             title={workspace || '未设置'}
           >
             {workspace || '未设置'}
@@ -328,23 +324,23 @@ function GeneralSettings() {
             浏览
           </SettingsButton>
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          Agent 会话的兜底工作目录（会话时可选择工作目录，用于储存工作时输入、输出文件）。
-        </p>
       </SettingsSection>
 
       {/* 语言：切换立即生效（全局 Context），不需要重启 */}
-      <SettingsSection title={t('settings.language', '语言')}>
-        <div className="flex gap-1">
+      <SettingsSection
+        title={t('settings.language', '语言')}
+        description={t('settings.language.hint', '切换后立即生效；尚未翻译的界面文案会回落到中文。')}
+      >
+        <div className="flex flex-wrap gap-1.5">
           {LOCALES.map((l) => (
             <button
               key={l}
               onClick={() => setLocale(l)}
-              className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs transition-colors"
+              className="pd-settings-choice"
               style={{
                 color: locale === l ? '#fff' : 'var(--text-secondary)',
                 backgroundColor: locale === l ? 'var(--accent)' : 'var(--bg-field)',
-                border: '1px solid var(--border)',
+                border: `1px solid ${locale === l ? 'var(--accent)' : 'var(--border)'}`,
               }}
             >
               {locale === l && <Check size={12} />}
@@ -352,14 +348,14 @@ function GeneralSettings() {
             </button>
           ))}
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          {t('settings.language.hint', '切换后立即生效；尚未翻译的界面文案会回落到中文。')}
-        </p>
       </SettingsSection>
 
       {/* Max Concurrency */}
-      <SettingsSection title="并行节点数">
-        <div className="flex items-center gap-2">
+      <SettingsSection
+        title="并行节点数"
+        description={`工作流执行时同一时刻最多并行运行的节点数。增加此值可加速并行节点较多的工作流，但会消耗更多系统资源；上限 ${CONCURRENCY_HARD_MAX}，过高会明显占用本机资源。`}
+      >
+        <div className="pd-settings-control-row">
           <input
             type="range"
             min="1"
@@ -376,17 +372,14 @@ function GeneralSettings() {
             {maxConcurrency}
           </span>
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          工作流执行时同一时刻最多并行运行的节点数。增加此值可加速并行节点较多的工作流，但会消耗更多系统资源。
-        </p>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          上限 {CONCURRENCY_HARD_MAX}：过高会明显占用本机资源。
-        </p>
       </SettingsSection>
 
       {/* KV 记忆条数上限 */}
-      <SettingsSection title="KV 记忆条数上限">
-        <div className="flex items-center gap-2">
+      <SettingsSection
+        title="KV 记忆条数上限"
+        description="上限越高占用本地数据库空间越多；达到上限后，最久未活跃的旧记忆会被清理。"
+      >
+        <div className="pd-settings-control-row">
           <input
             type="range"
             min={MEMORY_ENTRIES_MIN}
@@ -404,14 +397,14 @@ function GeneralSettings() {
             {maxMemoryEntries}
           </span>
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          上限越高占用本地数据库空间越多；达到上限后旧记忆会被清理。
-        </p>
       </SettingsSection>
 
       {/* Max Subflow Depth */}
-      <SettingsSection title="子工作流嵌套深度">
-        <div className="flex items-center gap-2">
+      <SettingsSection
+        title="子工作流嵌套深度"
+        description="限制 Subflow 节点的最大递归嵌套层数（1-10）；超过限制时阻止执行，以防止无限递归。"
+      >
+        <div className="pd-settings-control-row">
           <input
             type="range"
             min="1"
@@ -428,73 +421,57 @@ function GeneralSettings() {
             {maxSubflowDepth}
           </span>
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          子工作流（Subflow 节点）允许的最大递归嵌套层数（1-10）。超过此限制将阻止执行以防止无限递归。
-        </p>
       </SettingsSection>
 
       {/* 自动运行提醒 */}
-      <SettingsSection title="自动运行提醒">
+      <SettingsSection
+        title="自动运行提醒"
+        description="定时或事件触发的工作流启动时，在通知中心保留提醒；手动运行不提醒，同一工作流 1 分钟内多次触发只提醒一次。"
+      >
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => { const next = !autoRunNotify; setAutoRunNotifyEnabled(next); setAutoRunNotify(next); }}
-            className="relative rounded-full transition-colors shrink-0"
-            style={{
-              width: 36,
-              height: 20,
-              backgroundColor: autoRunNotify ? '#22c55e' : 'var(--bg-field)',
-              border: '1px solid var(--border)',
+          <SettingsToggle
+            checked={autoRunNotify}
+            onChange={(next) => {
+              setAutoRunNotifyEnabled(next);
+              setAutoRunNotify(next);
             }}
             title={autoRunNotify ? '点击关闭' : '点击开启'}
+          />
+          <span
+            className="text-xs"
+            style={{ color: autoRunNotify ? 'var(--status-success)' : 'var(--text-tertiary)' }}
           >
-            <div
-              className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-              style={{ left: autoRunNotify ? '18px' : '2px' }}
-            />
-          </button>
-          <span className="text-xs" style={{ color: autoRunNotify ? '#22c55e' : 'var(--text-tertiary)' }}>
             {autoRunNotify ? '已开启' : '已关闭'}
           </span>
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          定时或事件触发的工作流启动时，在通知中心留一条提醒。手动运行不提醒（本身已有即时反馈）；
-          同一工作流 1 分钟内多次触发只提醒一次。
-        </p>
       </SettingsSection>
 
       {/* 时间感知（时钟锚点）：控制是否向模型注入本轮真实时间 */}
-      <SettingsSection title="时间感知（时钟锚点）">
+      <SettingsSection
+        title="时间感知（时钟锚点）"
+        description="开启后，每轮请求会向模型注入本机真实时间（含时区与星期），用于正确处理「今天 / 最近 N 天 / 上周」等相对时间；切换后下一轮生效。"
+      >
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleClockAnchorToggle}
-            className="relative rounded-full transition-colors shrink-0"
-            style={{
-              width: 36,
-              height: 20,
-              backgroundColor: clockAnchorEnabled ? '#22c55e' : 'var(--bg-field)',
-              border: '1px solid var(--border)',
-            }}
+          <SettingsToggle
+            checked={clockAnchorEnabled}
+            onChange={() => void handleClockAnchorToggle()}
             title={clockAnchorEnabled ? '点击关闭' : '点击开启'}
+          />
+          <span
+            className="text-xs"
+            style={{ color: clockAnchorEnabled ? 'var(--status-success)' : 'var(--text-tertiary)' }}
           >
-            <div
-              className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-              style={{ left: clockAnchorEnabled ? '18px' : '2px' }}
-            />
-          </button>
-          <span className="text-xs" style={{ color: clockAnchorEnabled ? '#22c55e' : 'var(--text-tertiary)' }}>
             {clockAnchorEnabled ? '已开启' : '已关闭'}
           </span>
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          开启时，每轮请求会向模型注入本机真实时间（含时区与星期），用于正确处理「今天 / 最近 N 天 / 上周」等相对时间。
-          关闭后模型只能依赖自身训练时间或宿主 Agent 自带的时间信息，可能误判日期。
-          切换后下一轮生效；时间信息只进入模型上下文，不影响历史消息与界面展示。
-        </p>
       </SettingsSection>
 
       {/* 模型流式空闲超时 */}
-      <SettingsSection title="模型流式空闲超时">
-        <div className="flex items-center gap-2">
+      <SettingsSection
+        title="模型流式空闲超时"
+        description="流式响应超过该秒数仍未收到数据时，判定为上游连接假死并终止本次调用（会话与圆桌共用）。0 表示关闭检测；合法范围 10-600，默认 90。"
+      >
+        <div className="pd-settings-control-row">
           <input
             type="number"
             min={0}
@@ -502,14 +479,11 @@ function GeneralSettings() {
             step={10}
             value={streamIdleSecs}
             onChange={(e) => handleStreamIdleSecsChange(parseInt(e.target.value))}
-            className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            className="pd-settings-input flex-1 font-mono"
+            style={{ color: 'var(--text-primary)' }}
           />
           <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>秒</span>
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          流式响应超过该秒数仍未收到任何数据时，判定为上游连接假死并终止本次调用（会话与圆桌共用）。0 表示关闭空闲检测（调试用）；合法范围 10-600，默认 90。
-        </p>
       </SettingsSection>
     </div>
   );
@@ -949,52 +923,6 @@ function SortableProviderCard({
 /** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
 type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission';
 
-/** 组织共享空间：我所属组织（与 Rust `org_list_mine` 返回对齐，只保留在用成员） */
-interface OrgCredOrg {
-  id: number;
-  name: string;
-  role: string;
-  planKey: string;
-  planExpiresAt: string | null;
-  seats: number;
-  memberCount: number;
-  status: string;
-}
-
-/** 组织的共享凭据列表项（与 Rust `org_list_credential_providers` 返回对齐，掩码不含明文） */
-interface OrgCredential {
-  id: number;
-  provider: string;
-  label: string;
-  hint: string;
-  creatorLabel: string;
-  updatedAt: string;
-}
-
-/** 应用组织凭据的结果（与 Rust `org_apply_credential` 返回对齐） */
-interface ApplyOrgCredentialResult {
-  providerName: string;
-  created: boolean;
-  /** 应用后本地 provider 的模型数量（供提示「密钥 + N 个模型」） */
-  modelsApplied: number;
-}
-
-/** 上报到组织的结果（与 Rust `org_report_credential` 返回对齐） */
-interface ReportOrgCredentialResult {
-  created: boolean;
-  providerName: string;
-  modelsCount: number;
-}
-
-/**
- * 当前用户是否为该组织的 owner/admin（可上报共享凭据）。
- * 后端上报接口仅 owner/admin 可用，前端据此门控入口；role 来自 `org_list_mine`。
- */
-function isOrgOwnerOrAdmin(org: OrgCredOrg): boolean {
-  const role = (org.role ?? '').trim().toLowerCase();
-  return role === 'owner' || role === 'admin';
-}
-
 function ApiConfig({
   deepLinkSub,
   hideTabs = false,
@@ -1014,27 +942,6 @@ function ApiConfig({
   const [editingNotes, setEditingNotes] = useState('');
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
   const abortRef = useRef<Map<string, AbortController>>(new Map());
-  const account = useAccountStore((s) => s.account);
-  // 我所属组织：预取一次，用于「上报到组织」入口的角色门控（仅 owner/admin 可见）
-  const [myOrgs, setMyOrgs] = useState<OrgCredOrg[] | null>(null);
-  // 至少在一个组织里是 owner/admin 才显示上报入口（未登录 → false）；失败按无权限处理（fail-closed）
-  const canReportToOrg = Boolean(account) && (myOrgs ?? []).some(isOrgOwnerOrAdmin);
-  // 「从组织获取凭据」弹窗状态
-  const [showOrgCred, setShowOrgCred] = useState(false);
-  const [orgCredOrgs, setOrgCredOrgs] = useState<OrgCredOrg[] | null>(null);
-  const [orgCredOrgId, setOrgCredOrgId] = useState('');
-  const [orgCredItems, setOrgCredItems] = useState<OrgCredential[] | null>(null);
-  const [orgCredItemsLoading, setOrgCredItemsLoading] = useState(false);
-  const [orgCredSelected, setOrgCredSelected] = useState<OrgCredential | null>(null);
-  const [orgCredSubmitting, setOrgCredSubmitting] = useState(false);
-  const [orgCredError, setOrgCredError] = useState('');
-  // 「上报到组织」弹窗状态
-  const [showOrgReport, setShowOrgReport] = useState(false);
-  const [orgReportOrgs, setOrgReportOrgs] = useState<OrgCredOrg[] | null>(null);
-  const [orgReportOrgId, setOrgReportOrgId] = useState('');
-  const [orgReportProviderId, setOrgReportProviderId] = useState('');
-  const [orgReportSubmitting, setOrgReportSubmitting] = useState(false);
-  const [orgReportError, setOrgReportError] = useState('');
   const [searchParams] = useSearchParams();
   const urlApiTab = searchParams.get('apiTab');
   // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
@@ -1057,17 +964,6 @@ function ApiConfig({
     // store 的 action 引用恒定（zustand 只创建一次），补进依赖后本 effect 仍等价于「挂载时跑一次」
   }, [fetchProviders]);
 
-  // 预取「我所属组织」用于上报入口的角色门控：登录后拉取，登录态变化时重拉。
-  // 未登录直接返回（不在此同步 setState）；拉取失败按无权限处理（fail-closed）。
-  useEffect(() => {
-    if (!account) return;
-    let cancelled = false;
-    invoke<OrgCredOrg[]>('org_list_mine')
-      .then((orgs) => { if (!cancelled) setMyOrgs(orgs); })
-      .catch(() => { if (!cancelled) setMyOrgs([]); });
-    return () => { cancelled = true; };
-  }, [account]);
-
   // DnD sensors — use pointer sensor for drag, keyboard for accessibility
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1086,159 +982,6 @@ function ApiConfig({
     const reordered = arrayMove(ids, oldIndex, newIndex);
     await reorderProviders(reordered);
   }, [providers, reorderProviders]);
-
-  // ── 从组织获取共享凭据 ──────────────────────────────────────────
-
-  /** 加载某组织的共享凭据（掩码列表，不触发明文审计） */
-  const loadOrgCredentials = async (orgId: number) => {
-    setOrgCredItemsLoading(true);
-    setOrgCredError('');
-    setOrgCredItems(null);
-    setOrgCredSelected(null);
-    try {
-      const items = await invoke<OrgCredential[]>('org_list_credential_providers', { orgId });
-      setOrgCredItems(items);
-    } catch (err) {
-      setOrgCredError(errorMessage(err));
-    } finally {
-      setOrgCredItemsLoading(false);
-    }
-  };
-
-  /** 打开「从组织获取凭据」：未登录先提示；否则拉组织列表并打开弹窗 */
-  const handleOpenOrgCred = async () => {
-    if (!account) {
-      showToast('请先登录平台账号', 'warning');
-      return;
-    }
-    setShowOrgCred(true);
-    setOrgCredOrgs(null);
-    setOrgCredOrgId('');
-    setOrgCredItems(null);
-    setOrgCredSelected(null);
-    setOrgCredError('');
-    try {
-      const orgs = await invoke<OrgCredOrg[]>('org_list_mine');
-      setOrgCredOrgs(orgs);
-      if (orgs.length === 0) {
-        showToast('你还没有加入任何组织', 'warning');
-        return;
-      }
-      setOrgCredOrgId(String(orgs[0].id));
-      await loadOrgCredentials(orgs[0].id);
-    } catch (err) {
-      setOrgCredError(errorMessage(err));
-    }
-  };
-
-  /**
-   * 应用所选凭据：后端把明文写入本地 provider，前端不接触明文。
-   * 本地同名冲突时后端返回「请确认覆盖」，这里二次确认后带 overwrite 重试。
-   */
-  const handleApplyOrgCredential = async (overwrite: boolean) => {
-    if (!orgCredSelected || !orgCredOrgId) return;
-    setOrgCredSubmitting(true);
-    setOrgCredError('');
-    try {
-      const res = await invoke<ApplyOrgCredentialResult>('org_apply_credential', {
-        input: {
-          orgId: Number(orgCredOrgId),
-          provider: orgCredSelected.provider,
-          label: orgCredSelected.label,
-          overwrite,
-        },
-      });
-      showToast(
-        `已应用组织凭据「${res.providerName}」（密钥 + ${res.modelsApplied} 个模型）`,
-        'success',
-      );
-      setShowOrgCred(false);
-      await fetchProviders();
-    } catch (err) {
-      const msg = errorMessage(err);
-      // 本地已存在同名 provider：二次确认后带 overwrite 重试
-      if (!overwrite && msg.includes('请确认覆盖')) {
-        setOrgCredSubmitting(false);
-        const ok = await confirmDialog({ title: '确认覆盖', message: msg, confirmText: '覆盖' });
-        if (ok) await handleApplyOrgCredential(true);
-        return;
-      }
-      setOrgCredError(msg);
-    } finally {
-      setOrgCredSubmitting(false);
-    }
-  };
-
-  // ── 上报本地凭据到组织 ──────────────────────────────────────────
-
-  /** 打开「上报到组织」：未登录先提示；否则拉组织列表并打开弹窗 */
-  const handleOpenOrgReport = async () => {
-    if (!account) {
-      showToast('请先登录平台账号', 'warning');
-      return;
-    }
-    setShowOrgReport(true);
-    setOrgReportOrgs(null);
-    setOrgReportOrgId('');
-    setOrgReportProviderId('');
-    setOrgReportError('');
-    try {
-      const orgs = await invoke<OrgCredOrg[]>('org_list_mine');
-      // 只保留当前用户为 owner/admin 的组织，与入口门控一致（后端仍会二次校验并兜底 403）
-      const reportable = orgs.filter(isOrgOwnerOrAdmin);
-      setOrgReportOrgs(reportable);
-      if (reportable.length === 0) {
-        showToast('仅组织所有者 / 管理员可上报共享凭据', 'warning');
-        setShowOrgReport(false);
-        return;
-      }
-      setOrgReportOrgId(String(reportable[0].id));
-    } catch (err) {
-      setOrgReportError(errorMessage(err));
-    }
-  };
-
-  /**
-   * 上报所选本地 Provider（密钥 + 模型清单 + 备注）到组织共享凭据。
-   * 明文只由后端处理，前端仅展示掩码；先弹确认再调用（含将覆盖内容的说明）。
-   */
-  const handleReportOrgCredential = async () => {
-    const p = providers.find((x) => x.id === orgReportProviderId);
-    if (!p || !orgReportOrgId) return;
-    const notesForProvider = modelNotes[p.id] ?? {};
-    const noteCount = Object.values(notesForProvider).filter((n) => n.trim()).length;
-    const ok = await confirmDialog({
-      title: '上报到组织',
-      message:
-        `将把以下内容上报到组织共享凭据：\n` +
-        `Provider：${p.name}\n` +
-        `密钥：${p.apiKeyMasked || '（未配置）'}\n` +
-        `模型清单：${p.models.length} 个（其中 ${noteCount} 条含备注）\n\n` +
-        `组织成员应用后将获得该密钥、模型清单与备注。\n` +
-        `密钥在平台侧加密存储，其他成员无法看到明文；成员在客户端应用后仅在本机使用。`,
-      confirmText: '上报',
-    });
-    if (!ok) return;
-    setOrgReportSubmitting(true);
-    setOrgReportError('');
-    try {
-      const res = await invoke<ReportOrgCredentialResult>('org_report_credential', {
-        input: { orgId: Number(orgReportOrgId), providerName: p.name },
-      });
-      showToast(
-        res.created
-          ? `已上报到组织共享凭据（含 ${res.modelsCount} 个模型）`
-          : `已更新组织共享凭据（含 ${res.modelsCount} 个模型）`,
-        'success',
-      );
-      setShowOrgReport(false);
-    } catch (err) {
-      // 权限不足（非 owner/admin）等错误由后端返回中文文案，直接展示
-      setOrgReportError(errorMessage(err));
-    } finally {
-      setOrgReportSubmitting(false);
-    }
-  };
 
   // Add provider
   const handleAddProvider = async () => {
@@ -1439,7 +1182,7 @@ function ApiConfig({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="settings-page-stack">
       {/* 子 Tab：环境检测 / 提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则
           —— 这些不是"API 方式专属"：环境检测是 Agent 运行前提，其余为全局策略，
           故聚在同一个「运行与策略」tab 下（原来散在 Agent / API 两个 tab 里）。
@@ -1468,59 +1211,21 @@ function ApiConfig({
       )}
 
       {apiTab === 'providers' && (
-        <>
-      {/* Header：说明占一行（flex-1 min-w-0）+ 按钮组不被挤压（shrink-0）；
-          窄宽度下按钮组整体换行到下一行，每个按钮内部不换行（whitespace-nowrap） */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <div className="flex-1 min-w-0">
-          <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-            提供商配置
-          </h3>
-          <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-            拖拽左侧手柄调整排序 · 配置完成后可在新建会话时选择 API 直连模式
-          </p>
-        </div>
-        <div className="flex items-center justify-end gap-2 flex-wrap shrink-0">
-          <button
-            onClick={() => void handleOpenOrgCred()}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
-            style={{
-              border: '1px solid var(--border)',
-              background: 'var(--bg-field)',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            <Building2 size={12} />
-            从组织获取凭据
-          </button>
-          {/* 「上报到组织」入口按组织角色门控：仅 owner/admin 可见（后端仍会对非管理员返回 403 兜底） */}
-          {canReportToOrg && (
-            <button
-              onClick={() => void handleOpenOrgReport()}
-              className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
-              style={{
-                border: '1px solid var(--border)',
-                background: 'var(--bg-field)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              <Upload size={12} />
-              上报到组织
-            </button>
-          )}
-          <button
+      <SettingsSection
+        title="提供商配置"
+        description="拖拽左侧手柄调整排序。配置完成后，可在新建会话时选择 API 直连模式。"
+        actions={
+          <>
+          <SettingsButton
+            variant="primary"
             onClick={handleAddProvider}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
-            style={{
-              backgroundColor: 'var(--accent)',
-              color: '#fff',
-            }}
+            icon={<Plus size={12} />}
           >
-            <Plus size={12} />
             添加提供商
-          </button>
-        </div>
-      </div>
+          </SettingsButton>
+          </>
+        }
+      >
 
       {/* Sortable provider list */}
       <DndContext
@@ -1534,7 +1239,7 @@ function ApiConfig({
         >
           <div className="space-y-2">
             {providers.length === 0 && (
-              <div className="text-center py-8">
+              <div className="pd-settings-empty">
                 <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                   暂无 API 提供商，点击上方按钮添加
                 </p>
@@ -1564,199 +1269,11 @@ function ApiConfig({
         </SortableContext>
       </DndContext>
 
-      <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+      <p className="pd-settings-note">
         API Key 保存在本地 SQLite 数据库，不会上传。排序结果自动保存。
       </p>
 
-      {/* 「从组织获取凭据」弹窗：选组织 → 加载共享凭据掩码列表 → 选中应用（明文由后端写入，前端不接触） */}
-      {showOrgCred && (
-        <div
-          className="fixed inset-0 z-[120] flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => { if (!orgCredSubmitting) setShowOrgCred(false); }}
-        >
-          <div
-            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
-            style={{ maxWidth: 480, maxHeight: '74vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 text-sm font-medium shrink-0" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>
-              从组织获取凭据
-            </div>
-            <div className="px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择组织</div>
-              {orgCredOrgs && orgCredOrgs.length > 0 ? (
-                <Select
-                  value={orgCredOrgId}
-                  onChange={(v) => { setOrgCredOrgId(v); void loadOrgCredentials(Number(v)); }}
-                  placeholder="请选择组织"
-                  options={orgCredOrgs.map((o) => ({ value: String(o.id), label: o.name }))}
-                  className="w-full"
-                  disabled={orgCredSubmitting}
-                />
-              ) : (
-                <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
-                  {orgCredOrgs === null ? '正在获取组织列表…' : '你还没有加入任何组织'}
-                </div>
-              )}
-              <p className="text-[10px] mt-2 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                密钥在平台侧加密存储，其他成员无法看到明文；应用到客户端后仅在本机使用。
-              </p>
-            </div>
-            <div className="flex-1 overflow-y-auto px-4 py-2">
-              {orgCredItemsLoading ? (
-                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>正在加载组织凭据…</div>
-              ) : orgCredItems && orgCredItems.length === 0 ? (
-                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>该组织暂无共享凭据</div>
-              ) : (
-                (orgCredItems ?? []).map((item) => (
-                  <label
-                    key={item.id}
-                    className="flex items-start gap-2 py-2 text-xs cursor-pointer"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    <input
-                      type="radio"
-                      name="org-credential"
-                      className="mt-0.5"
-                      checked={orgCredSelected?.id === item.id}
-                      onChange={() => setOrgCredSelected(item)}
-                      disabled={orgCredSubmitting}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate" title={`${item.provider} · ${item.label}`}>
-                        {item.provider} · {item.label}
-                      </span>
-                      <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-                        {item.hint} · 上传者 {item.creatorLabel || '未知'}
-                      </span>
-                    </span>
-                  </label>
-                ))
-              )}
-              {orgCredError && (
-                <div className="text-xs px-2 py-1.5 rounded my-2" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
-                  {orgCredError}
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
-              <button
-                onClick={() => setShowOrgCred(false)}
-                disabled={orgCredSubmitting}
-                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: orgCredSubmitting ? 'default' : 'pointer' }}
-              >
-                取消
-              </button>
-              <button
-                onClick={() => void handleApplyOrgCredential(false)}
-                disabled={orgCredSubmitting || !orgCredSelected}
-                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
-                style={{
-                  backgroundColor: 'var(--accent)',
-                  color: '#fff',
-                  opacity: orgCredSubmitting || !orgCredSelected ? 0.5 : 1,
-                  cursor: orgCredSubmitting || !orgCredSelected ? 'default' : 'pointer',
-                }}
-              >
-                {orgCredSubmitting ? '应用中…' : '应用'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 「上报到组织」弹窗：选组织 + 选本地 Provider → 二次确认后上报（含模型清单与备注；明文只由后端处理） */}
-      {showOrgReport && (
-        <div
-          className="fixed inset-0 z-[120] flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => { if (!orgReportSubmitting) setShowOrgReport(false); }}
-        >
-          <div
-            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
-            style={{ maxWidth: 480, maxHeight: '74vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 text-sm font-medium shrink-0" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>
-              上报到组织
-            </div>
-            <div className="px-4 py-3 shrink-0 space-y-3" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div>
-                <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择组织</div>
-                {orgReportOrgs && orgReportOrgs.length > 0 ? (
-                  <Select
-                    value={orgReportOrgId}
-                    onChange={setOrgReportOrgId}
-                    placeholder="请选择组织"
-                    options={orgReportOrgs.map((o) => ({ value: String(o.id), label: o.name }))}
-                    className="w-full"
-                    disabled={orgReportSubmitting}
-                  />
-                ) : (
-                  <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
-                    {orgReportOrgs === null ? '正在获取组织列表…' : '你所在的组织中暂无可上报的组织（需为所有者 / 管理员）'}
-                  </div>
-                )}
-              </div>
-              <div>
-                <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择要上报的本地 Provider</div>
-                {providers.length > 0 ? (
-                  <Select
-                    value={orgReportProviderId}
-                    onChange={setOrgReportProviderId}
-                    placeholder="请选择 Provider"
-                    options={providers.map((p) => ({
-                      value: p.id,
-                      label: `${p.name}（${p.models.length} 个模型${p.apiKeySet ? '' : ' · 未配置 Key'}）`,
-                    }))}
-                    className="w-full"
-                    disabled={orgReportSubmitting}
-                  />
-                ) : (
-                  <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
-                    暂无可上报的 Provider
-                  </div>
-                )}
-              </div>
-              <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                上报内容含密钥、模型清单与备注；仅组织 owner/admin 可上报。
-                密钥在平台侧加密存储，其他成员无法看到明文；成员在客户端应用后仅在本机使用。
-              </p>
-              {orgReportError && (
-                <div className="text-xs px-2 py-1.5 rounded" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
-                  {orgReportError}
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
-              <button
-                onClick={() => setShowOrgReport(false)}
-                disabled={orgReportSubmitting}
-                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: orgReportSubmitting ? 'default' : 'pointer' }}
-              >
-                取消
-              </button>
-              <button
-                onClick={() => void handleReportOrgCredential()}
-                disabled={orgReportSubmitting || !orgReportProviderId || !orgReportOrgId}
-                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
-                style={{
-                  backgroundColor: 'var(--accent)',
-                  color: '#fff',
-                  opacity: orgReportSubmitting || !orgReportProviderId || !orgReportOrgId ? 0.5 : 1,
-                  cursor: orgReportSubmitting || !orgReportProviderId || !orgReportOrgId ? 'default' : 'pointer',
-                }}
-              >
-                {orgReportSubmitting ? '上报中…' : '上报'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-        </>
+      </SettingsSection>
       )}
 
       {apiTab === 'env' && <EnvManager />}
@@ -1778,6 +1295,8 @@ function ApiConfig({
  * `url` 为空 = 地址待补，渲染成不可点的行并标「待补充」；补齐字符串即生效，不需要改逻辑。
  */
 const ABOUT_LINKS: Array<{ label: string; url: string }> = [
+  // 官方网站：地址待提供
+  { label: '官方网站', url: '' },
   // 用户协议、隐私条款、开源软件声明（第三方依赖许可清单）、帮助文档：地址待提供
   { label: '用户协议', url: '' },
   { label: '隐私条款', url: '' },
@@ -1790,7 +1309,7 @@ const ABOUT_LINKS: Array<{ label: string; url: string }> = [
 /**
  * 关于页。
  *
- * 版式**对齐「通用设置」页**：`space-y-6` + 一串 `SettingsSection`（标题 + 占满整行的内容）。
+ * 版式**对齐「通用设置」页**：统一 stack 间距 + 一串 `SettingsSection`。
  * 原先这里是整体居中（logo 80px + 居中文字 + 整行卡片混排），每行可见宽度都不一样，
  * 与通用设置页左侧对齐的统一版式不一致。
  */
@@ -1815,18 +1334,18 @@ function AboutSection() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="settings-page-stack">
       <SettingsSection title="关于 PilotDesk">
         <div className="flex items-start gap-3">
           <img
             src="/logo-lg.png"
             alt="PilotDesk"
-            className="w-14 h-14 rounded-xl shrink-0"
+            className="w-14 h-14 rounded-lg shrink-0"
             draggable={false}
           />
           <div className="min-w-0">
             <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>PilotDesk</div>
-            <div className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>v0.1.0</div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>v{APP_VERSION}</div>
             <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
               Agent 统一桌面客户端。集成多 Agent 管理、流式对话、灵感库、API 直连等功能。
             </p>
@@ -1852,7 +1371,7 @@ function AboutSection() {
       </SettingsSection>
 
       <SettingsSection title="技术栈">
-        <div className="grid grid-cols-2 gap-2 w-full" style={{ fontSize: '11px' }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full" style={{ fontSize: '11px' }}>
           {[
             ['前端', 'React 19 + TypeScript + TailwindCSS v4'],
             ['桌面', 'Tauri 2.0'],
@@ -1861,7 +1380,7 @@ function AboutSection() {
           ].map(([label, value]) => (
             <div
               key={label}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg"
+              className="flex items-center gap-2 px-3 py-2 rounded-md"
               style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
             >
               <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
@@ -1876,7 +1395,7 @@ function AboutSection() {
           {/* 意见反馈：走应用内弹窗（与通知中心的「反馈」共用同一实现），不是外链 */}
           <button
             onClick={() => openFeedback()}
-            className="pd-btn flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-colors"
+            className="pd-btn flex items-center gap-2 px-3 py-2 rounded-md text-xs text-left transition-colors"
             style={{
               backgroundColor: 'var(--bg-field)',
               border: '1px solid var(--border)',
@@ -1896,7 +1415,7 @@ function AboutSection() {
               key={label}
               onClick={() => void openExternal(url)}
               disabled={!url}
-              className="pd-btn flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-colors disabled:opacity-50"
+              className="pd-btn flex items-center gap-2 px-3 py-2 rounded-md text-xs text-left transition-colors disabled:opacity-50"
               style={{
                 backgroundColor: 'var(--bg-field)',
                 border: '1px solid var(--border)',
@@ -1948,6 +1467,7 @@ function resolveDeepLink(
     case 'mode': return { tab: 'api', sub: 'mode' };
     case 'permission': return { tab: 'api', sub: 'permission' };
     case 'api': return { tab: 'api', sub: urlApiSub };
+    case 'agents': return { tab: 'agents', sub: urlApiSub };
     default:
       return (CANONICAL_TABS as string[]).includes(urlTab)
         ? { tab: urlTab as SettingsTab, sub: null }
@@ -1955,7 +1475,7 @@ function resolveDeepLink(
   }
 }
 
-export function SettingsPage({ onBack }: SettingsPageProps) {
+export function SettingsPage() {
   const { t } = useI18n();
   const [searchParams] = useSearchParams();
   const urlTab = searchParams.get('tab');
@@ -1967,7 +1487,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // 合并后收纳进子页签的低频项
   const [generalTab, setGeneralTab] = useState<'main' | 'about'>(link?.sub === 'about' ? 'about' : 'main');
   // 「集成配置」的子页签 = 接入方式本身（环境检测已提升为独立顶层 tab）
-  const [agentTab, setAgentTab] = useState<'config' | 'providers' | 'mcp'>('config');
+  const [agentTab, setAgentTab] = useState<'config' | 'providers' | 'mcp'>(
+    link?.tab === 'agents' && (link.sub === 'providers' || link.sub === 'mcp')
+      ? link.sub
+      : 'config',
+  );
 
   // URL 深链变化时对齐状态：用「渲染期修正」（React adjust-during-render）而不是 effect ——
   // 后者是「effect 体内同步 setState」，会多一轮级联渲染（`react-hooks/set-state-in-effect`），
@@ -1990,37 +1514,16 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // 记忆管理页内部子 tab（项目记忆 / 全局 KV 记忆）
   const [memTab, setMemTab] = useState<'project' | 'user' | 'kv'>('project');
 
-  const { viewMode, setMode } = useTerminal();
-  const navigate = useNavigate();
-  // 组合开关点击：切换模式并回到主布局（设置页不再提供返回按钮）
-  const handleModeChange = useCallback((mode: ViewMode) => {
-    setMode(mode);
-    navigate('/');
-  }, [setMode, navigate]);
-
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      {/* TitleBar：组合开关注入「设置」段（thumb 定位到设置），点击其它模式段跳回主布局 */}
-      <TitleBar
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        onToggleRightPanel={undefined}
-        rightPanelOpen={false}
-        showBackButton={false}
-        settingsOpen
-        onOpenSettings={() => navigate('/')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')}
-      />
-      <div className="flex-1 min-h-0 px-2 flex gap-2">
+    <WorkbenchAssetPage contextLabel="设置" activeAsset="settings" frameless>
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="settings-page-body flex-1 min-h-0 flex gap-2">
       {/* 主体：左侧分组侧边栏 + 右侧内容区。
           gap-2 与左栏圆角：与壳层/知识库一致 —— 分栏靠"底色差 + 缝 + 圆角"，不靠竖线，
           也避免左栏与内容区里同色（--bg-side）的块左右紧贴连成一片。 */}
         {/* 侧边栏导航 */}
         <aside
-          className="shrink-0 w-44 overflow-y-auto px-2 py-3 space-y-4 rounded-lg"
+          className="settings-nav shrink-0 w-44 overflow-y-auto px-2 py-3 space-y-4 rounded-lg"
           style={{ backgroundColor: 'var(--bg-side)' }}
         >
           {SETTINGS_GROUPS.map((group) => (
@@ -2046,11 +1549,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         {/* 内容区：滚动条槽位常驻（pd-scroll-stable）——
             否则内容随筛选变短时滚动条消失，居中内容会因多出 8px 宽度整体右移（搜索框输入时最明显） */}
-        <div className="min-w-0 flex-1 rounded-lg overflow-hidden overflow-y-auto pd-scroll-stable" style={{ backgroundColor: 'var(--bg-content)' }}>
-          <div className="p-4 max-w-2xl mx-auto w-full">
+        <div className="settings-content min-w-0 flex-1 rounded-lg overflow-hidden overflow-y-auto pd-scroll-stable" style={{ backgroundColor: 'var(--bg-content)' }}>
+          <div className="settings-content-inner">
             {/* 通用设置：主题/工作区/语言/并发等 + 子页签「关于」（原独立 tab） */}
             {activeTab === 'general' && (
-              <div className="space-y-4">
+              <div className="settings-page-stack">
                 <SubTabs<'main' | 'about'>
                   value={generalTab}
                   onChange={setGeneralTab}
@@ -2064,7 +1567,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             )}
             {/* Agent 集成配置：Agent 配置 + 子页签「环境检测」（原独立 tab，是 Agent 运行前提） */}
             {activeTab === 'agents' && (
-              <div className="space-y-4">
+              <div className="settings-page-stack">
                 {/* 「集成配置」只负责接入方式本身：CLI(subprocess/acp) · 在线 API(http) · MCP。
                     环境检测、用量统计、语音识别、对话模式、权限规则已提升为独立顶层 tab。
                     在线版 Agent 的「内嵌 Web（承载）」不再单列——它就是门户标签（同一套 iframe 外壳），
@@ -2102,37 +1605,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             {/* 技能管理：全部技能浏览（原会话右栏「技能」tab 迁来；会话内取用技能走输入框 Ctrl+K）。
                 技能来源是各 Agent 自己的技能目录，目录配置在「Agent集成配置」里，故给一条指引 */}
             {activeTab === 'skills' && (
-              <div className="space-y-3">
-                <div
-                  className="flex items-center gap-2 text-[11px] rounded-lg px-3 py-2 flex-wrap"
-                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
-                >
-                  <span className="flex-1 min-w-[200px]">
-                    技能来自各 Agent 自身的技能目录；目录路径、入口文件与展示模式在 Agent 集成配置里设置。
-                  </span>
-                  <button
-                    onClick={() => setActiveTab('agents')}
-                    className="pd-btn px-2 py-1 rounded text-[11px] shrink-0"
-                    style={{ color: 'var(--accent)', border: '1px solid var(--border)' }}
-                  >
-                    去配置技能目录
-                  </button>
-                </div>
-                <SkillBrowser />
-              </div>
+              <SkillBrowser onConfigureSkills={() => setActiveTab('agents')} />
             )}
             {/* 插件管理：安装/卸载/启停/商店（全局低频运维，从会话右栏迁来）。
                 不设内部滚动与定高：内容自然展开，滚动交给设置页整页滚动条 */}
             {activeTab === 'plugins' && <PluginManager />}
-            {/* 账号：平台会员登录 + 等级 / 已解锁能力 + 云同步入口 */}
+            {/* 账号：平台会员登录 + 等级 / 已解锁能力 + 个人云同步入口 */}
             {activeTab === 'account' && (
               <AccountSettings onOpenCloudSync={() => setActiveTab('cloudsync')} />
             )}
-            {/* 我的云同步：开关 / 同步范围 / 间隔 / 冲突与失败明细（状态懒加载，仅本 tab 拉取） */}
+            {/* 个人云同步：开关 / 同步范围 / 间隔 / 冲突与失败明细（状态懒加载，仅本 tab 拉取） */}
             {activeTab === 'cloudsync' && <CloudSyncSettings />}
             {/* 知识库：模型（整理/AI 生成）+ 文件根目录（换目录时可迁移原文）+ 云文档账号（投喂用） */}
             {activeTab === 'knowledge' && (
-              <div className="space-y-6">
+              <div className="settings-page-stack">
                 <KbModelSettings />
                 <KbRootSettings />
                 <KbCloudSourceSettings />
@@ -2143,7 +1629,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             )}
             {activeTab === 'customtabs' && <CustomTabsSettings />}
             {activeTab === 'memory' && (
-              <div className="space-y-4">
+              <div className="settings-page-stack">
                 {/* 记忆管理页内子 tab（样式与工具管理页场景切换一致） */}
                 <div className="flex items-center gap-1">
                   {(['project', 'user', 'kv'] as const).map((t) => (
@@ -2169,9 +1655,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
         </div>
       </div>
-
-      {/* StatusBar */}
-      <StatusBar onOpenSettings={onBack} />
     </div>
+    </WorkbenchAssetPage>
   );
 }

@@ -172,8 +172,8 @@ export function KvMemorySettings() {
       await invoke('set_app_setting', { key: 'memory_intent_enabled', value: next ? '1' : '0' });
       showToast(
         next
-          ? '已启用意图检索注入（命中记忆与知识库时自动带入上下文）'
-          : '已关闭意图检索注入（记忆与知识库都不再自动注入，模型仍可调用 search_memory 按需检索）',
+          ? '已启用自动检索记忆与知识库（命中时自动带入上下文）'
+          : '已关闭自动检索记忆与知识库（两者都不再自动注入，模型仍可主动检索）',
         'success'
       );
     } catch (e) {
@@ -200,8 +200,8 @@ export function KvMemorySettings() {
       setIntentLegacyModel('');
       showToast(
         value
-          ? `意图路由模型已设为 ${providers.find((p) => p.id === providerId)?.name ?? providerId} · ${model}`
-          : '已清空覆盖：意图路由跟随当前会话的提供商与模型',
+          ? `检索路由模型已设为 ${providers.find((p) => p.id === providerId)?.name ?? providerId} · ${model}`
+          : '已清空覆盖：检索路由跟随当前会话的提供商与模型',
         'success'
       );
     } catch (e) {
@@ -219,7 +219,7 @@ export function KvMemorySettings() {
     try {
       await invoke('set_app_setting', { key: 'memory_intent_timeout_secs', value });
       setIntentTimeout(value);
-      showToast(value ? `意图路由超时已设为 ${value} 秒` : '已恢复为默认超时（60 秒）', 'success');
+      showToast(value ? `检索路由超时已设为 ${value} 秒` : '已恢复为默认超时（60 秒）', 'success');
     } catch (e) {
       showToast(`保存失败: ${errorMessage(e)}`, 'error');
     }
@@ -349,12 +349,11 @@ export function KvMemorySettings() {
   const policy = stats?.policy;
 
   return (
-    <SettingsSection title="全局 KV 记忆（MEMORY.db）">
-      <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
-        全局跨项目记忆，与 <code>search_memory</code> / <code>list_memory</code> / <code>save_memory</code> / <code>update_memory</code> / <code>delete_memory</code> 工具读写同一库；其中删除是高风险操作，每次调用都要你在会话里审批，且重要（pin）标记只免自动清理、<strong>不阻止删除</strong>。发送消息时，系统会先用一次轻量意图路由判断当前话题，命中相关记忆才注入模型上下文（重要/pin 记忆优先）；路由不可用或处于熔断冷却期时<strong>本轮不注入</strong>（模型仍可用 <code>search_memory</code> 按需检索）。<strong>知识库条目不在本列表</strong>——它们由「知识库」页管理（删除语义是"从库中移除"），但仍照旧参与记忆检索与注入。
-      </p>
-
-      {/* 意图检索注入设置：开关 + 可选路由模型覆盖 */}
+    <SettingsSection
+      title="全局 KV 记忆（MEMORY.db）"
+      description="跨项目共享的结构化记忆，与 Agent 的记忆工具共用同一数据库。自动检索命中相关记忆或知识库内容时才会注入上下文；pin 仅阻止自动清理，不阻止手动删除。"
+    >
+      {/* 自动检索设置：开关 + 可选路由模型覆盖 */}
       <div className="rounded-lg px-3 py-2 mb-2 text-[11px] space-y-2" style={{ backgroundColor: 'var(--bg-raised)' }}>
         <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none" style={{ color: 'var(--text-primary)' }}>
           <input
@@ -364,10 +363,10 @@ export function KvMemorySettings() {
           />
           {/* 这条开关现在同时管两条链路（会话记忆 + 知识库），标签必须说出来 ——
               否则用户为了"别注入记忆"关掉它，会连带把知识库检索也关掉，而且看不出来 */}
-          启用意图检索注入（按当前消息意图检索记忆与知识库）
+          自动检索记忆与知识库
         </label>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="shrink-0" style={{ color: 'var(--text-secondary)' }}>意图路由模型</span>
+          <span className="shrink-0" style={{ color: 'var(--text-secondary)' }}>检索路由模型</span>
           <Select
             value={intentProviderId}
             onChange={(v) => { setIntentProviderId(v); setIntentModel(''); }}
@@ -421,7 +420,7 @@ export function KvMemorySettings() {
         </div>
         {intentProviderIsAnthropic && (
           <div style={{ color: '#F59E0B' }}>
-            该提供商是 Anthropic 原生格式：没有 /chat/completions 端点，意图路由调用会被判为不可用（本轮不注入）。请改选 OpenAI 兼容的提供商。
+            该提供商是 Anthropic 原生格式：没有 /chat/completions 端点，检索路由调用会被判为不可用（本轮不注入）。请改选 OpenAI 兼容的提供商。
           </div>
         )}
         {intentLegacyModel && (
@@ -429,8 +428,8 @@ export function KvMemorySettings() {
             当前是旧格式配置（只记了模型名「{intentLegacyModel}」，提供商跟随会话）。重新选择提供商与模型并保存后，会按新格式记录。
           </div>
         )}
-        <CollapsibleNote title="意图检索与路由说明">
-          关闭后不再发起意图路由调用，KV 记忆不再自动注入；<strong>MEMORY.md / USER.md 仍随 system prompt 注入</strong>，模型仍可调用 <code>search_memory</code> 按需检索。路由模型默认跟随当前会话，也可以单独指定提供商 + 模型（建议选更小/更快的模型以降低开销，例如主对话用大模型、路由用便宜的小模型）；路由超时是<strong>上限而非等待时长</strong> —— 模型返回即继续（实际可能只需 1~2 秒），只有上游卡住才会等满，因此填大不会让每条消息都变慢。
+        <CollapsibleNote title="自动检索与路由说明">
+          关闭后不再发起检索路由调用，KV 记忆和知识库内容都不再自动注入；<strong>PilotDesk API 会话仍会注入 AGENTS.md / USER.md</strong>，模型仍可调用 <code>search_memory</code> 与 <code>search_knowledge</code> 主动检索。检索路由模型默认跟随当前会话，也可以单独指定提供商 + 模型（建议选更小/更快的模型以降低开销，例如主对话用大模型、路由用便宜的小模型）；路由超时是<strong>上限而非等待时长</strong> —— 模型返回即继续（实际可能只需 1~2 秒），只有上游卡住才会等满，因此填大不会让每条消息都变慢。
         </CollapsibleNote>
       </div>
 
@@ -450,7 +449,7 @@ export function KvMemorySettings() {
           )}
           {/* 规则说明放块末：它是这个块里唯一的"长解释"，压在最下面不打断上面的数字阅读 */}
           <CollapsibleNote title="自动维护规则">
-            总条数超 {policy.maxEntries} 条时按“最久未活跃”驱逐；超过 {policy.idleDays} 天既未被检索也未被编辑、且访问次数 ≤ {policy.minAccess} 次的未 pin 条目会被清理（pin 条目永不自动删除）。<strong>知识库条目不参与以上两项自动维护</strong>——它们既不占 {policy.maxEntries} 条配额，也不会被判为冷记忆；生命周期只由所属知识库决定（删库或从库中移除，且仅当不再被任何库关联时才连同条目删除）。
+            App 闲时每天最多自动维护一次；总条数超 {policy.maxEntries} 条时按“最久未活跃”驱逐，超过 {policy.idleDays} 天既未被检索也未被编辑、且访问次数 ≤ {policy.minAccess} 次的未 pin 条目也会被清理（pin 条目永不自动删除）。<strong>知识库条目不参与以上两项自动维护</strong>——它们既不占 {policy.maxEntries} 条配额，也不会被判为冷记忆；生命周期只由所属知识库决定（删库或从库中移除，且仅当不再被任何库关联时才连同条目删除）。
           </CollapsibleNote>
         </div>
       )}

@@ -117,9 +117,7 @@ impl AgentDescriptor {
             .and_then(|spec| {
                 let bins = pkg_state_text
                     .as_deref()
-                    .and_then(|s| {
-                        serde_json::from_str::<crate::agent::lifecycle::PkgState>(s).ok()
-                    })
+                    .and_then(|s| serde_json::from_str::<crate::agent::lifecycle::PkgState>(s).ok())
                     .map(|s| s.bins)
                     .unwrap_or_default();
                 spec.resolved_runtime(&bins).map(|rt| rt.command)
@@ -219,7 +217,8 @@ mod tests {
     #[test]
     fn from_agents_row_reads_transport_and_conn() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL).unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
         conn.execute(
             "INSERT INTO agents (agent_type, display_name, created_at, updated_at, transport, conn)
              VALUES ('hermes-acp','Hermes ACP',0,0,'acp','{\"command\":\"hermes\",\"args\":[\"acp\"]}')",

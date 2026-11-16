@@ -46,10 +46,13 @@ impl FileHistoryService {
         if old_content == new_content {
             return;
         }
+        let file_path = crate::utils::paths::normalize_absolute_path(file_path, "")
+            .to_string_lossy()
+            .to_string();
         crate::commands::file_history::record_file_change(
             &self.pool,
             &self.scope,
-            file_path,
+            &file_path,
             old_content,
             existed,
         );
@@ -68,6 +71,9 @@ impl FileHistoryService {
         if diff.is_empty() {
             return;
         }
+        let file_path = crate::utils::paths::normalize_absolute_path(file_path, "")
+            .to_string_lossy()
+            .to_string();
         let _ = self.app.emit(
             "agent-file-diff",
             serde_json::json!({

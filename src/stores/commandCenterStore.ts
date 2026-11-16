@@ -1,8 +1,8 @@
 /**
- * commandCenterStore — 全局指挥中心
+ * commandCenterStore — 全局运行与待办
  *
- * 两个实例共用本 store：会话默认页内嵌的常驻内容（variant="inline"），
- * 以及工作流页「待处理」按钮打开的模态面板（variant="modal"）。
+ * 两个实例共用本 store：会话默认页的三项精简摘要（variant="inline"），
+ * 以及顶栏或工作流页「待处理」打开的完整浮层（variant="modal"）。
  *
  * 存在的理由：`什么在跑 / 什么在等我 / 今天花了多少` 分散在各页面（工作流页的实例列表、
  * 会话内的审批卡、群聊房间状态、设置页用量），切了模式就看不见。这里把它聚成一处。
@@ -35,8 +35,8 @@ interface CommandCenterState {
   /**
    * 刷新全部数据源但**不改 `open` 状态**。
    *
-   * 会话默认页内嵌的那个指挥中心实例是常驻的，不能调 `openCenter()`（会把模态盖上来），
-   * 「刷新」按钮与内嵌实例的挂载刷新都走这里。
+   * 会话默认页的内嵌摘要实例常驻，不能调 `openCenter()`（会把浮层盖上来），
+   * 其挂载刷新走这里。
    */
   refreshCenter: () => Promise<void>;
   /**

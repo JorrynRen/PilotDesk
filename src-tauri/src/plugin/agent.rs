@@ -111,7 +111,8 @@ pub async fn plugin_agent_send_message(
         config,
         content,
         "stream".to_string(),
-        Some(workspace_cwd),
+        Some(workspace_cwd.clone()),
+        vec![workspace_cwd],
         None,
         agent_session_id,
     )

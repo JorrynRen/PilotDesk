@@ -21,7 +21,16 @@ pub fn save_servers(
     conn: &rusqlite::Connection,
     servers: &[McpServerConfig],
 ) -> Result<(), AppError> {
-    let json = serde_json::to_string(servers).unwrap_or_else(|_| "[]".to_string());
+    let mut normalized = Vec::with_capacity(servers.len());
+    for server in servers {
+        server.validate().map_err(AppError::InvalidInput)?;
+        let mut server = server.clone();
+        if !server.is_http() {
+            server.cwd = server.normalized_cwd().map_err(AppError::InvalidInput)?;
+        }
+        normalized.push(server);
+    }
+    let json = serde_json::to_string(&normalized).unwrap_or_else(|_| "[]".to_string());
     crate::commands::app_settings::set_setting(conn, MCP_SERVERS_KEY, &json)
 }
 

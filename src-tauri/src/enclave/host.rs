@@ -17,7 +17,7 @@
 //! ← {"type":"res","id":"…","ok":false,"error":"…"}
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
@@ -180,10 +180,7 @@ impl HostRuntime {
     }
 
     fn ui_sink(&self) -> Option<mpsc::UnboundedSender<Value>> {
-        self.ui_tx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.ui_tx.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 登记一条常驻成员连接，返回订阅 id（断开时用同一个 id 注销）。
@@ -196,13 +193,11 @@ impl HostRuntime {
         let id = self.next_sub_id.fetch_add(1, Ordering::Relaxed) + 1;
         log::debug!("[enclave] 成员 {} 订阅组织 {} 的变更", user_id, org_id);
         let mut g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
-        g.entry(org_id.to_string())
-            .or_default()
-            .push(Subscriber {
-                id,
-                user_id: user_id.to_string(),
-                tx,
-            });
+        g.entry(org_id.to_string()).or_default().push(Subscriber {
+            id,
+            user_id: user_id.to_string(),
+            tx,
+        });
         id
     }
 
@@ -232,12 +227,38 @@ impl HostRuntime {
     /// 发送失败（连接已断）的订阅顺手剔除。
     fn broadcast(&self, org_id: &str, frame: &str, except: Option<u64>) {
         let mut g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(list) = g.get_mut(org_id) else { return };
+        let Some(list) = g.get_mut(org_id) else {
+            return;
+        };
         list.retain(|s| {
             if Some(s.id) == except {
                 return true;
             }
             s.tx.send(frame.to_string()).is_ok()
+        });
+        if list.is_empty() {
+            g.remove(org_id);
+        }
+    }
+
+    /// 只推给指定成员的所有在线连接（用于一对一传讯，避免把通信元数据广播给全组织）。
+    fn broadcast_to_users(
+        &self,
+        org_id: &str,
+        user_ids: &[String],
+        frame: &str,
+        except: Option<u64>,
+    ) {
+        let users = user_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+        let mut g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(list) = g.get_mut(org_id) else {
+            return;
+        };
+        list.retain(|subscriber| {
+            if Some(subscriber.id) == except || !users.contains(subscriber.user_id.as_str()) {
+                return true;
+            }
+            subscriber.tx.send(frame.to_string()).is_ok()
         });
         if list.is_empty() {
             g.remove(org_id);
@@ -264,7 +285,26 @@ pub fn change_topic(command: &str) -> Option<&'static str> {
     // 否则「成员收到事件 → 重拉列表 → 又广播」会互相触发。
     if matches!(
         command,
-        "kb.file_list" | "kb.entry_get" | "kb.orphan_files" | "kb.file_relations"
+        "kb.file_list"
+            | "kb.entry_get"
+            | "kb.orphan_files"
+            | "kb.file_relations"
+            | "api_share.sources"
+            | "api_share.tokens"
+            | "api_share.distributions"
+            | "api_share.distribution_open"
+            | "api_share.usage"
+            | "api_share.provider_catalog"
+            | "api_share.access_info"
+            | "api_share.members"
+            | "im.settings_get"
+            | "im.members"
+            | "im.messages"
+            | "im.file_get"
+            | "im.send"
+            | "im.send_file"
+            | "im.recall"
+            | "im.clear"
     ) {
         return None;
     }
@@ -285,6 +325,12 @@ pub fn change_topic(command: &str) -> Option<&'static str> {
     if command.starts_with("policy.") || command.starts_with("emergency.") {
         return Some("org");
     }
+    if command.starts_with("api_share.") {
+        return Some("api-share");
+    }
+    if command.starts_with("im.") {
+        return Some("im");
+    }
     None
 }
 
@@ -300,6 +346,13 @@ pub struct ChangeHint {
 
 /// 写命令 + 参数 → 变更提示（读命令返回 `None`）。
 pub fn change_hint(command: &str, payload: &Value) -> Option<ChangeHint> {
+    // 一对一消息由 notify_messenger_change 定向通知双方，避免向全组织广播通信元数据。
+    if matches!(
+        command,
+        "im.send" | "im.send_file" | "im.recall" | "im.clear"
+    ) {
+        return None;
+    }
     let topic = change_topic(command)?;
     let pick = |key: &str| {
         payload
@@ -321,12 +374,7 @@ pub fn change_hint(command: &str, payload: &Value) -> Option<ChangeHint> {
 /// 保证「不缓存团队数据」的边界不被实时通道打破。
 ///
 /// `except` 用于跳过发起本次变更的那条连接：请求方已经拿到了响应，无需再收一遍事件。
-fn emit_change(
-    state: &EnclaveState,
-    org_id: &str,
-    hint: &ChangeHint,
-    except: Option<u64>,
-) {
+fn emit_change(state: &EnclaveState, org_id: &str, hint: &ChangeHint, except: Option<u64>) {
     let at = chrono::Utc::now().timestamp();
     let payload = json!({
         "orgId": org_id,
@@ -371,6 +419,37 @@ pub fn notify_change(state: &EnclaveState, org_id: &str, topic: &str) {
     );
 }
 
+/// 一对一传讯变更：只通知发送者与接收者的在线设备，不向全组织暴露通信元数据。
+pub fn notify_messenger_change(
+    state: &EnclaveState,
+    org_id: &str,
+    from_user_id: &str,
+    to_user_id: &str,
+    except: Option<u64>,
+) {
+    let at = chrono::Utc::now().timestamp();
+    let payload = json!({
+        "orgId": org_id,
+        "topic": "im",
+        "fromUserId": from_user_id,
+        "toUserId": to_user_id,
+        "at": at,
+    });
+    if let Some(tx) = state.host.ui_sink() {
+        let _ = tx.send(payload.clone());
+    }
+    let mut frame = payload;
+    if let Some(obj) = frame.as_object_mut() {
+        obj.insert("type".into(), json!("event"));
+    }
+    state.host.broadcast_to_users(
+        org_id,
+        &[from_user_id.to_string(), to_user_id.to_string()],
+        &frame.to_string(),
+        except,
+    );
+}
+
 /// 该组织当前在线的成员 user id（主机本地读取；成员端经 `org.online` RPC 取）。
 pub fn online_member_ids(state: &EnclaveState, org_id: &str) -> Vec<String> {
     state.host.online_member_ids(org_id)
@@ -400,6 +479,11 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
         // 主机自动备份（一期前置条件：主机单点故障的本地兜底）
         let st = state.clone();
         tokio::spawn(async move { super::backup::run_loop(st).await });
+    }
+    {
+        // API 路由共享使用独立 HTTPS 端口；与 WSS 业务通道共用主机证书。
+        let st = state.clone();
+        tokio::spawn(async move { super::api_share::run_gateway_loop(st).await });
     }
 
     let mut listener: Option<(TcpListener, tokio_rustls::TlsAcceptor)> = None;
@@ -435,7 +519,9 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
                         }
                     },
                     Err(e) => {
-                        state.host.mark_stopped(Some(format!("监听端口 {} 失败：{}", port, e)));
+                        state
+                            .host
+                            .mark_stopped(Some(format!("监听端口 {} 失败：{}", port, e)));
                         log::warn!("[enclave] 主机服务监听失败（{}）：{}", port, e);
                     }
                 }
@@ -452,11 +538,9 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
                         tokio::spawn(async move {
                             match acceptor.accept(stream).await {
                                 Ok(tls_stream) => handle_conn(tls_stream, peer, st).await,
-                                Err(e) => log::warn!(
-                                    "[enclave] 与 {} 的 TLS 握手失败：{}",
-                                    peer,
-                                    e
-                                ),
+                                Err(e) => {
+                                    log::warn!("[enclave] 与 {} 的 TLS 握手失败：{}", peer, e)
+                                }
                             }
                         });
                     }
@@ -502,7 +586,9 @@ pub async fn call_host(
     };
     let mut session = HostSession::connect(state, db, org_id).await?;
     let data = if method == "task.list" {
-        session.request("task.list", json!({ "orgId": org_id })).await
+        session
+            .request("task.list", json!({ "orgId": org_id }))
+            .await
     } else {
         session
             .request(
@@ -571,11 +657,15 @@ fn file_cache_dir(org_id: &str) -> PathBuf {
 }
 
 fn cache_root() -> PathBuf {
-    crate::utils::paths::app_root_dir().join("enclave").join("cache")
+    crate::utils::paths::app_root_dir()
+        .join("enclave")
+        .join("cache")
 }
 
 fn uploads_root() -> PathBuf {
-    crate::utils::paths::app_root_dir().join("enclave").join("uploads")
+    crate::utils::paths::app_root_dir()
+        .join("enclave")
+        .join("uploads")
 }
 
 /// 设备接管迁移包的临时落点（与组织转让的 `transfer/` 分开）。
@@ -610,7 +700,9 @@ fn file_sha256(path: &Path) -> Result<String, String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
-        let n = file.read(&mut buf).map_err(|e| format!("读取文件失败：{}", e))?;
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取文件失败：{}", e))?;
         if n == 0 {
             break;
         }
@@ -750,8 +842,7 @@ async fn send_file_stream(
     upload_id: &str,
     path: &Path,
 ) -> Result<(String, u64), String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; transfer::LAN_CHUNK_MAX as usize];
     let mut offset = 0u64;
@@ -865,7 +956,10 @@ pub async fn upload_temp_file(
         .unwrap_or("attachment")
         .to_string();
     let begin = session
-        .request("file.upload_begin", json!({ "orgId": org_id, "fileName": file_name }))
+        .request(
+            "file.upload_begin",
+            json!({ "orgId": org_id, "fileName": file_name }),
+        )
         .await?;
     let upload_id = begin["uploadId"].as_str().unwrap_or("").to_string();
     if upload_id.is_empty() {
@@ -945,9 +1039,9 @@ pub async fn takeover_from_host(
         return Err("接管迁移包校验失败（哈希不一致），已中止".to_string());
     }
 
-    let imported = state
-        .store
-        .with_conn(|c| transfer::import_handover_package(c, dest.to_string_lossy().as_ref(), &passphrase));
+    let imported = state.store.with_conn(|c| {
+        transfer::import_handover_package(c, dest.to_string_lossy().as_ref(), &passphrase)
+    });
     let _ = std::fs::remove_file(&dest);
     let imported = imported?;
 
@@ -988,7 +1082,8 @@ async fn download_handover_chunks(
     handover_id: &str,
     dest: &Path,
 ) -> Result<(), String> {
-    let mut file = std::fs::File::create(dest).map_err(|e| format!("创建接管临时文件失败：{}", e))?;
+    let mut file =
+        std::fs::File::create(dest).map_err(|e| format!("创建接管临时文件失败：{}", e))?;
     let mut offset = 0u64;
     loop {
         let chunk = session
@@ -1048,7 +1143,11 @@ pub async fn fetch_file_to_cache(
         let size_ok = std::fs::metadata(&target)
             .map(|m| m.len() == file_size)
             .unwrap_or(false);
-        if size_ok && file_sha256(&target).map(|h| h == file_hash).unwrap_or(false) {
+        if size_ok
+            && file_sha256(&target)
+                .map(|h| h == file_hash)
+                .unwrap_or(false)
+        {
             touch_cache_entry(&target);
             session.close().await;
             return Ok(target.to_string_lossy().to_string());
@@ -1331,9 +1430,7 @@ impl HostSession {
         let url = format!("wss://{}", addr);
         // 首次连接 TOFU 记录指纹；之后必须一致（防冒充 / 防主机悄悄换证书）
         let pin_key = format!("{}{}", HOST_FP_PREFIX, org_id);
-        let expected = state
-            .store
-            .with_conn(|c| Ok(get_setting(c, &pin_key)))?;
+        let expected = state.store.with_conn(|c| Ok(get_setting(c, &pin_key)))?;
         let (ws, fingerprint) =
             tls::connect_pinned(&url, expected.as_deref(), CONNECT_TIMEOUT).await?;
         if expected
@@ -1385,7 +1482,8 @@ impl HostSession {
     }
 
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.request_with_timeout(method, params, REQUEST_TIMEOUT).await
+        self.request_with_timeout(method, params, REQUEST_TIMEOUT)
+            .await
     }
 
     async fn request_with_timeout(
@@ -1543,9 +1641,7 @@ async fn handle_conn(
             break;
         }
         // 设备接管迁移期间冻结写请求（只放行接管协议与只读命令）
-        if state.host.handover_frozen(&hello.org_id)
-            && !handover_allows(&req.method, &req.params)
-        {
+        if state.host.handover_frozen(&hello.org_id) && !handover_allows(&req.method, &req.params) {
             let _ = out_tx.send(res_err(&req.id, "主机正在进行设备接管迁移，请稍候"));
             continue;
         }
@@ -1568,7 +1664,9 @@ async fn handle_conn(
                 Ok(org) => {
                     let handover_id = req.params["handoverId"].as_str().unwrap_or("").to_string();
                     let offset = req.params["offset"].as_u64().unwrap_or(0);
-                    let len = req.params["len"].as_u64().unwrap_or(transfer::LAN_CHUNK_MAX);
+                    let len = req.params["len"]
+                        .as_u64()
+                        .unwrap_or(transfer::LAN_CHUNK_MAX);
                     match handle_handover_chunk(
                         &state,
                         &handover_id,
@@ -1633,7 +1731,9 @@ async fn handle_conn(
                 Err(e) => res_err(&req.id, &e),
             },
             "task.list" => {
-                let req_org = req.params["orgId"].as_str().unwrap_or(hello.org_id.as_str());
+                let req_org = req.params["orgId"]
+                    .as_str()
+                    .unwrap_or(hello.org_id.as_str());
                 if req_org != hello.org_id {
                     res_err(&req.id, "不能跨组织访问")
                 } else {
@@ -1656,7 +1756,9 @@ async fn handle_conn(
             },
             // 在线成员：只读，成员之间互相可见
             "org.online" => {
-                let req_org = req.params["orgId"].as_str().unwrap_or(hello.org_id.as_str());
+                let req_org = req.params["orgId"]
+                    .as_str()
+                    .unwrap_or(hello.org_id.as_str());
                 if req_org != hello.org_id {
                     res_err(&req.id, "不能跨组织访问")
                 } else {
@@ -1687,7 +1789,10 @@ async fn handle_conn(
                     let upload_id = req.params["uploadId"].as_str().unwrap_or("").to_string();
                     let task_id = req.params["taskId"].as_str().unwrap_or("").to_string();
                     let report_id = req.params["reportId"].as_str().map(str::to_string);
-                    let file_name = req.params["fileName"].as_str().unwrap_or("file").to_string();
+                    let file_name = req.params["fileName"]
+                        .as_str()
+                        .unwrap_or("file")
+                        .to_string();
                     let sha256 = req.params["sha256"].as_str().unwrap_or("").to_string();
                     match handle_upload_finish(
                         &state,
@@ -1730,7 +1835,9 @@ async fn handle_conn(
                 Ok(org) => {
                     let file_id = req.params["fileId"].as_str().unwrap_or("").to_string();
                     let offset = req.params["offset"].as_u64().unwrap_or(0);
-                    let len = req.params["len"].as_u64().unwrap_or(transfer::LAN_CHUNK_MAX);
+                    let len = req.params["len"]
+                        .as_u64()
+                        .unwrap_or(transfer::LAN_CHUNK_MAX);
                     match handle_file_fetch(&state, &org, &hello.user_id, &file_id, offset, len) {
                         Ok(v) => {
                             // 下载审计：成员把原件拉到本机时记一条（只在首个分块记，避免每块刷一条）。
@@ -1766,7 +1873,8 @@ async fn handle_conn(
                 },
                 Err(e) => res_err(&req.id, &e),
             },
-            "transfer.accept" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+            "transfer.accept" => match (org_param(&req, &hello), req.params["transferId"].as_str())
+            {
                 (Ok(org), Some(id)) => {
                     match handle_transfer_accept(&state, org, id, &hello.user_id) {
                         Ok(v) => res_ok(&req.id, v),
@@ -1775,7 +1883,8 @@ async fn handle_conn(
                 }
                 _ => res_err(&req.id, "参数不完整"),
             },
-            "transfer.reject" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+            "transfer.reject" => match (org_param(&req, &hello), req.params["transferId"].as_str())
+            {
                 (Ok(org), Some(id)) => {
                     match handle_transfer_reject(&state, org, id, &hello.user_id) {
                         Ok(v) => res_ok(&req.id, v),
@@ -1784,35 +1893,65 @@ async fn handle_conn(
                 }
                 _ => res_err(&req.id, "参数不完整"),
             },
-            "transfer.package" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
-                (Ok(org), Some(id)) => {
-                    let offset = req.params["offset"].as_u64().unwrap_or(0);
-                    let len = req.params["len"].as_u64().unwrap_or(transfer::LAN_CHUNK_MAX);
-                    match handle_transfer_package(&state, org, id, &hello.user_id, offset, len) {
-                        Ok(v) => res_ok(&req.id, v),
-                        Err(e) => res_err(&req.id, &e),
+            "transfer.package" => {
+                match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+                    (Ok(org), Some(id)) => {
+                        let offset = req.params["offset"].as_u64().unwrap_or(0);
+                        let len = req.params["len"]
+                            .as_u64()
+                            .unwrap_or(transfer::LAN_CHUNK_MAX);
+                        match handle_transfer_package(&state, org, id, &hello.user_id, offset, len)
+                        {
+                            Ok(v) => res_ok(&req.id, v),
+                            Err(e) => res_err(&req.id, &e),
+                        }
                     }
+                    _ => res_err(&req.id, "参数不完整"),
                 }
-                _ => res_err(&req.id, "参数不完整"),
-            },
-            "transfer.verified" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
-                (Ok(org), Some(id)) => {
-                    match handle_transfer_verified(&state, org, id, &hello.user_id) {
-                        Ok(v) => res_ok(&req.id, v),
-                        Err(e) => res_err(&req.id, &e),
+            }
+            "transfer.verified" => {
+                match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+                    (Ok(org), Some(id)) => {
+                        match handle_transfer_verified(&state, org, id, &hello.user_id) {
+                            Ok(v) => res_ok(&req.id, v),
+                            Err(e) => res_err(&req.id, &e),
+                        }
                     }
+                    _ => res_err(&req.id, "参数不完整"),
                 }
-                _ => res_err(&req.id, "参数不完整"),
-            },
+            }
             other => res_err(&req.id, &format!("未知方法：{}", other)),
         };
         // 先回响应，再广播；发起连接本身跳过（它已经拿到响应）
-        let hint = request_hint(&req).filter(|_| reply_ok(&reply));
+        let ok = reply_ok(&reply);
+        let hint = request_hint(&req).filter(|_| ok);
+        let messenger_target = if ok && req.method == "enclave.call" {
+            let command = req.params["command"].as_str().unwrap_or("");
+            if matches!(
+                command,
+                "im.send" | "im.send_file" | "im.recall" | "im.clear"
+            ) {
+                req.params
+                    .get("payload")
+                    .and_then(|v| v.get("peerId"))
+                    .and_then(Value::as_str)
+                    .filter(|peer| !peer.is_empty())
+                    .map(|peer| (hello.user_id.clone(), peer.to_string()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if out_tx.send(reply).is_err() {
             break;
         }
-        if let Some(hint) = hint {
-            let org = req.params["orgId"].as_str().unwrap_or(hello.org_id.as_str());
+        let org = req.params["orgId"]
+            .as_str()
+            .unwrap_or(hello.org_id.as_str());
+        if let Some((from_user_id, to_user_id)) = messenger_target {
+            notify_messenger_change(&state, org, &from_user_id, &to_user_id, Some(sub_id));
+        } else if let Some(hint) = hint {
             notify_change_hint(&state, org, &hint, Some(sub_id));
         }
     }
@@ -1835,11 +1974,8 @@ async fn verify_member(state: &EnclaveState, hello: &HelloMsg) -> Result<&'stati
     }
     // 在线：用平台 token 校验自报身份；公网不可用时退回只读快照（设计 §7.3）。
     if !hello.token.trim().is_empty() {
-        if let Ok(me) = platform::get_json_with_status::<CloudMe>(
-            "/api/v1/me",
-            Some(&hello.token),
-        )
-        .await
+        if let Ok(me) =
+            platform::get_json_with_status::<CloudMe>("/api/v1/me", Some(&hello.token)).await
         {
             if me.user.id.to_string() != hello.user_id {
                 return Err("登录身份与连接身份不一致".to_string());
@@ -1866,12 +2002,82 @@ fn handle_enclave_call(
     command: &str,
     payload: &Value,
 ) -> Result<Value, String> {
-    state.store.with_conn(|c| {
-        // 每次转发都重新确认成员身份（连接期间可能被移出组织）
-        authz::role_for_member(c, org_id, user_id)?
-            .ok_or_else(|| "当前账号不是该组织成员".to_string())?;
-        rpc::dispatch(c, org_id, user_id, command, payload)
-    })
+    let role = state
+        .store
+        .with_conn(|c| authz::role_for_member(c, org_id, user_id))?;
+    if role.is_none() {
+        return Err("当前账号不是该组织成员".to_string());
+    }
+    if command == "task.pending_summary" {
+        let role = role.ok_or_else(|| "当前账号不是该组织成员".to_string())?;
+        return state.store.with_conn(|c| {
+            let summary = tasks::pending_summary_with_role(c, org_id, user_id, role)?;
+            serde_json::to_value(summary)
+                .map_err(|e| format!("序列化待办汇总失败：{}", e))
+        });
+    }
+    if command == "api_share.provider_catalog" {
+        return serde_json::to_value(super::api_share::provider_catalog(state, org_id, user_id)?)
+            .map_err(|e| format!("序列化 Provider 目录失败：{}", e));
+    }
+    if command == "api_share.access_info" {
+        return serde_json::to_value(super::api_share::access_info(state, org_id))
+            .map_err(|e| format!("序列化 API 共享网关信息失败：{}", e));
+    }
+    if command == "api_share.distribution_open" {
+        let distribution_id = payload
+            .get("distributionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "缺少参数：distributionId".to_string())?;
+        return state
+            .store
+            .with_conn(|c| {
+                super::api_share::open_distribution(state, c, org_id, user_id, distribution_id)
+            })
+            .and_then(|value| {
+                serde_json::to_value(value).map_err(|e| format!("序列化 API 共享连接失败：{}", e))
+            });
+    }
+    if command == "api_share.token_create" {
+        let input: super::api_share::CreateApiShareTokenInput =
+            serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                .map_err(|e| format!("共享令牌参数不正确：{}", e))?;
+        return state
+            .store
+            .with_conn(|c| super::api_share::create_token(state, c, org_id, user_id, &input))
+            .and_then(|value| {
+                serde_json::to_value(value).map_err(|e| format!("序列化共享令牌失败：{}", e))
+            });
+    }
+    if command == "api_share.token_update" {
+        let token_id = payload
+            .get("tokenId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "缺少参数：tokenId".to_string())?;
+        let input: super::api_share::UpdateApiShareTokenInput =
+            serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                .map_err(|e| format!("共享令牌参数不正确：{}", e))?;
+        return state
+            .store
+            .with_conn(|c| {
+                super::api_share::update_token(state, c, org_id, user_id, token_id, &input)
+            })
+            .and_then(|value| {
+                serde_json::to_value(value).map_err(|e| format!("序列化共享令牌失败：{}", e))
+            });
+    }
+    if command == "im.members" {
+        let online = state.host.online_member_ids(org_id);
+        return state
+            .store
+            .with_conn(|c| super::messenger::members(c, org_id, user_id, &online))
+            .and_then(|value| {
+                serde_json::to_value(value).map_err(|e| format!("序列化传讯成员失败：{}", e))
+            });
+    }
+    state
+        .store
+        .with_conn(|c| rpc::dispatch(c, org_id, user_id, command, payload))
 }
 
 fn ensure_member(state: &EnclaveState, org_id: &str, user_id: &str) -> Result<(), String> {
@@ -1882,11 +2088,7 @@ fn ensure_member(state: &EnclaveState, org_id: &str, user_id: &str) -> Result<()
     })
 }
 
-fn handle_upload_begin(
-    state: &EnclaveState,
-    org_id: &str,
-    user_id: &str,
-) -> Result<Value, String> {
+fn handle_upload_begin(state: &EnclaveState, org_id: &str, user_id: &str) -> Result<Value, String> {
     ensure_member(state, org_id, user_id)?;
     cleanup_stale_uploads();
     let upload_id = crate::utils::new_id();
@@ -2008,7 +2210,9 @@ fn handle_file_fetch(
     state.store.with_conn(|c| {
         let meta = files::file_meta(c, org_id, file_id)?;
         let path = PathBuf::from(&meta.abs_path);
-        let total = std::fs::metadata(&path).map_err(|e| format!("文件不可用：{}", e))?.len();
+        let total = std::fs::metadata(&path)
+            .map_err(|e| format!("文件不可用：{}", e))?
+            .len();
         let offset = offset.min(total);
         let want = len.min(transfer::LAN_CHUNK_MAX).min(total - offset);
         let mut buf = vec![0u8; want as usize];
@@ -2054,7 +2258,11 @@ fn handle_handover_prepare(
 
     let now = chrono::Utc::now().timestamp();
     {
-        let mut g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = state
+            .host
+            .handover
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(h) = g.as_ref() {
             if now.saturating_sub(h.prepared_at) < HANDOVER_TTL_SECS {
                 return Err("已有进行中的设备接管，请稍候".to_string());
@@ -2115,7 +2323,11 @@ fn handover_match(
     user_id: &str,
     caller_device_id: &str,
 ) -> Result<HandoverRuntime, String> {
-    let g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+    let g = state
+        .host
+        .handover
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let h = g
         .as_ref()
         .ok_or_else(|| "没有进行中的设备接管".to_string())?;
@@ -2156,7 +2368,8 @@ fn handle_handover_chunk(
     let want = len.min(transfer::LAN_CHUNK_MAX).min(total - offset);
     let mut buf = vec![0u8; want as usize];
     if want > 0 {
-        let mut f = std::fs::File::open(&h.path).map_err(|e| format!("读取接管迁移包失败：{}", e))?;
+        let mut f =
+            std::fs::File::open(&h.path).map_err(|e| format!("读取接管迁移包失败：{}", e))?;
         f.seek(SeekFrom::Start(offset))
             .map_err(|e| format!("定位接管迁移包失败：{}", e))?;
         f.read_exact(&mut buf)
@@ -2177,7 +2390,11 @@ fn handle_handover_verified(
     user_id: &str,
     caller_device_id: &str,
 ) -> Result<Value, String> {
-    let mut g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = state
+        .host
+        .handover
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let h = g
         .as_mut()
         .ok_or_else(|| "没有进行中的设备接管".to_string())?;
@@ -2244,31 +2461,33 @@ fn handover_allows(method: &str, params: &Value) -> bool {
         return true;
     }
     let command = params["command"].as_str().unwrap_or("");
-    matches!(
-        method,
-        "task.list" | "file.stat" | "file.fetch"
-    ) || (method == "enclave.call"
-        && matches!(
-            command,
-            "task.get"
-                | "task.deps_preview"
-                | "task.progress_list"
-                | "report.list"
-                | "report.feedback_list"
-                | "file.task_list"
-                | "kb.list"
-                | "kb.search"
-                | "kb.entry_get"
-                | "kb.file_list"
-                | "policy.get"
-        ))
+    matches!(method, "task.list" | "file.stat" | "file.fetch")
+        || (method == "enclave.call"
+            && matches!(
+                command,
+                "task.get"
+                    | "task.deps_preview"
+                    | "task.progress_list"
+                    | "report.list"
+                    | "report.feedback_list"
+                    | "file.task_list"
+                    | "kb.list"
+                    | "kb.search"
+                    | "kb.entry_get"
+                    | "kb.file_list"
+                    | "policy.get"
+            ))
 }
 
 /// 清理超时未提交的接管会话（旧主机继续权威）。
 fn expire_handover(state: &EnclaveState) {
     let now = chrono::Utc::now().timestamp();
     let expired = {
-        let g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+        let g = state
+            .host
+            .handover
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         g.as_ref()
             .map(|h| now.saturating_sub(h.prepared_at) > HANDOVER_TTL_SECS)
             .unwrap_or(false)
@@ -2388,7 +2607,10 @@ async fn beacon_loop(state: std::sync::Arc<EnclaveState>) {
             let _ = sock.send_to(payload.as_bytes(), target).await;
             // 同机回环：方便本机/测试环境发现
             let _ = sock
-                .send_to(payload.as_bytes(), ("127.0.0.1", configured_discovery_port()))
+                .send_to(
+                    payload.as_bytes(),
+                    ("127.0.0.1", configured_discovery_port()),
+                )
                 .await;
         }
         tokio::time::sleep(BEACON_INTERVAL).await;
@@ -2399,7 +2621,11 @@ async fn discovery_listen(state: std::sync::Arc<EnclaveState>) {
     let sock = match UdpSocket::bind(("0.0.0.0", configured_discovery_port())).await {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("[enclave] 发现监听失败（{}）：{}", configured_discovery_port(), e);
+            log::warn!(
+                "[enclave] 发现监听失败（{}）：{}",
+                configured_discovery_port(),
+                e
+            );
             return;
         }
     };
@@ -2421,10 +2647,7 @@ async fn discovery_listen(state: std::sync::Arc<EnclaveState>) {
         let addr = format!("{}:{}", src.ip(), port);
         let now = chrono::Utc::now().timestamp();
         if let Some(orgs) = v["orgIds"].as_array() {
-            let mut map = state
-                .discovered
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut map = state.discovered.lock().unwrap_or_else(|e| e.into_inner());
             for org_id in orgs.iter().filter_map(|o| o.as_str()) {
                 map.insert(
                     org_id.to_string(),
@@ -2443,9 +2666,7 @@ async fn discovery_listen(state: std::sync::Arc<EnclaveState>) {
 
 /// 清除成员端固定的主机证书指纹（主机重装 / 更换主机后使用）。
 pub fn reset_fingerprint(state: &EnclaveState, org_id: &str) -> Result<(), String> {
-    state
-        .store
-        .with_conn(|c| clear_fingerprint(c, org_id))
+    state.store.with_conn(|c| clear_fingerprint(c, org_id))
 }
 
 fn clear_fingerprint(conn: &Connection, org_id: &str) -> Result<(), String> {
@@ -2541,12 +2762,11 @@ pub struct HostStatusView {
     pub host_device_name: Option<String>,
 }
 
-pub fn host_status(
-    state: &EnclaveState,
-    org_id: Option<&str>,
-) -> Result<HostStatusView, String> {
+pub fn host_status(state: &EnclaveState, org_id: Option<&str>) -> Result<HostStatusView, String> {
     let my_device = device_id();
-    let served = state.store.with_conn(|c| org::host_org_ids(c, &my_device))?;
+    let served = state
+        .store
+        .with_conn(|c| org::host_org_ids(c, &my_device))?;
     let identity = state.store.with_conn(org::local_identity)?;
     let (running, port, last_error) = state.host.view();
     let is_host_for_org = match org_id {
@@ -2695,7 +2915,7 @@ pub fn apply_host_info(state: &EnclaveState, org_id: &str, info: &HostInfo) -> R
 ///
 /// 用 UDP `connect` 让内核按路由表选本地地址——不实际发包，断网时也不会报错；
 /// 多网卡/特殊网络可用 `PILOTDESK_ENCLAVE_HOST_ADDR` 显式覆盖，取不到时返回空串。
-fn local_lan_addr() -> String {
+pub(crate) fn local_lan_addr() -> String {
     if let Ok(v) = std::env::var("PILOTDESK_ENCLAVE_HOST_ADDR") {
         let v = v.trim().to_string();
         if !v.is_empty() {
@@ -2711,7 +2931,7 @@ fn local_lan_addr() -> String {
         .unwrap_or_default()
 }
 
-fn host_org_ids(state: &EnclaveState) -> Vec<String> {
+pub(crate) fn host_org_ids(state: &EnclaveState) -> Vec<String> {
     state
         .store
         .with_conn(|c| org::host_org_ids(c, &device_id()))
@@ -2829,7 +3049,10 @@ fn request_hint(req: &RequestMsg) -> Option<ChangeHint> {
     match req.method.as_str() {
         "enclave.call" => change_hint(
             req.params["command"].as_str().unwrap_or(""),
-            &req.params.get("payload").cloned().unwrap_or_else(|| json!({})),
+            &req.params
+                .get("payload")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
         ),
         // 上传收尾才真正挂到任务 / 汇报上
         "file.upload_finish" | "file.upload_keep" => Some(ChangeHint {
@@ -2858,7 +3081,9 @@ mod tests {
     #[test]
     fn manual_addr_validation() {
         assert_eq!(
-            "ws://192.168.1.9:47820/".trim_start_matches("ws://").trim_end_matches('/'),
+            "ws://192.168.1.9:47820/"
+                .trim_start_matches("ws://")
+                .trim_end_matches('/'),
             "192.168.1.9:47820"
         );
         assert!("192.168.1.9".rsplit_once(':').is_none());
@@ -2882,7 +3107,8 @@ mod tests {
             let path = dir.join(name);
             std::fs::write(&path, [0u8; 4]).unwrap();
             let file = OpenOptions::new().write(true).open(&path).unwrap();
-            file.set_modified(now - Duration::from_secs(age_secs)).unwrap();
+            file.set_modified(now - Duration::from_secs(age_secs))
+                .unwrap();
             path
         };
         let a = make("a.bin", 3 * 3600);
@@ -3519,7 +3745,9 @@ mod tests {
         let fetched = next_json(&mut rx).await.unwrap();
         assert_eq!(fetched["ok"], true);
         assert_eq!(
-            BASE64.decode(fetched["data"]["data"].as_str().unwrap()).unwrap(),
+            BASE64
+                .decode(fetched["data"]["data"].as_str().unwrap())
+                .unwrap(),
             content
         );
         assert_eq!(fetched["data"]["eof"], true);
@@ -3599,7 +3827,11 @@ mod tests {
         .await
         .unwrap();
         let rejected = next_json(&mut rx).await.unwrap();
-        assert_eq!(rejected["ok"], false, "raw path must be rejected: {}", rejected);
+        assert_eq!(
+            rejected["ok"], false,
+            "raw path must be rejected: {}",
+            rejected
+        );
 
         // 治理只读：成员端 Agent 工具向主机复核策略
         tx.send(Message::Text(
@@ -3719,7 +3951,7 @@ mod tests {
         }
 
         let (mut tx_a, mut rx_a) = hello_as(port, "2").await;
-        let (mut tx_b, mut rx_b) = hello_as(port, "3").await;
+        let (tx_b, mut rx_b) = hello_as(port, "3").await;
 
         // 在线成员：两条握手后的连接都应出现在主机侧列表里（按 user id 去重）
         let mut online = state.host.online_member_ids("org1");

@@ -319,11 +319,7 @@ fn encode_rel_path(rel: &str) -> String {
 ///
 /// 新布局里工作流文件都带 `workflows/` 前缀，导入端要靠 `manifest.json` 里的相对路径找回文件，
 /// 因此落盘时必须还原出 `workflows/` 子目录，而不能扁平化。
-fn write_template_file(
-    tmp_dir: &std::path::Path,
-    rel: &str,
-    text: String,
-) -> Result<(), String> {
+fn write_template_file(tmp_dir: &std::path::Path, rel: &str, text: String) -> Result<(), String> {
     let dest = tmp_dir.join(rel);
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
@@ -430,8 +426,15 @@ pub async fn workflow_market_install(
     // 2. 下载到临时目录（失败要清理，避免在系统临时目录里留垃圾）
     let tmp_dir =
         std::env::temp_dir().join(format!("pilotdesk-market-wf-{}", crate::utils::new_id()));
-    if let Err(e) =
-        download_template_files(&tmp_dir, main_rel, main_file, manifest_file, dir, &sub_files).await
+    if let Err(e) = download_template_files(
+        &tmp_dir,
+        main_rel,
+        main_file,
+        manifest_file,
+        dir,
+        &sub_files,
+    )
+    .await
     {
         let _ = std::fs::remove_dir_all(&tmp_dir);
         return Err(e);

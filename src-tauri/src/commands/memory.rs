@@ -1,22 +1,23 @@
-//! 项目级记忆（MEMORY.md）管理命令。
+//! 项目级规范与长期记忆（AGENTS.md）管理命令。
 //!
-//! 记忆根 = 会话实际使用的工作目录：`session.cwd` 非空取它，为空取兜底工作区
-//! （`resolve_session_cwd` 与运行时一致）。只读/写入 `<记忆根>/MEMORY.md`，
-//! 供设置页项目记忆区与右侧面板轻量预览使用；模型注入读取该文件在 lib.rs 完成。
+//! 记忆根 = 项目主目录 > 全局工作空间；不读取会话或圆桌的持久化路径快照。
+//! 项目文件仍按项目主目录保持一份，关联目录只作为工作范围，不复制 AGENTS.md。
+//! 只读/写入 `<记忆根>/AGENTS.md`，
+//! 供设置页项目记忆区与右侧面板轻量预览使用；API Agent 注入读取该文件在 lib.rs 完成。
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
 use crate::api_agent::db::{
-    clamp_memory_max_entries, load_memory_max_entries, MemoryEntry, MemoryStore,
-    MEMORY_IDLE_SECS, MEMORY_MAX_ENTRIES_KEY, MEMORY_MIN_ACCESS,
+    clamp_memory_max_entries, load_memory_max_entries, MemoryEntry, MemoryStore, MEMORY_IDLE_SECS,
+    MEMORY_MAX_ENTRIES_KEY, MEMORY_MIN_ACCESS,
 };
 use crate::utils::errors::AppError;
 use crate::DbState;
 
-/// MEMORY.md 文件名（固定于记忆根目录）。
-const MEMORY_FILE: &str = "MEMORY.md";
+/// AGENTS.md 文件名（固定于项目记忆根目录）。
+const AGENTS_FILE: &str = "AGENTS.md";
 /// 单文件内容上限（字符）：超出拒绝写入，避免挤占上下文。
 const MAX_CHARS: usize = 12_000;
 
@@ -35,13 +36,19 @@ fn norm_key(path: &str) -> String {
     path.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
-/// 记忆根解析：`cwd` 非空用其解析路径，空串回退兜底工作区（与运行时一致）。
-pub(crate) fn resolve_memory_root(conn: &Connection, cwd: Option<&str>) -> String {
-    let c = cwd.map(str::trim).filter(|s| !s.is_empty());
-    crate::utils::paths::resolve_session_cwd(conn, c)
+/// 记忆根解析：显式项目根优先；为空时使用当前全局工作空间。
+pub(crate) fn resolve_memory_root(conn: &Connection, root: Option<&str>) -> String {
+    match root.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(root) => crate::utils::paths::normalize_absolute_path(root, "")
+            .to_string_lossy()
+            .to_string(),
+        None => crate::utils::paths::resolve_workspace_path(None, "", conn)
+            .to_string_lossy()
+            .to_string(),
+    }
 }
 
-/// 可授权的记忆根集合 = 会话显式 cwd（解析后）∪ 兜底工作区。
+/// 可授权的记忆根集合 = 全部项目主目录 ∪ 全局工作空间。
 fn authorized_roots(conn: &Connection) -> Vec<String> {
     let mut roots: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -53,19 +60,23 @@ fn authorized_roots(conn: &Connection) -> Vec<String> {
             }
         };
 
-    let mut stmt = match conn.prepare(
-        "SELECT DISTINCT cwd FROM sessions WHERE cwd IS NOT NULL AND cwd <> '' ORDER BY cwd",
-    ) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
-        for row in rows.flatten() {
-            let root = crate::utils::paths::resolve_session_cwd(conn, Some(&row));
-            push(&mut roots, &mut seen, root);
+    // 项目会话始终动态跟随主目录，设置页也直接枚举项目，不依赖会话路径快照。
+    if let Ok(mut projects) = conn.prepare("SELECT id FROM projects") {
+        if let Ok(rows) = projects.query_map([], |row| row.get::<_, String>(0)) {
+            for project_id in rows.flatten() {
+                if let Ok(workspace) =
+                    crate::commands::projects::project_workspace_context(conn, Some(&project_id))
+                {
+                    if let Some(root) = workspace.primary_root {
+                        push(&mut roots, &mut seen, root);
+                    }
+                }
+            }
         }
     }
-    let fallback = crate::utils::paths::resolve_session_cwd(conn, None);
+    let fallback = crate::utils::paths::resolve_workspace_path(None, "", conn)
+        .to_string_lossy()
+        .to_string();
     push(&mut roots, &mut seen, fallback);
     roots
 }
@@ -76,7 +87,7 @@ fn is_authorized_root(conn: &Connection, root: &str) -> bool {
 }
 
 fn read_named_file(root: &str, filename: &str) -> ProjectMemory {
-    let path = format!("{}/{}", root.trim_end_matches(['/', '\\']), filename);
+    let path = std::path::Path::new(root).join(filename);
     match std::fs::read_to_string(&path) {
         Ok(content) => ProjectMemory {
             root: root.to_string(),
@@ -94,16 +105,16 @@ fn read_named_file(root: &str, filename: &str) -> ProjectMemory {
 }
 
 fn read_memory_file(root: &str) -> ProjectMemory {
-    read_named_file(root, MEMORY_FILE)
+    read_named_file(root, AGENTS_FILE)
 }
 
 /// 原子写（同目录临时文件 + 覆盖目标；Windows 先删后更名）。
 fn write_named_file(root: &str, filename: &str, content: &str) -> Result<(), AppError> {
-    let dir = root.trim_end_matches(['/', '\\']);
+    let dir = std::path::Path::new(root);
     std::fs::create_dir_all(dir)
-        .map_err(|e| AppError::Io(format!("无法创建目录 {}: {}", dir, e)))?;
-    let target = format!("{}/{}", dir, filename);
-    let tmp = format!("{}.{}.tmp", target, std::process::id());
+        .map_err(|e| AppError::Io(format!("无法创建目录 {}: {}", dir.display(), e)))?;
+    let target = dir.join(filename);
+    let tmp = dir.join(format!("{}.{}.tmp", filename, std::process::id()));
     std::fs::write(&tmp, content)
         .map_err(|e| AppError::Io(format!("写入 {} 失败: {}", filename, e)))?;
     let _ = std::fs::remove_file(&target);
@@ -113,24 +124,24 @@ fn write_named_file(root: &str, filename: &str, content: &str) -> Result<(), App
 }
 
 fn write_memory_file(root: &str, content: &str) -> Result<(), AppError> {
-    write_named_file(root, MEMORY_FILE, content)
+    write_named_file(root, AGENTS_FILE, content)
 }
 
-/// 已使用项目根列表（会话 cwd 去重 + 兜底工作区），供项目选择器。
+/// 可管理项目根列表（全部项目主目录 + 全局工作空间），供项目选择器。
 #[tauri::command]
 pub fn list_project_roots(state: State<'_, DbState>) -> Result<Vec<String>, String> {
     let conn = state.pool.get().map_err(AppError::from)?;
     Ok(authorized_roots(&conn))
 }
 
-/// 读取指定记忆根的 MEMORY.md（cwd 为空视为兜底记忆根）。
+/// 读取指定记忆根的 AGENTS.md（root 为空视为全局工作空间）。
 #[tauri::command]
 pub fn get_project_memory(
     state: State<'_, DbState>,
-    cwd: Option<String>,
+    root: Option<String>,
 ) -> Result<ProjectMemory, String> {
     let conn = state.pool.get().map_err(AppError::from)?;
-    let root = resolve_memory_root(&conn, cwd.as_deref());
+    let root = resolve_memory_root(&conn, root.as_deref());
     if !is_authorized_root(&conn, &root) {
         return Err(
             AppError::InvalidInput(format!("目录不在项目记忆范围内，拒绝读取: {}", root)).into(),
@@ -139,23 +150,23 @@ pub fn get_project_memory(
     Ok(read_memory_file(&root))
 }
 
-/// 写入指定记忆根的 MEMORY.md（空 content 视为清空该文件，保留空文件）。
+/// 写入指定记忆根的 AGENTS.md（空 content 视为清空该文件，保留空文件）。
 #[tauri::command]
 pub fn update_project_memory(
     state: State<'_, DbState>,
-    cwd: Option<String>,
+    root: Option<String>,
     content: String,
 ) -> Result<ProjectMemory, String> {
     let char_count = content.chars().count();
     if char_count > MAX_CHARS {
         return Err(AppError::InvalidInput(format!(
-            "MEMORY.md 内容超长（{} 字，上限 {} 字），请精简后保存。",
+            "AGENTS.md 内容超长（{} 字，上限 {} 字），请精简后保存。",
             char_count, MAX_CHARS
         ))
         .into());
     }
     let conn = state.pool.get().map_err(AppError::from)?;
-    let root = resolve_memory_root(&conn, cwd.as_deref());
+    let root = resolve_memory_root(&conn, root.as_deref());
     if !is_authorized_root(&conn, &root) {
         return Err(
             AppError::InvalidInput(format!("目录不在项目记忆范围内，拒绝写入: {}", root)).into(),
@@ -170,12 +181,12 @@ pub fn update_project_memory(
     })
 }
 
-/// MEMORY.md 新建模板。
+/// AGENTS.md 新建模板。
 #[tauri::command]
 pub fn project_memory_template() -> Result<String, String> {
     Ok(format!(
-        "# 项目记忆（MEMORY.md）\n\n\
-         本文件为当前项目的长期记忆，会随每次对话注入模型上下文。请用简洁、可复用的事实与规则填写，不要记录过程性对话。建议分节维护：\n\n\
+        "# 项目指令与长期记忆（AGENTS.md）\n\n\
+         本文件记录当前项目稳定、可复用的约定和事实。支持 AGENTS.md 的宿主 Agent 可自行发现；PilotDesk API 会话会主动读取并注入。请勿记录过程性对话。建议分节维护：\n\n\
          ## 项目概述\n\n\
          ## 技术栈与代码约定\n\n\
          ## 常用路径\n\n\
@@ -228,12 +239,71 @@ pub fn update_user_preferences(content: String) -> Result<ProjectMemory, String>
 pub fn user_preferences_template() -> Result<String, String> {
     Ok(format!(
         "# 用户偏好（USER.md）\n\n\
-         本文件为全局用户级偏好，会随每次对话注入模型上下文。请用简洁、可复用的事实与规则填写（如语言/框架偏好、常用命令、命名习惯等）：\n\n\
+         本文件为全局用户级偏好，会随 PilotDesk API 会话注入模型上下文。请用简洁、可复用的事实与规则填写（如语言/框架偏好、常用命令、命名习惯等）：\n\n\
          ## 沟通风格\n\n\
          ## 技术偏好\n\n\
          ## 常用命令与工具\n\n\
          ## 通用约定\n"
     ))
+}
+
+#[cfg(test)]
+mod project_root_tests {
+    use super::*;
+
+    #[test]
+    fn project_primary_is_authorized_even_when_sessions_follow_it_implicitly() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES ('p1', 'Project', '', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_directories
+                (id, project_id, path, is_primary, sort_order, created_at, updated_at)
+             VALUES ('d1', 'p1', 'D:\\Primary', 1, 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions
+                (id, agent_type, title, created_at, updated_at, project_id)
+             VALUES ('s1', 'api', 'Session', 1, 1, 'p1')",
+            [],
+        )
+        .unwrap();
+
+        let roots = authorized_roots(&conn);
+        assert!(roots.iter().any(|root| root == "D:\\Primary"));
+        assert!(is_authorized_root(&conn, "D:\\Primary"));
+    }
+
+    #[test]
+    fn explicit_memory_root_is_normalized_to_an_absolute_path() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "pilotdesk_memory_root_{}_{}",
+            std::process::id(),
+            crate::utils::now()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let raw = root.join("nested").join("..").to_string_lossy().to_string();
+
+        let resolved = resolve_memory_root(&conn, Some(&raw));
+
+        assert_eq!(
+            std::path::Path::new(&resolved),
+            std::fs::canonicalize(&root).unwrap()
+        );
+        assert!(std::path::Path::new(&resolved).is_absolute());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 // ── 全局 KV 记忆（MEMORY.db key_memories，与 save/search_memory 工具同库）──
@@ -388,7 +458,7 @@ pub fn list_memory_entries(
         .collect())
 }
 
-/// 新增/更新一条全局 KV 记忆（按 key 覆盖/新增；不做内容级去重，设置页手动编辑语义；
+/// 新增/更新一条全局 KV 记忆（按 key 覆盖/新增；保留当前编辑 key，并自动收敛同内容重复项；
 /// important=true 置 pin 保护，免自动清理；tags 为逗号分隔检索标签，可选）。
 #[tauri::command]
 pub fn save_memory_entry(
@@ -523,12 +593,8 @@ pub fn get_memory_max_entries(state: State<'_, DbState>) -> Result<usize, String
 pub fn set_memory_max_entries(state: State<'_, DbState>, value: usize) -> Result<(), String> {
     let conn = state.pool.get().map_err(AppError::from)?;
     let clamped = clamp_memory_max_entries(value);
-    crate::commands::app_settings::set_setting(
-        &conn,
-        MEMORY_MAX_ENTRIES_KEY,
-        &clamped.to_string(),
-    )
-    .map_err(String::from)
+    crate::commands::app_settings::set_setting(&conn, MEMORY_MAX_ENTRIES_KEY, &clamped.to_string())
+        .map_err(String::from)
 }
 
 #[cfg(test)]
@@ -542,7 +608,7 @@ mod tests {
             .unwrap_or_default();
         std::env::temp_dir()
             .join(format!(
-                "pilotdesk_memory_md_test_{}_{}",
+                "pilotdesk_project_agents_test_{}_{}",
                 std::process::id(),
                 n
             ))
@@ -560,6 +626,7 @@ mod tests {
         assert!(none.content.is_empty());
 
         write_memory_file(&dir, "# 项目记忆\nhi").unwrap();
+        assert!(std::path::Path::new(&dir).join(AGENTS_FILE).is_file());
         let some = read_memory_file(&dir);
         assert!(some.exists);
         assert!(some.content.contains("hi"));

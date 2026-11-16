@@ -14,13 +14,14 @@ use std::os::windows::io::FromRawHandle;
 
 use crate::utils::process::hidden_command;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
-use windows_sys::Win32::System::Console::{CreatePseudoConsole, HPCON};
+use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, HPCON};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    DeleteProcThreadAttributeList, InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
-    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION, STARTUPINFOEXW,
+    DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList,
+    UpdateProcThreadAttribute, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+    PROCESS_INFORMATION, STARTUPINFOEXW,
 };
 
 // PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x20016 (22)
@@ -38,7 +39,7 @@ pub fn spawn_with_conpty(
     cwd: &str,
     cols: u16,
     rows: u16,
-) -> Result<(ConptyProcess, tokio::fs::File, tokio::fs::File, bool), String> {
+) -> Result<(ConptyProcess, tokio::fs::File), String> {
     unsafe {
         // 1. 创建 ConPTY 通信管道
         // pipe_server: ConPTY 写入端（子进程的 console 输出）
@@ -104,12 +105,11 @@ pub fn spawn_with_conpty(
         startup_info_ex.lpAttributeList = allocate_attr_list(attr_list_size);
 
         if startup_info_ex.lpAttributeList.is_null() {
+            ClosePseudoConsole(h_pc);
             CloseHandle(h_pipe_server_in);
             CloseHandle(h_pipe_client_in);
             CloseHandle(h_pipe_server_out);
             CloseHandle(h_pipe_client_out);
-            // ConPTY handle cleanup - use raw value since we don't have proper destructor
-            // The ConPTY is cleaned up when all handles are closed
             return Err("分配属性列表内存失败".into());
         }
 
@@ -121,6 +121,7 @@ pub fn spawn_with_conpty(
         ) == 0
         {
             free_attr_list(startup_info_ex.lpAttributeList);
+            ClosePseudoConsole(h_pc);
             CloseHandle(h_pipe_server_in);
             CloseHandle(h_pipe_client_in);
             CloseHandle(h_pipe_server_out);
@@ -141,6 +142,7 @@ pub fn spawn_with_conpty(
         {
             DeleteProcThreadAttributeList(startup_info_ex.lpAttributeList);
             free_attr_list(startup_info_ex.lpAttributeList);
+            ClosePseudoConsole(h_pc);
             CloseHandle(h_pipe_server_in);
             CloseHandle(h_pipe_client_in);
             CloseHandle(h_pipe_server_out);
@@ -191,7 +193,10 @@ pub fn spawn_with_conpty(
 
         if result == 0 {
             let err_code = windows_sys::Win32::Foundation::GetLastError();
+            ClosePseudoConsole(h_pc);
+            CloseHandle(h_pipe_server_in);
             CloseHandle(h_pipe_client_in);
+            CloseHandle(h_pipe_server_out);
             CloseHandle(h_pipe_client_out);
             return Err(format!("CreateProcessW 失败: 系统错误 {}", err_code));
         }
@@ -202,31 +207,19 @@ pub fn spawn_with_conpty(
         // 6. 将 stdout 管道 HANDLE 转换为 tokio::fs::File（实现 AsyncRead）
         let stdout = tokio::fs::File::from_std(std::fs::File::from_raw_handle(h_pipe_client_out));
 
-        // stderr: ConPTY 合并了 stdout 和 stderr 到同一个管道，
-        // 此处返回一个空管道（已关闭写端的读端），读取立即返回 EOF
-        let mut h_null_read: HANDLE = INVALID_HANDLE_VALUE;
-        let mut h_null_write: HANDLE = INVALID_HANDLE_VALUE;
-        let null_sa = SECURITY_ATTRIBUTES {
-            nLength: mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: std::ptr::null_mut(),
-            bInheritHandle: 0,
-        };
-        CreatePipe(&mut h_null_read, &mut h_null_write, &null_sa, 0);
-        CloseHandle(h_null_write);
-        let stderr = tokio::fs::File::from_std(std::fs::File::from_raw_handle(h_null_read));
-
         // 用 ConptyProcess 封装进程句柄
         // stdin_pipe 必须在进程生命周期内保持打开，否则 ConPTY 会发送 Ctrl+C 终止子进程
-        // stdout_pipe 持有读端 HANDLE，进程退出后关闭以触发 EOF
+        // tokio::fs::File 独占 stdout 读端；server 端保留到 Drop，确保 ConPTY 生命周期内有效。
         let child = ConptyProcess {
             handle: SendHandle(proc_info.hProcess),
             pid: proc_info.dwProcessId,
             stdin_pipe: SendHandle(h_pipe_client_in),
-            stdout_pipe: SendHandle(h_pipe_client_out),
+            stdin_server_pipe: SendHandle(h_pipe_server_in),
+            stdout_server_pipe: SendHandle(h_pipe_server_out),
             conpty: SendHPCON(h_pc),
         };
 
-        Ok((child, stdout, stderr, true)) // true = conpty_mode
+        Ok((child, stdout))
     }
 }
 
@@ -281,10 +274,10 @@ pub struct ConptyProcess {
     /// stdin 写入端，必须在进程生命周期内保持打开
     /// ConPTY 在 stdin 关闭时会向子进程发送 Ctrl+C
     stdin_pipe: SendHandle,
-    /// stdout 读端 HANDLE，进程退出后关闭以触发 EOF
-    /// 注意：不在 spawn_blocking 中关闭（*mut c_void 不是 Send），
-    /// 而是在调用者线程中关闭
-    stdout_pipe: SendHandle,
+    /// ConPTY 持有的 stdin 服务端，与 stdin_pipe 配对
+    stdin_server_pipe: SendHandle,
+    /// ConPTY 持有的 stdout 服务端，与 tokio 读取端配对
+    stdout_server_pipe: SendHandle,
     /// ConPTY 伪控制台句柄（用于 resize 操作）
     /// HPCON is isize in windows-sys 0.61, need Send wrapper
     conpty: SendHPCON,
@@ -293,13 +286,6 @@ pub struct ConptyProcess {
 impl ConptyProcess {
     pub fn id(&self) -> u32 {
         self.pid
-    }
-
-    /// 关闭 stdout 读端，触发 tokio 读取 EOF
-    pub fn close_stdout_pipe(&self) {
-        unsafe {
-            CloseHandle(self.stdout_pipe.0);
-        }
     }
 
     /// 获取 stdin 管道句柄（用于写入用户输入）
@@ -315,18 +301,26 @@ impl ConptyProcess {
 
             let handle = self.stdin_pipe.0;
             let data_bytes = data.as_bytes();
-            let mut bytes_written: u32 = 0;
-            let result = WriteFile(
-                handle,
-                data_bytes.as_ptr() as *const _,
-                data_bytes.len() as u32,
-                &mut bytes_written,
-                std::ptr::null_mut(),
-            );
+            let mut offset = 0;
+            while offset < data_bytes.len() {
+                let remaining = &data_bytes[offset..];
+                let mut bytes_written: u32 = 0;
+                let result = WriteFile(
+                    handle,
+                    remaining.as_ptr() as *const _,
+                    remaining.len().min(u32::MAX as usize) as u32,
+                    &mut bytes_written,
+                    std::ptr::null_mut(),
+                );
 
-            if result == 0 {
-                let err = GetLastError();
-                return Err(format!("写入终端失败: system error {}", err));
+                if result == 0 {
+                    let err = GetLastError();
+                    return Err(format!("写入终端失败: system error {}", err));
+                }
+                if bytes_written == 0 {
+                    return Err("写入终端失败: 管道未接收任何数据".to_string());
+                }
+                offset += bytes_written as usize;
             }
         }
         Ok(())
@@ -381,8 +375,16 @@ impl ConptyProcess {
         }
     }
     pub fn kill(&self) {
+        let mut exit_code = 0u32;
+        let running = unsafe {
+            GetExitCodeProcess(self.handle.0, &mut exit_code) != 0
+                && exit_code == STILL_ACTIVE as u32
+        };
+        if !running {
+            return;
+        }
         let _ = hidden_command("taskkill")
-            .args(&["/PID", &self.pid.to_string(), "/F"])
+            .args(&["/PID", &self.pid.to_string(), "/T", "/F"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
@@ -394,9 +396,10 @@ impl Drop for ConptyProcess {
         unsafe {
             // 关闭 ConPTY 伪控制台（必须在进程退出后关闭，用 ClosePseudoConsole 而非 CloseHandle）
             let hpc: windows_sys::Win32::System::Console::HPCON = self.conpty.0;
-            windows_sys::Win32::System::Console::ClosePseudoConsole(hpc);
-            // 关闭 stdout 读端
-            CloseHandle(self.stdout_pipe.0);
+            ClosePseudoConsole(hpc);
+            // 服务端管道由 ConPTY 使用；关闭伪控制台后再释放。
+            CloseHandle(self.stdin_server_pipe.0);
+            CloseHandle(self.stdout_server_pipe.0);
             // 关闭 stdin 管道（进程已结束，安全关闭）
             CloseHandle(self.stdin_pipe.0);
             // 关闭进程句柄

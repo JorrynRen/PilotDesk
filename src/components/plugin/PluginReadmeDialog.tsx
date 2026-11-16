@@ -64,15 +64,31 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
     };
   }, [basePath, isRemote]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${pluginName} 说明文档`}
     >
       <div
-        className="w-[600px] max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
-        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}
+        className="max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
+        style={{
+          width: 'min(600px, calc(100vw - 32px))',
+          backgroundColor: 'var(--bg-primary)',
+          border: '1px solid var(--border)',
+          overflow: 'hidden',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -82,7 +98,12 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
               {pluginName} - 说明文档
             </span>
           </div>
-          <button onClick={onClose} className="pd-btn px-1.5 py-1 rounded text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+          <button
+            onClick={onClose}
+            className="pd-btn px-1.5 py-1 rounded text-[10px] shrink-0"
+            style={{ color: 'var(--text-tertiary)' }}
+            aria-label="关闭说明文档"
+          >
             <X size={14} />
           </button>
         </div>

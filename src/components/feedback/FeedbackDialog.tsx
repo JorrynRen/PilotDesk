@@ -275,7 +275,9 @@ export function FeedbackDialog() {
     if (!open) return;
     if (!preset) {
       // 未带预设（设置 › 关于 手动打开）：`crash` 是系统自动归类，不能沿用到人工反馈上
-      setDraft((d) => (d.category === 'crash' ? { ...d, category: 'bug' } : d));
+      queueMicrotask(() => {
+        setDraft((d) => (d.category === 'crash' ? { ...d, category: 'bug' } : d));
+      });
       return;
     }
     if (appliedPresetRef.current !== preset) {

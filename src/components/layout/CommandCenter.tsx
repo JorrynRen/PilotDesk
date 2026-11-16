@@ -1,9 +1,9 @@
 /**
- * CommandCenter — 全局指挥中心
+ * CommandCenter — 全局运行与待办
  *
  * 把「什么在跑、什么在等我、这段时间花了多少」聚到一处。
- * 两种形态（见下方 variant）：会话默认页的无会话态内嵌常驻内容，以及工作流页「待处理」
- * 按钮打开的居中模态；首次使用额外显示一次性使用指引（启动台职责，不再单独做第二个入口）。
+ * 两种形态（见下方 variant）：会话默认页的无会话态只展示精简摘要，完整信息与操作放在
+ * 工作流页「待处理」按钮或顶栏「运行与待办」打开的居中浮层里。
  *
  * 数据全部来自现有 store/命令（不新增后端接口）：待处理取工作流的审批/待输入实时登记表，
  * 进行中取工作流实例与群聊房间，成本速览取近 7 天三维归因。
@@ -14,7 +14,6 @@ import { useNavigate } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
-  LayoutDashboard,
   X,
   RefreshCw,
   ShieldAlert,
@@ -26,6 +25,8 @@ import {
   Activity,
   BarChart3,
   HelpCircle,
+  BookOpen,
+  ChevronDown,
 } from 'lucide-react';
 import { useTerminal } from '../../TerminalManager';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -34,13 +35,10 @@ import type { PendingHumanInput } from '../../types/workflow';
 import { useGroupChatStore } from '../../stores/groupChatStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { useCommandCenterStore, COMMAND_CENTER_USAGE_DAYS } from '../../stores/commandCenterStore';
+import { useRuntimeSummary } from '../../hooks/useRuntimeSummary';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo, isAgentAvailable } from '../../hooks/useEnvInfo';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
-
-/** 进行中状态（工作流实例 / 群聊房间）：终态不进「进行中」。 */
-const ACTIVE_INSTANCE_STATUS = ['pending', 'running', 'paused'];
-const ACTIVE_ROOM_STATUS = ['running', 'paused'];
 
 const INSTANCE_STATUS_LABEL: Record<string, string> = {
   pending: '待启动',
@@ -69,7 +67,7 @@ const MAX_ACTIVE_ROWS = 5;
  * 用 `color-mix` 而不是写死 rgba(245,158,11,.08)：三种主题的卡片底色各不相同，
  * 半透明色直接铺上去只会"混出脏色"（浅色下发灰、深色下被冲淡），混到卡片底色里才稳定。
  */
-const ATTENTION_BG = 'color-mix(in srgb, #F59E0B 10%, var(--bg-secondary))';
+const ATTENTION_BG = 'color-mix(in srgb, var(--status-warning) 10%, var(--bg-secondary))';
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}m`;
@@ -137,6 +135,48 @@ function Section({
 function EmptyHint({ text }: { text: string }) {
   return (
     <div className="text-[11px] py-1" style={{ color: 'var(--text-tertiary)' }}>{text}</div>
+  );
+}
+
+function RuntimeMetric({
+  label,
+  value,
+  detail,
+  tone,
+  divided,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  tone: 'warning' | 'accent' | 'neutral';
+  divided?: boolean;
+}) {
+  const color = tone === 'warning'
+    ? 'var(--status-warning)'
+    : tone === 'accent'
+      ? 'var(--accent)'
+      : 'var(--text-primary)';
+
+  return (
+    <div
+      className="min-w-0 px-3.5 py-3"
+      style={{ borderLeft: divided ? '1px solid var(--border)' : undefined }}
+    >
+      <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{label}</div>
+      <div
+        className="mt-0.5 text-xl font-semibold leading-none"
+        style={{ color, fontVariantNumeric: 'tabular-nums' }}
+      >
+        {value}
+      </div>
+      <div
+        className="mt-1.5 truncate text-[10px]"
+        style={{ color: 'var(--text-tertiary)' }}
+        title={detail}
+      >
+        {detail}
+      </div>
+    </div>
   );
 }
 
@@ -211,8 +251,10 @@ function WizardRow({
         className="shrink-0 rounded text-[10px]"
         style={{
           padding: '1px 5px',
-          backgroundColor: ready ? 'rgba(16,185,129,0.12)' : 'var(--bg-tertiary)',
-          color: ready ? '#10B981' : 'var(--text-tertiary)',
+          backgroundColor: ready
+            ? 'color-mix(in srgb, var(--status-success) 12%, transparent)'
+            : 'var(--bg-tertiary)',
+          color: ready ? 'var(--status-success)' : 'var(--text-tertiary)',
         }}
       >
         {ready ? '已就绪' : '未配置'}
@@ -289,8 +331,8 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
         term: '记忆 · 项目',
         desc: (
           <>
-            <PathText>MEMORY.md</PathText>，位于<b>当前工作目录</b>下（按项目一份），存该项目的约定与经验；
-            在「设置 → 记忆管理 → 项目记忆」编辑，或直接改该文件
+            <PathText>AGENTS.md</PathText>，位于<b>项目主目录</b>下（未归属项目时为全局工作空间），存该项目的约定与经验；
+            PilotDesk API 会话会自动读取；CLI/ACP 宿主会话是否加载由宿主自行处理。可在「设置 → 记忆管理 → 项目记忆」编辑
           </>
         ),
       },
@@ -323,15 +365,14 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
 ];
 
 /**
- * 指挥中心的两种形态：
- * - `modal`（默认）：App 级挂载的居中弹层（工作流页「待处理」按钮触发）；
- * - `inline`：嵌在会话默认页（无选中会话时）的常驻内容，去掉遮罩/居中/标题行与关闭键，
- *   滚动交给外层布局；
- * 两态共用同一份数据读取与区块渲染，只有外壳与开合门槛不同。
+ * 两种形态：
+ * - `modal`（默认）：App 级挂载的完整浮层，承载审批、输入、运行明细与用量；
+ * - `inline`：会话默认页的三项精简摘要，只作为状态总览与浮层入口。
  */
 export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inline' }) {
   const inline = variant === 'inline';
   const open = useCommandCenterStore((s) => s.open);
+  const openCenter = useCommandCenterStore((s) => s.openCenter);
   const setOpen = useCommandCenterStore((s) => s.setOpen);
   const closeCenter = useCommandCenterStore((s) => s.closeCenter);
   const refreshCenter = useCommandCenterStore((s) => s.refreshCenter);
@@ -342,9 +383,16 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const { setMode } = useTerminal();
   const navigate = useNavigate();
 
-  const instances = useWorkflowStore((s) => s.instances);
-  const pendingInputs = useWorkflowStore((s) => s.pendingInputs);
-  const pendingApprovals = useWorkflowStore((s) => s.pendingApprovals);
+  const {
+    instances,
+    pendingInputs,
+    activeApprovals,
+    staleApprovals,
+    activeInstances,
+    activeRooms,
+    pendingCount,
+    activeCount,
+  } = useRuntimeSummary();
   const respondToolApproval = useWorkflowStore((s) => s.respondToolApproval);
   const respondHumanInput = useWorkflowStore((s) => s.respondHumanInput);
   const cancelWorkflow = useWorkflowStore((s) => s.cancelWorkflow);
@@ -354,20 +402,12 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
    * 待处理区的就地操作状态。
    *
    * 为什么把裁决放在这里而不是工作流页：同一批待办此前在工作流页（页面级堆叠，位置还随 tab
-   * 漂移）、通知中心、指挥中心各显示一份——现在收敛到指挥中心一处处理，其余位置只放进出口。
+   * 漂移）、通知中心、运行与待办各显示一份——现在收敛到运行与待办一处处理，其余位置只放进出口。
    */
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
   /** 待人工输入的草稿（key = `${executionId}:${nodeId}`） */
   const [inputDrafts, setInputDrafts] = useState<Record<string, string>>({});
-  const rooms = useGroupChatStore((s) => s.rooms);
   const roomsActorAlive = useGroupChatStore((s) => s.roomsActorAlive);
-
-  /**
-   * 「进行中」= 未到终态的实例/房间（与下面那个板块同一口径）。
-   * 提到这里是因为轮询要按"有没有进行中项"启停 —— hooks 必须在提前 return 之前。
-   */
-  const activeInstances = instances.filter((i) => ACTIVE_INSTANCE_STATUS.includes(i.status));
-  const activeRooms = rooms.filter((r) => ACTIVE_ROOM_STATUS.includes(r.status));
 
   // ── 使用向导：Agent 集成是否已就绪（决定能否开始首次会话）──
   const providers = useApiProviderStore((s) => s.providers);
@@ -386,24 +426,32 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const cliAgentName = registryAgents.find((a) => a.agentType === cliAgentType)?.displayName;
   const agentReady = Boolean(apiProvider) || Boolean(cliAgentType);
   /**
-   * 使用引导的展开态（本次面板存活期间有效，不落盘）。
-   *
-   * **默认折叠**：开发/生产一致，初次进入也只是一行「开始使用」入口。
-   * 之前用「是否看过 / Agent 是否已配置」决定是否自动展开，导致两边表现不一致：
-   * 生产环境没配 Agent，点「知道了」后整块既收不起来、又只剩半截内容（五种模式与常用功能被藏掉）。
-   * 现在只有一条规则：**用户点开才展开，展开后随时可收起**。
+   * 使用说明的展开态（本次面板存活期间有效，不落盘）。
+   * 默认关闭，只由标题栏帮助入口打开；关闭面板时一并收起，避免下次打开直接落到说明页。
    */
   const [guideOpen, setGuideOpen] = useState(false);
+  /** 新用户先看快速开始；已配置 Agent 的用户打开说明时直接进入功能参考。 */
+  const [guideTab, setGuideTab] = useState<'start' | 'reference'>('start');
+  const [expandedGuideGroup, setExpandedGuideGroup] = useState(GUIDE_GROUPS[0].title);
 
-  /** 收起引导（回到一行常驻入口） */
-  const collapseGuide = () => setGuideOpen(false);
+  const toggleGuide = () => {
+    if (!guideOpen) setGuideTab(agentReady ? 'reference' : 'start');
+    setGuideOpen((value) => !value);
+  };
+  const closePanel = () => {
+    setGuideOpen(false);
+    setOpen(false);
+  };
 
   // Esc 关闭（与确认弹窗一致）。监听器只在打开期间挂载，回调里才 setState。
   // 内嵌态不参与 Esc：它不是弹层，按 Esc 没有"关掉"的语义。
   useEffect(() => {
     if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeCenter();
+      if (e.key === 'Escape') {
+        setGuideOpen(false);
+        closeCenter();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -421,7 +469,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
    * 每 4s 静默轮询一次（进行中三处 + 待处理两处，不含用量/提供商）；没有进行中项或切走时立即停，
    * 不给空闲状态白打 IPC。
    */
-  const activeCount = activeInstances.length + activeRooms.length;
   useEffect(() => {
     if (!inline || activeCount === 0) return;
     const timer = window.setInterval(() => { void pollLive(); }, 4000);
@@ -481,16 +528,21 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const goRoom = (roomId: string) => {
     void useGroupChatStore.getState().selectRoom(roomId);
     setMode('groupchat');
-    setOpen(false);
+    navigate('/');
+    closePanel();
   };
-  const goWorkflow = () => { setMode('workflow'); setOpen(false); };
-  // 向导的「去配置」：API 提供商列表 / CLI Agent 集成配置 / 环境检测与安装
-  const goApiConfig = () => { navigate('/settings?tab=api'); setOpen(false); };
-  const goAgentConfig = () => { navigate('/settings?tab=agents'); setOpen(false); };
-  const goEnvConfig = () => { navigate('/settings?tab=environment'); setOpen(false); };
+  const goWorkflow = () => {
+    setMode('workflow');
+    navigate('/');
+    closePanel();
+  };
+  // 向导的「去配置」：API 供应商 / CLI Agent 集成配置 / 环境检测与安装
+  const goApiConfig = () => { navigate('/settings?tab=agents&apiTab=providers'); closePanel(); };
+  const goAgentConfig = () => { navigate('/settings?tab=agents'); closePanel(); };
+  const goEnvConfig = () => { navigate('/settings?tab=environment'); closePanel(); };
   // 精准跳转：设置页 → API 集成配置 → 用量统计（apiTab 由 URL 指定）
-  const goUsageStats = () => { navigate('/settings?tab=api&apiTab=usage'); setOpen(false); };
-  const goMemory = () => { navigate('/settings?tab=memory'); setOpen(false); };
+  const goUsageStats = () => { navigate('/settings?tab=api&apiTab=usage'); closePanel(); };
+  const goMemory = () => { navigate('/settings?tab=memory'); closePanel(); };
 
   /** 批准 / 拒绝一次工具审批（就地裁决；失败提示与列表刷新由 store 负责） */
   const decideApproval = async (callId: string, approved: boolean) => {
@@ -538,27 +590,23 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
     try {
       if (apiProvider) {
         const session = await store.createSession(
-          'api', undefined, null, apiProvider.id, apiProvider.models[0], undefined, undefined,
+          'api', null, apiProvider.id, apiProvider.models[0], undefined, undefined,
         );
         await store.selectSession(session.id);
       } else if (cliAgentType) {
-        const session = await store.createSession(cliAgentType, undefined, null);
+        const session = await store.createSession(cliAgentType, null);
         await createAgentSession(session.id, cliAgentType);
         await store.selectSession(session.id);
       }
       setMode('session');
-      setOpen(false);
+      navigate('/');
+      closePanel();
     } catch {
       // 创建失败不打断面板：用户也可直接在会话默认页顶部的输入框开始
     } finally {
       setStarting(false);
     }
   };
-
-  // ── 待处理：工具审批（进程重启残留的 stale 只读展示）+ 等待人工输入 ──
-  const activeApprovals = pendingApprovals.filter((a) => !a.stale);
-  const staleApprovals = pendingApprovals.filter((a) => a.stale);
-  const pendingCount = activeApprovals.length + pendingInputs.length;
 
   /**
    * 待处理事项的**来源**：这条待办到底来自哪个模块、哪个任务。
@@ -601,49 +649,132 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
    */
   const usageDenom = usageTotals.prompt + usageTotals.read + usageTotals.write;
   const usageHitRate = usageDenom > 0 ? (usageTotals.read / usageDenom) * 100 : 0;
+  const hasPendingItems = pendingCount > 0 || staleApprovals.length > 0;
+  const hasActiveItems = activeInstances.length > 0 || activeRooms.length > 0;
+  if (inline) {
+    const runningDetail = activeCount > 0
+      ? `工作流 ${activeInstances.length} · 圆桌 ${activeRooms.length}`
+      : '当前没有运行任务';
+    const pendingDetail = pendingCount > 0
+      ? '需要确认或补充输入'
+      : '当前没有待处理事项';
+    const usageDetail = loadingUsage
+      ? '正在读取近 7 天用量'
+      : usageTotals.total > 0
+        ? `近 7 天 · 缓存命中 ${usageHitRate.toFixed(1)}%`
+        : '近 7 天暂无用量';
+
+    return (
+      // 右侧少留 8px：pd-scroll-stable 的滚动条槽位占宽，需在此补回，
+      // 才能让卡片左右边缘与上方 InputBar 的 16px 水平基准对齐。
+      <div className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable pl-4 pr-2 pb-3">
+        <div
+          className="overflow-hidden rounded-xl"
+          style={{
+            backgroundColor: 'var(--bg-secondary)',
+            border: '1px solid var(--border-light)',
+          }}
+        >
+          <div
+            className="flex min-h-9 items-center gap-2 px-3.5 py-2"
+            style={{ borderBottom: '1px solid var(--border)' }}
+          >
+            <Activity size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
+            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+              运行与待办
+            </span>
+            <button
+              type="button"
+              onClick={() => void openCenter()}
+              className="pd-btn flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[10px]"
+              style={{ color: 'var(--accent)' }}
+            >
+              查看详情
+              <ArrowRight size={11} />
+            </button>
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+            <RuntimeMetric
+              label="待处理"
+              value={pendingCount}
+              detail={pendingDetail}
+              tone={pendingCount > 0 ? 'warning' : 'neutral'}
+            />
+            <RuntimeMetric
+              label="进行中"
+              value={activeCount}
+              detail={runningDetail}
+              tone={activeCount > 0 ? 'accent' : 'neutral'}
+              divided
+            />
+            <RuntimeMetric
+              label={`成本 · 近 ${COMMAND_CENTER_USAGE_DAYS} 天`}
+              value={loadingUsage ? '…' : usageTotals.total > 0 ? fmtTokens(usageTotals.total) : '—'}
+              detail={usageDetail}
+              tone={usageTotals.total > 0 ? 'accent' : 'neutral'}
+              divided
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
-      className={inline ? 'flex-1 min-h-0 flex overflow-hidden' : 'fixed inset-0 z-[95] flex items-center justify-center p-6'}
-      style={inline ? undefined : { backgroundColor: 'rgba(0,0,0,0.45)' }}
-      onClick={inline ? undefined : closeCenter}
+      className="fixed inset-0 z-[95] flex items-center justify-center p-6"
+      style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}
+      onClick={closePanel}
     >
       <div
-        className={inline ? 'flex-1 min-h-0 flex flex-col overflow-hidden' : 'rounded-xl w-full max-w-[760px] flex flex-col overflow-hidden'}
-        style={inline ? undefined : {
+        className="rounded-xl w-full max-w-[760px] flex flex-col overflow-hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label="运行与待办"
+        style={{
           backgroundColor: 'var(--bg-primary)',
           border: '1px solid var(--border)',
           maxHeight: '84vh',
           boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
         }}
-        onClick={inline ? undefined : (e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
-        {/* 头部：只有模态态需要（弹层的标题 + 刷新 + 关闭）。
-            内嵌在会话默认页时整行去掉 —— 那一屏顶部已有问候语，再加一条「指挥中心」标题
-            只是白占一行高度；刷新由挂载时自动拉一次承担，需要手动刷新时切走再回来即可。 */}
-        {!inline && (
-          <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-            <LayoutDashboard size={13} style={{ color: 'var(--accent)' }} />
-            <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>指挥中心</span>
-            <div className="flex-1" />
-            <button
-              onClick={() => void refreshCenter()}
-              className="pd-btn p-1 rounded transition-colors"
-              style={{ color: 'var(--text-secondary)' }}
-              title="刷新"
-            >
-              {loadingUsage ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-            </button>
-            <button
-              onClick={closeCenter}
-              className="pd-btn p-1 rounded transition-colors"
-              style={{ color: 'var(--text-secondary)' }}
-              title="关闭"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+          <Activity size={13} style={{ color: 'var(--accent)' }} />
+          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>运行与待办</span>
+          <div className="flex-1" />
+          <button
+            onClick={toggleGuide}
+            className="pd-btn flex items-center gap-1.5 rounded px-2 py-1 text-[10px] transition-colors"
+            style={{
+              color: guideOpen ? 'var(--accent)' : 'var(--text-secondary)',
+              backgroundColor: guideOpen ? 'var(--accent-light)' : 'transparent',
+              border: guideOpen ? '1px solid color-mix(in srgb, var(--accent) 35%, transparent)' : '1px solid transparent',
+            }}
+            title={guideOpen ? '收起使用说明' : '查看使用说明'}
+            aria-label={guideOpen ? '收起使用说明' : '查看使用说明'}
+            aria-expanded={guideOpen}
+          >
+            <HelpCircle size={12} />
+            <span className="whitespace-nowrap">{guideOpen ? '收起说明' : '使用说明'}</span>
+          </button>
+          <button
+            onClick={() => void refreshCenter()}
+            className="pd-btn p-1 rounded transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+            title="刷新"
+          >
+            {loadingUsage ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          </button>
+          <button
+            onClick={closePanel}
+            className="pd-btn p-1 rounded transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+            title="关闭"
+          >
+            <X size={12} />
+          </button>
+        </div>
 
         {/* 内容区：按**容器自身宽度**决定列数 —— 一列最小 320px，够宽就自动并成两列，
             且最多两列（`calc(50% - gap/2)` 保证两列恰好占满，不会出现第三列）。
@@ -665,182 +796,244 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             alignItems: 'start',
           }}
         >
-          {/* 使用指引 + 使用向导（启动台职责）
-              层级：指引块（主色底）→ 卡片 → 卡内「步骤 / 术语胶囊 + 说明」
-              默认折叠成一行入口；点开后是完整内容，并可随时「收起」 */}
-          {guideOpen ? (
+          {/* 使用说明：只在用户主动点击标题栏帮助入口后展开，不占用运行中心的默认首屏。 */}
+          {guideOpen && (
             <div
-              className="col-span-full min-w-0 overflow-hidden rounded-xl px-3.5 py-3 space-y-2"
-              style={{ backgroundColor: 'var(--accent-light)' }}
+              className="col-span-full min-w-0 overflow-hidden rounded-xl"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border)',
+              }}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
-                  开始使用（顶栏可切换工作模式）
-                </span>
-                <button
-                  onClick={collapseGuide}
-                  className="pd-btn px-2 py-0.5 rounded text-[10px] shrink-0"
-                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                  title="收起使用引导，回到一行入口"
-                >
-                  收起
-                </button>
-              </div>
-
-              {/* 使用向导：① 配置 Agent（前提）→ ② 开始首次会话 */}
               <div
-                className="rounded-lg px-2.5 py-2"
-                style={{ backgroundColor: 'var(--bg-primary)' }}
+                className="flex items-start gap-3 px-4 py-3"
+                style={{ borderBottom: '1px solid var(--border)' }}
               >
-                <div
-                  className="flex items-center gap-1.5 pb-1.5 mb-2"
-                  style={{ borderBottom: '1px solid var(--border)' }}
+                <span
+                  className="mt-0.5 flex shrink-0 items-center justify-center rounded-lg"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    color: 'var(--accent)',
+                    backgroundColor: 'var(--accent-light)',
+                  }}
                 >
-                  <span style={{ width: 2, height: 9, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
-                  <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
-                    使用向导
-                  </span>
-                  <div className="flex-1" />
-                  {agentReady && <span className="text-[10px] shrink-0" style={{ color: '#10B981' }}>已就绪</span>}
-                </div>
-
-                <div className="flex items-start gap-2">
-                  <StepIndex n={1} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
-                      配置 Agent（使用前提，二选一或都配）
-                    </div>
-                    <div className="mt-1 space-y-1">
-                      <WizardRow
-                        label="API Agent"
-                        ready={Boolean(apiProvider)}
-                        hint={
-                          apiProvider
-                            ? `${apiProvider.name} · ${apiProvider.models[0]}`
-                            : '设置 → API集成配置：添加提供商 + API Key + 至少一个模型'
-                        }
-                        actions={[{ label: '集成配置 ›', onClick: goApiConfig }]}
-                      />
-                      <WizardRow
-                        label="CLI Agent"
-                        ready={Boolean(cliAgentType)}
-                        hint={
-                          cliAgentType
-                            ? `${cliAgentName || cliAgentType}`
-                            : '先「环境检测」安装 CLI 工具，再到「集成配置」启用'
-                        }
-                        actions={[
-                          { label: '集成配置 ›', onClick: goAgentConfig },
-                          { label: '环境检测与安装 ›', onClick: goEnvConfig },
-                        ]}
-                      />
-                    </div>
+                  <BookOpen size={14} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    使用说明
+                  </div>
+                  <div className="mt-0.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                    首次使用先完成配置；已有 Agent 可直接查阅模式与常用功能。
                   </div>
                 </div>
+              </div>
 
-                {/* 第②步与第①步的各行同构：左侧步骤号/名称、中间说明、右侧操作入口同行 */}
-                <div className="flex items-center gap-2 mt-2.5">
-                  <StepIndex n={2} />
-                  <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
-                    开始首次会话
-                  </span>
-                  <span
-                    className="flex-1 min-w-0 truncate text-[10px]"
-                    style={{ color: 'var(--text-tertiary)' }}
-                    title={agentReady ? '进入会话：可直接让 Agent 问答、改文件、跑命令' : '请先完成第 1 步配置'}
-                  >
-                    {agentReady ? '进入会话：可直接让 Agent 问答、改文件、跑命令' : '请先完成第 1 步配置'}
-                  </span>
-                  <button
-                    onClick={() => void startFirstSession()}
-                    disabled={!agentReady || starting}
-                    className="pd-btn shrink-0 px-2 py-0.5 rounded text-[10px]"
-                    style={{
-                      backgroundColor: agentReady ? 'var(--accent)' : 'var(--bg-tertiary)',
-                      color: agentReady ? '#fff' : 'var(--text-tertiary)',
-                      cursor: agentReady ? 'pointer' : 'not-allowed',
-                    }}
-                  >
-                    {starting ? '正在创建…' : '开始首次会话 ›'}
-                  </button>
+              <div className="px-3 pt-2">
+                <div
+                  className="inline-flex items-center gap-0.5 rounded-lg p-0.5"
+                  role="tablist"
+                  aria-label="使用说明章节"
+                  style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+                >
+                  {([
+                    ['start', '快速开始'],
+                    ['reference', '功能参考'],
+                  ] as const).map(([key, label]) => {
+                    const selected = guideTab === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        role="tab"
+                        aria-selected={selected}
+                        onClick={() => setGuideTab(key)}
+                        className="pd-btn rounded-md px-2.5 py-1 text-[10px] transition-colors"
+                        style={{
+                          backgroundColor: selected ? 'var(--accent-light)' : 'transparent',
+                          color: selected ? 'var(--accent)' : 'var(--text-tertiary)',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* 功能说明：展开引导时一并展示（默认折叠态不占屏）。
-                  两组按垂直顺序排列（不再左右分栏），避免长说明在窄列里被压成多行。 */}
-              <div className="flex flex-col gap-2">
-                {GUIDE_GROUPS.map((group) => (
+              <div className="p-3">
+                {guideTab === 'start' ? (
                   <div
-                    key={group.title}
-                    className="rounded-lg px-2.5 py-2"
-                    style={{ backgroundColor: 'var(--bg-primary)' }}
+                    className="rounded-lg px-3 py-3"
+                    style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
                   >
-                    {/* 组标题：主色竖条 + 标题，底部一条淡分隔线与条目分层（只靠留白时
-                        标题会和首条内容读成一块）。 */}
-                    <div
-                      className="flex items-center gap-1.5 pb-1.5 mb-2.5"
-                      style={{ borderBottom: '1px solid var(--border)' }}
-                    >
-                      <span style={{ width: 2, height: 10, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
-                      <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
-                        {group.title}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        两步开始使用
+                      </span>
+                      <div className="flex-1" />
+                      <span
+                        className="rounded-full px-1.5 py-0.5 text-[10px]"
+                        style={{
+                          color: agentReady ? 'var(--status-success)' : 'var(--status-warning)',
+                          backgroundColor: agentReady
+                            ? 'color-mix(in srgb, var(--status-success) 12%, transparent)'
+                            : 'color-mix(in srgb, var(--status-warning) 12%, transparent)',
+                        }}
+                      >
+                        {agentReady ? 'Agent 已就绪' : '等待配置 Agent'}
                       </span>
                     </div>
-                    {/* 条目 = 术语列 + 说明：术语用**加粗文字**而不是灰底胶囊 ——
-                        12 个灰块本身就是噪声，且胶囊容易读成可点的按钮；
-                        定宽成列后左边缘对齐，扫读靠的是列对齐 + 字重差，不靠底色。
-                        术语与说明同字号同行高（只差字重），首行基线才对得齐。 */}
-                    <ul className="space-y-1.5">
-                      {group.items.map((it) => (
-                        <li key={it.term} className="flex items-start gap-2.5">
-                          <span
-                            className="shrink-0 text-[11px] font-semibold leading-relaxed"
-                            style={{ minWidth: 60, color: 'var(--text-primary)' }}
-                          >
-                            {it.term}
-                          </span>
-                          <span className="flex-1 min-w-0 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                            {it.desc}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
 
-              <div className="flex items-center justify-between">
-                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  三层记忆都会自动注入模型上下文（KV 记忆按需检索）。
-                </span>
-                <button onClick={goMemory} className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
-                  去记忆管理 ›
-                </button>
+                    <div className="mt-3 flex items-start gap-2.5">
+                      <StepIndex n={1} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+                          配置 Agent
+                        </div>
+                        <div className="mt-0.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          API Agent 与本地 CLI Agent 任选其一，也可同时配置。
+                        </div>
+                        <div className="mt-2 space-y-1.5">
+                          <WizardRow
+                            label="API Agent"
+                            ready={Boolean(apiProvider)}
+                            hint={
+                              apiProvider
+                                ? `${apiProvider.name} · ${apiProvider.models[0]}`
+                                : '添加提供商、API Key 与至少一个模型'
+                            }
+                            actions={[{ label: '集成配置 ›', onClick: goApiConfig }]}
+                          />
+                          <WizardRow
+                            label="CLI Agent"
+                            ready={Boolean(cliAgentType)}
+                            hint={
+                              cliAgentType
+                                ? `${cliAgentName || cliAgentType}`
+                                : '先安装 CLI 工具，再到集成配置启用'
+                            }
+                            actions={[
+                              { label: '集成配置 ›', onClick: goAgentConfig },
+                              { label: '环境检测 ›', onClick: goEnvConfig },
+                            ]}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="my-3" style={{ borderTop: '1px solid var(--border)' }} />
+
+                    <div className="flex items-center gap-2.5">
+                      <StepIndex n={2} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+                          开始首次会话
+                        </div>
+                        <div
+                          className="mt-0.5 truncate text-[10px]"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title={agentReady ? '进入会话后可问答、改文件与运行命令' : '请先完成第 1 步配置'}
+                        >
+                          {agentReady ? '进入会话后可问答、改文件与运行命令' : '请先完成第 1 步配置'}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => void startFirstSession()}
+                        disabled={!agentReady || starting}
+                        className="pd-btn shrink-0 rounded px-2.5 py-1 text-[10px]"
+                        style={{
+                          backgroundColor: agentReady ? 'var(--accent)' : 'var(--bg-tertiary)',
+                          color: agentReady ? 'var(--text-on-accent)' : 'var(--text-tertiary)',
+                          cursor: agentReady ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        {starting ? '正在创建…' : '开始首次会话 ›'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {GUIDE_GROUPS.map((group, index) => {
+                      const expanded = expandedGuideGroup === group.title;
+                      return (
+                        <div
+                          key={group.title}
+                          className="overflow-hidden rounded-lg"
+                          style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setExpandedGuideGroup(expanded ? '' : group.title)}
+                            className="pd-btn flex w-full items-center gap-2 px-3 py-2.5 text-left"
+                            aria-expanded={expanded}
+                          >
+                            <span
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[9px] font-semibold"
+                              style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                            >
+                              {index + 1}
+                            </span>
+                            <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+                              {group.title}
+                            </span>
+                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                              {group.items.length} 项
+                            </span>
+                            <div className="flex-1" />
+                            <ChevronDown
+                              size={13}
+                              style={{
+                                color: 'var(--text-tertiary)',
+                                transform: expanded ? 'rotate(180deg)' : undefined,
+                                transition: 'transform 120ms ease',
+                              }}
+                            />
+                          </button>
+                          {expanded && (
+                            <div className="px-3 pb-3" style={{ borderTop: '1px solid var(--border)' }}>
+                              <ul className="mt-2.5 space-y-2">
+                                {group.items.map((it) => (
+                                  <li key={it.term} className="flex items-start gap-2.5">
+                                    <span
+                                      className="shrink-0 text-[11px] font-semibold leading-relaxed"
+                                      style={{ minWidth: 60, color: 'var(--text-primary)' }}
+                                    >
+                                      {it.term}
+                                    </span>
+                                    <span
+                                      className="min-w-0 flex-1 text-[11px] leading-relaxed"
+                                      style={{ color: 'var(--text-secondary)' }}
+                                    >
+                                      {it.desc}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    <div className="flex items-center justify-between gap-3 px-1 pt-1">
+                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        PilotDesk API 会话会自动读取项目与用户记忆；CLI/ACP 的项目指令由宿主自行处理。
+                      </span>
+                      <button onClick={goMemory} className="shrink-0 text-[10px]" style={{ color: 'var(--accent)' }}>
+                        去记忆管理 ›
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-          ) : (
-            /* 默认折叠态的常驻入口：点击展开完整引导（使用向导 + 五种模式 + 常用功能） */
-            <button
-              onClick={() => setGuideOpen(true)}
-              className="col-span-full min-w-0 w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-left transition-opacity hover:opacity-90"
-              style={{ backgroundColor: 'var(--accent-light)' }}
-              title="展开使用引导：配置 Agent 与各功能说明"
-            >
-              <HelpCircle size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
-              <span className="text-[11px] font-medium flex-1 truncate" style={{ color: 'var(--accent)' }}>
-                开始使用
-              </span>
-              <span className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
-                查看使用引导 ›
-              </span>
-            </button>
           )}
 
-          {/* 待处理（占满整行：待办卡内含审批按钮与参数预览，塞进半列会挤） */}
+          {/* 待处理：只有确实存在待办时才占用整块区域。 */}
+          {hasPendingItems && (
           <Section title="待处理" icon={<ShieldAlert size={11} />} count={pendingCount} span>
-            {pendingCount === 0 && staleApprovals.length === 0 && (
-              <EmptyHint text="暂无待处理事项。" />
-            )}
             <div className="space-y-1.5">
               {activeApprovals.map((a) => {
                 const busy = pendingActionKey === a.callId;
@@ -852,7 +1045,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                     style={{ backgroundColor: ATTENTION_BG }}
                   >
                     <div className="flex items-center gap-2">
-                      <ShieldAlert size={12} className="shrink-0" style={{ color: '#F59E0B' }} />
+                      <ShieldAlert size={12} className="shrink-0" style={{ color: 'var(--status-warning)' }} />
                       <div className="flex-1 min-w-0">
                         <div className="text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>
                           工具审批 · {a.nodeLabel}
@@ -874,7 +1067,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                         disabled={busy}
                         onClick={() => void decideApproval(a.callId, true)}
                         className="text-[10px] px-2 py-0.5 rounded shrink-0 disabled:opacity-50"
-                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                        style={{ backgroundColor: 'var(--accent)', color: 'var(--text-on-accent)' }}
                       >
                         批准
                       </button>
@@ -905,7 +1098,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                     style={{ backgroundColor: ATTENTION_BG }}
                   >
                     <div className="flex items-center gap-2">
-                      <AlertTriangle size={12} className="shrink-0" style={{ color: '#F59E0B' }} />
+                      <AlertTriangle size={12} className="shrink-0" style={{ color: 'var(--status-warning)' }} />
                       <div className="flex-1 min-w-0">
                         <div className="text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>
                           等待人工输入 · {p.nodeLabel}
@@ -935,7 +1128,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                         disabled={busy || !draft.trim()}
                         onClick={() => void submitPendingInput(p)}
                         className="text-[10px] px-2 py-0.5 rounded shrink-0 disabled:opacity-50"
-                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                        style={{ backgroundColor: 'var(--accent)', color: 'var(--text-on-accent)' }}
                       >
                         提交
                       </button>
@@ -970,14 +1163,13 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
               ))}
             </div>
           </Section>
+          )}
 
-          {/* 进行中（占满整行：行内含状态、进度与来源，半列会挤）。
+          {/* 进行中：只有存在运行项时才显示；无待办且无运行时统一走下方紧凑空态。
               仍是两行（标题行 + 说明行），进度条做成**行内**元素（h-1.5），不新增行高 ——
               默认页"不出滚动条"的约束不能破。 */}
-          <Section title="进行中" icon={<Activity size={11} />} count={activeInstances.length + activeRooms.length} span>
-            {activeInstances.length === 0 && activeRooms.length === 0 && (
-              <EmptyHint text="暂无进行中的工作流执行或圆桌。" />
-            )}
+          {hasActiveItems && (
+          <Section title="进行中" icon={<Activity size={11} />} count={activeCount} span>
             <div className="space-y-1.5">
               {activeInstances.slice(0, MAX_ACTIVE_ROWS).map((i) => {
                 const running = i.status === 'running';
@@ -1087,11 +1279,62 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
               )}
             </div>
           </Section>
+          )}
+
+          {!hasPendingItems && !hasActiveItems && (
+            <Section title="当前状态" icon={<Activity size={11} />} span>
+              <div
+                className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg"
+                style={{ backgroundColor: 'var(--bg-primary)' }}
+              >
+                <span
+                  className="shrink-0 flex items-center justify-center rounded-lg"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    color: 'var(--accent)',
+                    backgroundColor: 'var(--accent-light)',
+                  }}
+                >
+                  <Activity size={13} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {agentReady ? '目前没有待处理或正在运行的任务' : '配置 Agent 后即可开始使用'}
+                  </div>
+                  <div className="mt-0.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    {agentReady ? '新任务开始后会显示在这里。' : '支持 API Agent 与本地 CLI Agent。'}
+                  </div>
+                </div>
+                {!agentReady && (
+                  <button
+                    onClick={goAgentConfig}
+                    className="pd-btn shrink-0 px-2 py-1 rounded text-[10px]"
+                    style={{ backgroundColor: 'var(--accent)', color: 'var(--text-on-accent)' }}
+                  >
+                    去配置
+                  </button>
+                )}
+              </div>
+            </Section>
+          )}
 
           {/* 成本速览（占满整行：它是本页最后一块，半列右侧会空出一块） */}
           <Section title={`成本速览（近 ${COMMAND_CENTER_USAGE_DAYS} 天）`} icon={<BarChart3 size={11} />} span>
             {dimensions.length === 0 ? (
-              <EmptyHint text={loadingUsage ? '加载中…' : '暂无用量数据。'} />
+              <div
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg"
+                style={{ backgroundColor: 'var(--bg-primary)' }}
+              >
+                <span className="text-[11px] min-w-0 flex-1 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                  {loadingUsage ? '正在读取用量…' : `近 ${COMMAND_CENTER_USAGE_DAYS} 天暂无用量`}
+                </span>
+                {!loadingUsage && (
+                  <button onClick={goUsageStats} className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
+                    查看用量 ›
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="space-y-1.5">
                 {/* 维度行 = 标签 + 份额条 + 用量 + 调用次数 + 缓存命中率。
@@ -1105,24 +1348,31 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 {dimensions.map((d) => {
                   const share = usageTotals.total > 0 ? (d.totals.totalTokens / usageTotals.total) * 100 : 0;
                   return (
-                    <div key={d.key} className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ backgroundColor: 'var(--bg-primary)' }}>
+                    <div
+                      key={d.key}
+                      className="grid items-center gap-2 px-2.5 py-2 rounded-lg"
+                      style={{
+                        gridTemplateColumns: '44px minmax(0, 1fr) 76px 40px 92px',
+                        backgroundColor: 'var(--bg-primary)',
+                      }}
+                    >
                       <span className="text-[11px] shrink-0 truncate" style={{ width: 44, color: 'var(--text-primary)' }}>
                         {DIMENSION_LABEL[d.key] ?? d.key}
                       </span>
                       <span
-                        className="flex-1 min-w-0 h-1.5 rounded-full overflow-hidden"
+                        className="min-w-0 h-1.5 rounded-full overflow-hidden"
                         style={{ backgroundColor: 'var(--bg-tertiary)' }}
                         title={`占全部 ${share.toFixed(1)}%`}
                       >
                         <span className="block h-full rounded-full" style={{ width: `${share}%`, backgroundColor: 'var(--accent)' }} />
                       </span>
-                      <span className="text-[10px] shrink-0 w-[72px] text-right" style={{ color: 'var(--text-secondary)' }}>
+                      <span className="text-[10px] whitespace-nowrap text-right" style={{ color: 'var(--text-secondary)' }}>
                         {fmtTokens(d.totals.totalTokens)} token
                       </span>
-                      <span className="text-[10px] shrink-0 w-10 text-right" style={{ color: 'var(--text-tertiary)' }} title={`${d.totals.callCount} 次调用`}>
+                      <span className="text-[10px] whitespace-nowrap text-right" style={{ color: 'var(--text-tertiary)' }} title={`${d.totals.callCount} 次调用`}>
                         {d.totals.callCount} 次
                       </span>
-                      <span className="text-[10px] shrink-0 w-[74px] text-right" style={{ color: 'var(--text-tertiary)' }}>
+                      <span className="text-[10px] whitespace-nowrap text-right" style={{ color: 'var(--text-tertiary)' }}>
                         缓存命中 {d.totals.cacheHitRate.toFixed(1)}%
                       </span>
                     </div>

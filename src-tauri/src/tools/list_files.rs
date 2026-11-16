@@ -5,7 +5,6 @@
 //! - 群聊版（原 `groupchat/adapter/tools.rs`）：同逻辑（无系统目录防护）
 //! 统一保留：系统目录防护 + 路径展开 + 200 条目上限。
 
-use crate::tools::deps::expand_user_path;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
 
@@ -65,15 +64,7 @@ impl ToolHandler for ListFilesTool {
                 return Err("安全限制：不允许列出系统目录".to_string());
             }
 
-            // 路径预处理：展开 ~/ 与 %USERPROFILE%
-            let expanded = expand_user_path(raw_path);
-
-            let dir_path = std::path::Path::new(&expanded);
-            let abs_path = if dir_path.is_absolute() {
-                dir_path.to_path_buf()
-            } else {
-                std::path::Path::new(&cwd).join(&expanded)
-            };
+            let abs_path = crate::utils::paths::normalize_absolute_path(raw_path, &cwd);
 
             let entries = std::fs::read_dir(&abs_path)
                 .map_err(|e| format!("列出目录失败 ({}): {}", abs_path.display(), e))?;

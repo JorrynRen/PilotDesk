@@ -10,6 +10,7 @@ interface SettingsButtonProps {
   className?: string;
   title?: string;
   icon?: ReactNode;
+  style?: React.CSSProperties;
 }
 
 const VARIANT_STYLES: Record<ButtonVariant, React.CSSProperties> = {
@@ -26,7 +27,8 @@ const VARIANT_STYLES: Record<ButtonVariant, React.CSSProperties> = {
   ghost: {
     backgroundColor: 'transparent',
     color: 'var(--text-secondary)',
-    border: 'none',
+    // 透明边框占位：与带边框变体保持同一盒模型尺寸（否则会小 2px）
+    border: '1px solid transparent',
   },
   success: {
     backgroundColor: '#10B981',
@@ -60,14 +62,16 @@ export function SettingsButton({
   className = '',
   title,
   icon,
+  style,
 }: SettingsButtonProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`pd-btn px-2.5 py-1.5 rounded-lg text-xs ${className}`}
-      style={VARIANT_STYLES[variant]}
+      className={`pd-btn pd-settings-button inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 ${className}`}
+      style={{ ...VARIANT_STYLES[variant], ...style }}
     >
       {icon}
       {children}

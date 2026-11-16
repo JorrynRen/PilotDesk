@@ -119,8 +119,7 @@ pub fn validate_base(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
     if !p.is_absolute() {
         return Err("请填写绝对路径".to_string());
     }
-    std::fs::create_dir_all(&p)
-        .map_err(|e| format!("目录不可用（{}）：{}", p.display(), e))?;
+    std::fs::create_dir_all(&p).map_err(|e| format!("目录不可用（{}）：{}", p.display(), e))?;
     let canonical = canonical_normalized(&p);
 
     // 与个人知识库根比对：基础目录本身、以及其下的 enclave/files 都不能与个人库重叠
@@ -220,8 +219,8 @@ fn save_base(conn: &Connection, base: &Path) -> Result<(), String> {
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| format!("读取文件失败（{}）：{}", path.display(), e))?;
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("读取文件失败（{}）：{}", path.display(), e))?;
     Ok(hex_sha256(&bytes))
 }
 
@@ -275,7 +274,9 @@ pub fn attach_file(
     src_path: &str,
     report_id: Option<&str>,
 ) -> Result<FileAssetView, String> {
-    attach_file_inner(conn, org_id, actor, task_id, src_path, report_id, None, false)
+    attach_file_inner(
+        conn, org_id, actor, task_id, src_path, report_id, None, false,
+    )
 }
 
 /// 过程记录创建时随记录写入附件（内部入口，提交后不可再调用）。
@@ -453,7 +454,11 @@ fn attach_file_inner(
         }
         conn.execute(
             "UPDATE task_comments SET attachments = ?2, updated_at = ?3 WHERE id = ?1",
-            params![pid, serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()), now],
+            params![
+                pid,
+                serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()),
+                now
+            ],
         )
         .map_err(|e| format!("更新过程记录附件失败：{}", e))?;
     }
@@ -567,8 +572,10 @@ pub fn detach_file(
             )
             .optional()
             .map_err(|e| format!("查询文件挂载失败：{}", e))?;
-        let can = matches!(role, crate::enclave::tasks::TaskRole::Creator | crate::enclave::tasks::TaskRole::Assignee)
-            || uploaded_by.as_deref() == Some(actor);
+        let can = matches!(
+            role,
+            crate::enclave::tasks::TaskRole::Creator | crate::enclave::tasks::TaskRole::Assignee
+        ) || uploaded_by.as_deref() == Some(actor);
         if !can {
             return Err("只有上传者、创建者或负责人可以删除任务资料".to_string());
         }
@@ -856,11 +863,7 @@ pub struct FileMetaView {
 }
 
 /// 读取文件资产元信息（含主机本地绝对路径，仅主机内部使用）。
-pub fn file_meta(
-    conn: &Connection,
-    org_id: &str,
-    file_id: &str,
-) -> Result<FileMetaView, String> {
+pub fn file_meta(conn: &Connection, org_id: &str, file_id: &str) -> Result<FileMetaView, String> {
     let row: Option<(String, String, i64, String)> = conn
         .query_row(
             "SELECT file_name, file_hash, file_size, file_path FROM file_assets
@@ -876,7 +879,10 @@ pub fn file_meta(
         file_name,
         file_hash,
         file_size,
-        abs_path: org_dir(conn, org_id)?.join(rel).to_string_lossy().to_string(),
+        abs_path: org_dir(conn, org_id)?
+            .join(rel)
+            .to_string_lossy()
+            .to_string(),
     })
 }
 
@@ -913,11 +919,7 @@ pub fn attach_bytes(
 }
 
 /// 文件的绝对路径（供「打开」用）。
-pub fn file_abs_path(
-    conn: &Connection,
-    org_id: &str,
-    file_id: &str,
-) -> Result<String, String> {
+pub fn file_abs_path(conn: &Connection, org_id: &str, file_id: &str) -> Result<String, String> {
     let rel: Option<String> = conn
         .query_row(
             "SELECT file_path FROM file_assets
@@ -928,7 +930,10 @@ pub fn file_abs_path(
         .optional()
         .map_err(|e| format!("查询文件失败：{}", e))?;
     let rel = rel.ok_or_else(|| "文件不存在或不属于该组织".to_string())?;
-    Ok(org_dir(conn, org_id)?.join(rel).to_string_lossy().to_string())
+    Ok(org_dir(conn, org_id)?
+        .join(rel)
+        .to_string_lossy()
+        .to_string())
 }
 
 #[cfg(test)]
@@ -967,7 +972,9 @@ mod tests {
         .unwrap();
         // 未设置 → 应用根目录下的 enclave/files
         let default_root = resolve_team_files_root(&conn).unwrap();
-        assert!(default_root.ends_with("enclave\\files") || default_root.ends_with("enclave/files"));
+        assert!(
+            default_root.ends_with("enclave\\files") || default_root.ends_with("enclave/files")
+        );
 
         conn.execute(
             "INSERT INTO enclave_settings (key, value, updated_at) VALUES (?1, ?2, 0)",

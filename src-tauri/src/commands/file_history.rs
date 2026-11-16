@@ -46,6 +46,9 @@ pub fn record_file_change(
     if backup_content.len() > MAX_BACKUP_BYTES {
         return;
     }
+    let file_path = crate::utils::paths::normalize_absolute_path(file_path, "")
+        .to_string_lossy()
+        .to_string();
     if let Ok(conn) = pool.get() {
         let now = crate::utils::now();
         let _ = conn.execute(

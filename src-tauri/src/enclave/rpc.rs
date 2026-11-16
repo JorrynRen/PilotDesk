@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{files, knowledge, progress, reports, stats, tasks};
+use super::{api_share, files, knowledge, messenger, progress, reports, stats, tasks};
 
 fn to_value<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| format!("序列化主机响应失败：{}", e))
@@ -136,18 +136,16 @@ pub fn dispatch(
             to_value(tasks::get_task(conn, org_id, &task_id, actor)?)
         }
         "task.create" => {
-            let input: tasks::CreateTaskInput = serde_json::from_value(
-                payload.get("input").cloned().unwrap_or(Value::Null),
-            )
-            .map_err(|e| format!("任务参数不正确：{}", e))?;
+            let input: tasks::CreateTaskInput =
+                serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("任务参数不正确：{}", e))?;
             to_value(tasks::create_task(conn, org_id, actor, &input)?)
         }
         "task.update" => {
             let task_id = req_str(payload, "taskId")?;
-            let input: tasks::UpdateTaskInput = serde_json::from_value(
-                payload.get("input").cloned().unwrap_or(Value::Null),
-            )
-            .map_err(|e| format!("任务参数不正确：{}", e))?;
+            let input: tasks::UpdateTaskInput =
+                serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("任务参数不正确：{}", e))?;
             to_value(tasks::update_task(conn, org_id, actor, &task_id, &input)?)
         }
         "task.set_status" => {
@@ -169,13 +167,7 @@ pub fn dispatch(
         "task.set_deps" => {
             let task_id = req_str(payload, "taskId")?;
             let blocked_by = str_vec(payload, "blockedBy");
-            to_value(tasks::set_deps(
-                conn,
-                org_id,
-                actor,
-                &task_id,
-                &blocked_by,
-            )?)
+            to_value(tasks::set_deps(conn, org_id, actor, &task_id, &blocked_by)?)
         }
         "task.deps_preview" => {
             let task_id = req_str(payload, "taskId")?;
@@ -193,8 +185,7 @@ pub fn dispatch(
                 let path = super::host::resolve_upload_token(org_id, actor, token)?;
                 paths.push(path.to_string_lossy().to_string());
             }
-            let result =
-                progress::add_progress(conn, org_id, actor, &task_id, &content, &paths);
+            let result = progress::add_progress(conn, org_id, actor, &task_id, &content, &paths);
             for path in &paths {
                 let _ = std::fs::remove_file(path);
             }
@@ -284,22 +275,14 @@ pub fn dispatch(
             let task_id = req_str(payload, "taskId")?;
             let report_id = req_str(payload, "reportId")?;
             to_value(reports::revise_report(
-                conn,
-                org_id,
-                actor,
-                &task_id,
-                &report_id,
+                conn, org_id, actor, &task_id, &report_id,
             )?)
         }
         "report.confirm" => {
             let task_id = req_str(payload, "taskId")?;
             let report_id = req_str(payload, "reportId")?;
             to_value(reports::confirm_report(
-                conn,
-                org_id,
-                actor,
-                &task_id,
-                &report_id,
+                conn, org_id, actor, &task_id, &report_id,
             )?)
         }
         "report.return" => {
@@ -307,12 +290,7 @@ pub fn dispatch(
             let report_id = req_str(payload, "reportId")?;
             let reason = req_str(payload, "reason")?;
             to_value(reports::return_report(
-                conn,
-                org_id,
-                actor,
-                &task_id,
-                &report_id,
-                &reason,
+                conn, org_id, actor, &task_id, &report_id, &reason,
             )?)
         }
         "report.feedback_list" => {
@@ -393,7 +371,11 @@ pub fn dispatch(
             let kb_id = req_str(payload, "kbId")?;
             let source_ref = req_str(payload, "sourceRef")?;
             let body = payload.get("payload").cloned().unwrap_or(Value::Null);
-            let kind = if command == "kb.ingest.snippet" { "snippet" } else { "url" };
+            let kind = if command == "kb.ingest.snippet" {
+                "snippet"
+            } else {
+                "url"
+            };
             let queue_id = knowledge::enqueue_ingest(
                 conn,
                 org_id,
@@ -425,8 +407,7 @@ pub fn dispatch(
             let id = req_str(payload, "queueId")?;
             let row = knowledge::get_ingest(conn, org_id, &id)?;
             let p: Value = serde_json::from_str(&row.payload).unwrap_or(Value::Null);
-            let (title, content, _) =
-                knowledge::manual_ingest_text(conn, org_id, &row.kind, &p)?;
+            let (title, content, _) = knowledge::manual_ingest_text(conn, org_id, &row.kind, &p)?;
             to_value(serde_json::json!({ "title": title, "content": content }))
         }
         // 手工整理第二步：用户确认（可改标题/正文/标签，补专属属性）后写入组织库
@@ -439,14 +420,7 @@ pub fn dispatch(
             let fields = fields_value(payload)?;
             let row = knowledge::get_ingest(conn, org_id, &id)?;
             knowledge::commit_manual_ingest(
-                conn,
-                org_id,
-                &row,
-                &title,
-                &content,
-                &tags,
-                &fields,
-                actor,
+                conn, org_id, &row, &title, &content, &tags, &fields, actor,
             )?;
             to_value(serde_json::json!({
                 "queued": false,
@@ -490,15 +464,7 @@ pub fn dispatch(
             let metadata = opt_str(payload, "metadata").unwrap_or_default();
             let origin = opt_str(payload, "origin").unwrap_or_else(|| "ai".to_string());
             to_value(knowledge::add_candidate(
-                conn,
-                org_id,
-                &kb_id,
-                actor,
-                &title,
-                &content,
-                &tags,
-                &metadata,
-                &origin,
+                conn, org_id, &kb_id, actor, &title, &content, &tags, &metadata, &origin,
             )?)
         }
         "kb.candidate.list" => {
@@ -597,15 +563,7 @@ pub fn dispatch(
             let tags = opt_str(payload, "tags").unwrap_or_default();
             let fields = fields_value(payload)?;
             to_value(knowledge::update_entry(
-                conn,
-                org_id,
-                &kb_id,
-                &memory_id,
-                &title,
-                &content,
-                &tags,
-                &fields,
-                actor,
+                conn, org_id, &kb_id, &memory_id, &title, &content, &tags, &fields, actor,
             )?)
         }
         "kb.entry_remove" => {
@@ -620,7 +578,9 @@ pub fn dispatch(
             // 可选分页：成员端「加载更多」带 limit/offset；不带时保持整库口径
             let limit = payload.get("limit").and_then(|v| v.as_i64());
             let offset = payload.get("offset").and_then(|v| v.as_i64());
-            to_value(knowledge::list_files_page(conn, org_id, &kb_id, limit, offset)?)
+            to_value(knowledge::list_files_page(
+                conn, org_id, &kb_id, limit, offset,
+            )?)
         }
         // 文件之间的关系（正文—附件 / 新版—旧版）：读成员可看，写仅 owner / admin
         "kb.file_relations" => {
@@ -673,6 +633,184 @@ pub fn dispatch(
         "kb.orphan_cleanup" => {
             require_kb_edit(conn, org_id, actor)?;
             to_value(files::cleanup_orphan_files(conn, org_id)?)
+        }
+
+        // ── API 共享（Provider 原始密钥不进入成员命令）────────────────
+        "api_share.sources" => to_value(api_share::list_sources(conn, org_id, actor)?),
+        "api_share.members" => to_value(api_share::list_member_access(conn, org_id, actor)?),
+        "api_share.member_block" => {
+            let user_id = req_str(payload, "userId")?;
+            let reason = opt_str(payload, "reason").unwrap_or_default();
+            to_value(api_share::block_member(
+                conn, org_id, actor, &user_id, &reason,
+            )?)
+        }
+        "api_share.member_unblock" => {
+            let user_id = req_str(payload, "userId")?;
+            to_value(api_share::unblock_member(conn, org_id, actor, &user_id)?)
+        }
+        "api_share.source_create" => {
+            let input: api_share::CreateApiShareSourceInput =
+                serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("API 共享参数不正确：{}", e))?;
+            to_value(api_share::create_source(conn, org_id, actor, &input)?)
+        }
+        "api_share.source_update" => {
+            let source_id = req_str(payload, "sourceId")?;
+            let input: api_share::UpdateApiShareSourceInput =
+                serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("API 共享参数不正确：{}", e))?;
+            to_value(api_share::update_source(
+                conn, org_id, actor, &source_id, &input,
+            )?)
+        }
+        "api_share.source_delete" => {
+            let source_id = req_str(payload, "sourceId")?;
+            api_share::delete_source(conn, org_id, actor, &source_id)?;
+            Ok(serde_json::json!({ "deleted": true }))
+        }
+        "api_share.tokens" => to_value(api_share::list_tokens(conn, org_id, actor)?),
+        "api_share.token_secret" => {
+            let token_id = req_str(payload, "tokenId")?;
+            to_value(api_share::token_secret(conn, org_id, actor, &token_id)?)
+        }
+        "api_share.token_revoke" => {
+            let token_id = req_str(payload, "tokenId")?;
+            api_share::revoke_token(conn, org_id, actor, &token_id)?;
+            Ok(serde_json::json!({ "revoked": true }))
+        }
+        "api_share.token_archive" => {
+            let token_id = req_str(payload, "tokenId")?;
+            to_value(api_share::archive_token(conn, org_id, actor, &token_id)?)
+        }
+        "api_share.token_delete" => {
+            let token_id = req_str(payload, "tokenId")?;
+            api_share::delete_token(conn, org_id, actor, &token_id)?;
+            Ok(serde_json::json!({ "deleted": true }))
+        }
+        "api_share.usage" => {
+            let source_id = opt_str(payload, "sourceId");
+            let token_id = opt_str(payload, "tokenId");
+            let from_day = opt_str(payload, "fromDay");
+            let to_day = opt_str(payload, "toDay");
+            to_value(api_share::usage(
+                conn,
+                org_id,
+                actor,
+                source_id.as_deref(),
+                token_id.as_deref(),
+                from_day.as_deref(),
+                to_day.as_deref(),
+            )?)
+        }
+        "api_share.distributions" => to_value(api_share::list_distributions(conn, org_id, actor)?),
+        "api_share.distribution_create" => {
+            let input: api_share::CreateApiShareDistributionInput =
+                serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("API 共享分发参数不正确：{}", e))?;
+            to_value(api_share::create_distributions(
+                conn, org_id, actor, &input,
+            )?)
+        }
+        "api_share.distribution_mark_sent" => {
+            let distribution_id = req_str(payload, "distributionId")?;
+            let message_id = req_str(payload, "messageId")?;
+            to_value(api_share::mark_distribution_sent(
+                conn,
+                org_id,
+                actor,
+                &distribution_id,
+                &message_id,
+            )?)
+        }
+        "api_share.distribution_revoke" => {
+            let distribution_id = req_str(payload, "distributionId")?;
+            api_share::revoke_distribution(conn, org_id, actor, &distribution_id)?;
+            Ok(serde_json::json!({ "revoked": true }))
+        }
+        "api_share.distribution_archive" => {
+            let distribution_id = req_str(payload, "distributionId")?;
+            to_value(api_share::archive_distribution(
+                conn,
+                org_id,
+                actor,
+                &distribution_id,
+            )?)
+        }
+        "api_share.distribution_delete" => {
+            let distribution_id = req_str(payload, "distributionId")?;
+            api_share::delete_distribution(conn, org_id, actor, &distribution_id)?;
+            Ok(serde_json::json!({ "deleted": true }))
+        }
+        "api_share.distribution_mark_applied" => {
+            let distribution_id = req_str(payload, "distributionId")?;
+            to_value(api_share::mark_distribution_applied(
+                conn,
+                org_id,
+                actor,
+                &distribution_id,
+            )?)
+        }
+
+        // ── 一对一传讯 ─────────────────────────────────────────────
+        "im.settings_get" => to_value(messenger::settings(conn, org_id, actor)?),
+        "im.retention_set" => {
+            let days = payload
+                .get("days")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| "缺少参数：days".to_string())?;
+            to_value(messenger::set_retention(conn, org_id, actor, days)?)
+        }
+        "im.messages" => {
+            let peer_id = req_str(payload, "peerId")?;
+            let limit = payload
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize);
+            to_value(messenger::list_messages(
+                conn, org_id, actor, &peer_id, limit,
+            )?)
+        }
+        "im.send" => {
+            let input: messenger::SendMessageInput =
+                serde_json::from_value(payload.get("input").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("传讯参数不正确：{}", e))?;
+            to_value(messenger::send(conn, org_id, actor, &input)?)
+        }
+        "im.send_file" => {
+            let peer_id = req_str(payload, "peerId")?;
+            let file_name = opt_str(payload, "fileName").unwrap_or_else(|| "file".to_string());
+            let mime = opt_str(payload, "mime").unwrap_or_default();
+            let data_base64 = req_str(payload, "dataBase64")?;
+            to_value(messenger::send_file(
+                conn,
+                org_id,
+                actor,
+                &peer_id,
+                &file_name,
+                &mime,
+                &data_base64,
+            )?)
+        }
+        "im.file_get" => {
+            let file_id = req_str(payload, "fileId")?;
+            to_value(messenger::get_ephemeral_file(org_id, actor, &file_id)?)
+        }
+        "im.recall" => {
+            let message_id = req_str(payload, "messageId")?;
+            let peer_id = req_str(payload, "peerId")?;
+            to_value(messenger::recall(
+                conn,
+                org_id,
+                actor,
+                &peer_id,
+                &message_id,
+            )?)
+        }
+        "im.clear" => {
+            let peer_id = req_str(payload, "peerId")?;
+            let removed = messenger::clear_thread(conn, org_id, actor, &peer_id)?;
+            Ok(serde_json::json!({ "removed": removed }))
         }
 
         other => Err(format!("未知的飞地命令：{}", other)),

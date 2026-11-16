@@ -59,7 +59,12 @@ impl ToolHandler for ExecuteCommandTool {
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
         let command = arguments["command"].as_str().ok_or("缺少 command 参数")?;
-        let cwd = arguments["cwd"].as_str().unwrap_or(&self.cwd);
-        run_command(cwd, command).await
+        let cwd = arguments["cwd"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&self.cwd);
+        let cwd = crate::utils::paths::normalize_absolute_path(cwd, &self.cwd);
+        run_command(&cwd.to_string_lossy(), command).await
     }
 }

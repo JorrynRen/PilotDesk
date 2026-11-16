@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, LayoutTemplate, ScrollText, Play, Loader2, Square, Share2, Building2, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Workflow as WorkflowIcon, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, LayoutTemplate, ScrollText, Play, Loader2, Square, Share2, Building2, RotateCcw, MoreHorizontal, FolderKanban, Lock, ArrowRight, Laptop, Wifi, WifiOff } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -8,7 +9,12 @@ import { showToast, showLiveToastOnce } from '../utils/toast';
 import { buildImportMemberMessage } from '../utils/workflowImport';
 import type { ImportMemberOutcome } from '../utils/workflowImport';
 import { confirmDialog } from '../stores/confirmStore';
-import { useAccountStore } from '../stores/accountStore';
+import {
+  CAP_WORKFLOW_REMOTE_RUN,
+  CAP_TEAM_SHARED_SPACE,
+  hasCapability,
+  useAccountStore,
+} from '../stores/accountStore';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -21,27 +27,31 @@ import type { NodeExecRow } from '../components/workflow/WorkflowNodeTimeline';
 import { ExecutionStats } from '../components/workflow/ExecutionStats';
 import { Select } from '../components/common/Select';
 import { PageToolbar, type ToolbarAction } from '../components/common/PageToolbar';
+import { ConversionDialogShell } from '../components/common/ConversionDialogShell';
+import {
+  PROJECT_FILTER_ALL,
+  PROJECT_FILTER_UNASSIGNED,
+  ProjectBadge,
+  ProjectFilter,
+  ProjectMembershipDialog,
+} from '../components/project/ProjectPicker';
 import type { WorkflowDefinition, WorkflowInstance, ExecutionProgressPayload } from '../types/workflow';
 import type { JsonValue } from '../types/plugin';
 import { useCommandCenterStore } from '../stores/commandCenterStore';
 import { errorMessage } from '../utils/errorMessage';
+import { useProjectStore } from '../stores/projectStore';
+import { subscribeProjectCreation, useProjectCreationStore } from '../stores/projectCreationStore';
+import type { ProjectCreateContext } from '../types/project';
+import {
+  canManageOrganization,
+  orgSupportsSharedSpace,
+  type OrganizationSummary as MyOrg,
+} from '../utils/orgSharedSpace';
 
 interface WorkflowPageProps {
   onBack?: () => void;
   /** 嵌入主布局模式：不渲染自身 TitleBar/StatusBar（由外层提供） */
   embedded?: boolean;
-}
-
-/** 组织共享空间：我所属组织（与 Rust `org_list_mine` 返回对齐） */
-interface MyOrg {
-  id: number;
-  name: string;
-  role: string;
-  planKey: string;
-  planExpiresAt: string | null;
-  seats: number;
-  memberCount: number;
-  status: string;
 }
 
 /** 组织的共享工作流列表项（与 Rust `org_list_shared_workflows` 返回对齐，不含 payload） */
@@ -67,6 +77,38 @@ interface ShareWorkflowOutcome {
     revision: number;
     updatedAt: string;
   };
+}
+
+function TeamShareLock({
+  organizationName,
+  canManage = true,
+  onUpgrade,
+}: {
+  organizationName?: string;
+  canManage?: boolean;
+  onUpgrade: () => void;
+}) {
+  return (
+    <div className="pd-team-share-lock">
+      <span className="pd-team-share-lock-icon" aria-hidden>
+        <Lock size={13} />
+      </span>
+      <div className="pd-team-share-lock-copy">
+        <div className="pd-team-share-lock-title">团队共享空间需要团队版</div>
+        <p className="pd-team-share-lock-description">
+          {!canManage
+            ? `“${organizationName || '当前组织'}”当前档位不含共享空间。请联系组织所有者或管理员为组织开通团队版。`
+            : organizationName
+              ? `“${organizationName}”当前档位不含共享空间。为组织开通团队版后，成员可共享与导入工作流。`
+              : '为组织开通团队版后，成员可共享与导入工作流，并保留版本与更新记录。'}
+        </p>
+      </div>
+      <button type="button" className="pd-btn pd-team-share-lock-action" onClick={onUpgrade}>
+        {canManage ? '为组织开通团队版' : '查看组织订阅'}
+        <ArrowRight size={11} />
+      </button>
+    </div>
+  );
 }
 
 /** 回收站条目（与 Rust `list_deleted_workflows` 返回对齐） */
@@ -191,23 +233,391 @@ function formatElapsed(startedAt?: number | null): string {
   return `${Math.floor(mins / 60)}h${mins % 60}m`;
 }
 
+interface DefinitionMoreMenuProps {
+  hasResult: boolean;
+  canRemoteRun: boolean;
+  onViewResult: () => void;
+  onRemoteRun: () => void;
+  onExport: () => void;
+  onShare: () => void;
+  onProject: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}
+
+/**
+ * 工作流定义卡片的管理菜单。
+ *
+ * 卡片本身用于进入编辑器，因此菜单必须阻止点击冒泡；菜单用 portal + fixed 定位，
+ * 避免被列表滚动容器裁切。运行/停止与编辑属性保留在卡片上，其余低频管理动作收在这里。
+ */
+function DefinitionMoreMenu({
+  hasResult,
+  canRemoteRun,
+  onViewResult,
+  onRemoteRun,
+  onExport,
+  onShare,
+  onProject,
+  onDuplicate,
+  onDelete,
+}: DefinitionMoreMenuProps) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const closeMenu = () => setOpen(false);
+
+  const toggleMenu = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (open) {
+      closeMenu();
+      return;
+    }
+
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = 184;
+    const estimatedHeight = (hasResult ? 248 : 216) + (canRemoteRun ? 34 : 0);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const top = spaceBelow >= estimatedHeight + 8
+      ? rect.bottom + 4
+      : Math.max(8, rect.top - estimatedHeight - 4);
+    const left = Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8));
+    setPosition({ top, left });
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      closeMenu();
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+    const closeOnViewportChange = () => closeMenu();
+
+    document.addEventListener('mousedown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('resize', closeOnViewportChange);
+    window.addEventListener('scroll', closeOnViewportChange, true);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('resize', closeOnViewportChange);
+      window.removeEventListener('scroll', closeOnViewportChange, true);
+    };
+  }, [open]);
+
+  const runAction = (action: () => void) => {
+    closeMenu();
+    action();
+  };
+
+  const menuItem = (
+    key: string,
+    label: string,
+    icon: ReactNode,
+    action: () => void,
+    danger = false,
+  ) => (
+    <button
+      key={key}
+      type="button"
+      role="menuitem"
+      onClick={() => runAction(action)}
+      className="pd-menu-item"
+      data-tone={danger ? 'danger' : undefined}
+    >
+      <span className="shrink-0 flex items-center">{icon}</span>
+      <span className="flex-1">{label}</span>
+    </button>
+  );
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggleMenu}
+        className="pd-btn p-1.5 rounded hover:opacity-80"
+        style={{
+          color: open ? 'var(--accent)' : 'var(--text-secondary)',
+          backgroundColor: open ? 'var(--accent-light)' : 'transparent',
+        }}
+        title="更多操作"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <MoreHorizontal size={14} />
+      </button>
+
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label="工作流操作"
+          className="pd-menu fixed z-[90]"
+          style={{
+            top: position.top,
+            left: position.left,
+            width: 184,
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {hasResult && menuItem('result', '查看最近执行结果', <ScrollText size={13} />, onViewResult)}
+          {canRemoteRun && menuItem('remote-run', '远程发起', <Laptop size={13} />, onRemoteRun)}
+          {menuItem('duplicate', '复制工作流', <Copy size={13} />, onDuplicate)}
+          {menuItem('project', '项目归属', <FolderKanban size={13} />, onProject)}
+          {menuItem('share', '共享到组织', <Share2 size={13} />, onShare)}
+          {menuItem('export', '导出', <Upload size={13} />, onExport)}
+          <div className="pd-menu-separator" role="separator" />
+          {menuItem('delete', '删除', <Trash2 size={13} />, onDelete, true)}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+interface RemoteDeviceView {
+  registered: boolean;
+  id: number | null;
+  name: string;
+  platform: string;
+  appVersion: string;
+  online: boolean;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+  currentDevice: boolean;
+}
+
+function RemoteRunDialog({
+  definition,
+  onClose,
+}: {
+  definition: WorkflowDefinition;
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  const [devices, setDevices] = useState<RemoteDeviceView[] | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const requiredWithoutDefault = Object.entries(definition.inputSchema ?? {})
+    .filter(([, field]) => field.required && !Object.prototype.hasOwnProperty.call(field, 'default'))
+    .map(([name]) => name);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const result = await invoke<RemoteDeviceView[]>('remote_devices_list');
+        if (!alive) return;
+        setDevices(result);
+        const first = result.find(
+          (device) =>
+            device.registered &&
+            device.id !== null &&
+            !device.revokedAt &&
+            device.online &&
+            !device.currentDevice,
+        );
+        setSelectedDeviceId(first?.id ?? null);
+      } catch (err) {
+        if (alive) setError(errorMessage(err));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const eligibleDevices = (devices ?? []).filter(
+    (device) =>
+      device.registered &&
+      device.id !== null &&
+      !device.revokedAt &&
+      device.online &&
+      !device.currentDevice,
+  );
+
+  const handleRemoteRun = async () => {
+    if (selectedDeviceId === null || requiredWithoutDefault.length > 0) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await invoke('remote_run_create', {
+        deviceId: selectedDeviceId,
+        workflowKey: definition.id,
+      });
+      showToast(`已向目标设备发起「${definition.name}」`, 'success');
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ConversionDialogShell
+      icon={<Laptop size={18} />}
+      kicker="专业版 · 远程发起"
+      title={`远程发起「${definition.name}」`}
+      description="选择一台已登记且在线的设备。云端只传递工作流标识与执行状态，执行过程、日志和产物留在目标设备。"
+      size="compact"
+      busy={submitting}
+      onClose={onClose}
+      footer={
+        <>
+          <span className="pd-org-import-footnote">
+            {requiredWithoutDefault.length > 0
+              ? `该工作流包含必填参数：${requiredWithoutDefault.join('、')}`
+              : selectedDeviceId === null
+                ? '请选择一台在线设备'
+                : '发起后可在「设置 · 个人云同步」查看状态'}
+          </span>
+          <span className="pd-org-import-footer-spacer" />
+          <button type="button" className="pd-btn" disabled={submitting} onClick={onClose}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="pd-btn pd-btn-primary"
+            disabled={submitting || selectedDeviceId === null || requiredWithoutDefault.length > 0}
+            onClick={() => void handleRemoteRun()}
+          >
+            {submitting ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+            {submitting ? '发起中…' : '发起执行'}
+          </button>
+        </>
+      }
+    >
+      {requiredWithoutDefault.length > 0 && (
+        <div className="pd-conversion-error" role="alert">
+          远程发起暂不支持填写工作流入参。请先在本地手动运行，或为必填参数设置默认值。
+        </div>
+      )}
+
+      <div className="pd-org-import-field">
+        <div className="pd-org-import-label">目标设备</div>
+        {loading ? (
+          <div className="pd-org-import-loading">
+            <Loader2 size={13} className="animate-spin" />
+            正在读取在线设备…
+          </div>
+        ) : error && devices === null ? (
+          <div className="pd-conversion-error" role="alert">
+            <div>{error}</div>
+            <button
+              type="button"
+              className="pd-btn mt-2"
+              onClick={() => {
+                onClose();
+                navigate('/settings?tab=cloudsync');
+              }}
+            >
+              检查远程设备设置
+            </button>
+          </div>
+        ) : eligibleDevices.length === 0 ? (
+          <div className="pd-org-import-empty pd-org-import-empty-org">
+            {devices?.some((device) => device.currentDevice && device.registered) ? <WifiOff size={18} /> : <Laptop size={18} />}
+            <div>
+              <strong>没有可用的目标设备</strong>
+              <span>请先在另一台设备登记为远程执行节点并保持在线。</span>
+            </div>
+            <button
+              type="button"
+              className="pd-btn"
+              onClick={() => {
+                onClose();
+                navigate('/settings?tab=cloudsync');
+              }}
+            >
+              管理远程设备
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {eligibleDevices.map((device) => {
+              const selected = selectedDeviceId === device.id;
+              return (
+                <button
+                  key={device.id}
+                  type="button"
+                  onClick={() => setSelectedDeviceId(device.id)}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left"
+                  style={{
+                    background: selected ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                    border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  <span
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
+                    style={{ background: 'var(--bg-secondary)', color: selected ? 'var(--accent)' : 'var(--text-secondary)' }}
+                  >
+                    <Laptop size={15} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium">{device.name}</span>
+                    <span className="mt-0.5 block text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      {device.platform} · PilotDesk {device.appVersion}
+                      {device.lastSeenAt ? ` · ${new Date(device.lastSeenAt).toLocaleString('zh-CN')}` : ''}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1 text-[10px]" style={{ color: 'var(--status-success)' }}>
+                    <Wifi size={11} /> 在线
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {error && eligibleDevices.length > 0 && (
+        <div className="pd-conversion-error" role="alert">{error}</div>
+      )}
+    </ConversionDialogShell>
+  );
+}
+
 export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const navigate = useNavigate();
   const { definitions, instances, schedules, pendingInputs, pendingApprovals, loading, error, loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals, createDefinition, updateDefinition, deleteDefinition, deleteExecutions, selectDefinition } = useWorkflowStore();
+  const account = useAccountStore((state) => state.account);
+  const canRemoteRun = hasCapability(account, CAP_WORKFLOW_REMOTE_RUN);
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats'>('definitions');
   const [showPropertyDialog, setShowPropertyDialog] = useState<'create' | 'edit' | null>(null);
   const [editingDef, setEditingDef] = useState<WorkflowDefinition | null>(null);
+  const [projectCreateSeed, setProjectCreateSeed] = useState<ProjectCreateContext | null>(null);
   /** 「查看结果」抽屉：直接给最近一次产出，省去跳实例页再翻记录 */
   const [resultDefId, setResultDefId] = useState<string | null>(null);
   /** 列表页「运行」：正在启动中的定义（按钮转圈）与待收参数的入参表单 */
   const [runningDefId, setRunningDefId] = useState<string | null>(null);
   const [stoppingDefId, setStoppingDefId] = useState<string | null>(null);
   const [inputDialogDef, setInputDialogDef] = useState<WorkflowDefinition | null>(null);
+  const [remoteRunDef, setRemoteRunDef] = useState<WorkflowDefinition | null>(null);
   /** 抽屉里那次执行的逐节点记录（事件派生：node/start + node/status + node/result） */
   const [nodeExecs, setNodeExecs] = useState<NodeExecRow[]>([]);
   const [nodeExecsLoading, setNodeExecsLoading] = useState(false);
   const [nodeExecsError, setNodeExecsError] = useState<string | null>(null);
-  /** 待审批（不含失效的）+ 待人工输入 = 待处理入口上的计数（与指挥中心同一口径） */
+  /** 待审批（不含失效的）+ 待人工输入 = 待处理入口上的计数（与顶栏同一口径） */
   const pendingCount = pendingApprovals.filter((a) => !a.stale).length + pendingInputs.length;
   /** 批量导出弹窗：选中的工作流 id 集合 + 导出中标记 */
   const [showBatchExport, setShowBatchExport] = useState(false);
@@ -222,8 +632,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const [recycleBusy, setRecycleBusy] = useState(false);
 
   // ---- 组织共享空间（团队版）：共享到组织 / 从组织导入 ----
-  /** 平台账号（null = 未登录）：用于未登录时的前置提示 */
-  const account = useAccountStore((s) => s.account);
+  const openOrganization = useAccountStore((s) => s.openOrganization);
   /** 「共享到组织」弹窗：目标工作流 + 组织列表 + 共享名称 */
   const [shareTarget, setShareTarget] = useState<WorkflowDefinition | null>(null);
   const [shareOrgs, setShareOrgs] = useState<MyOrg[] | null>(null);
@@ -248,8 +657,10 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const [defFilterKeyword, setDefFilterKeyword] = useState<string>('');
   const [defFilterEnabled, setDefFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [defFilterTrigger, setDefFilterTrigger] = useState<'all' | 'manual' | 'cron' | 'event'>('all');
+  const [defFilterProject, setDefFilterProject] = useState(PROJECT_FILTER_ALL);
   const [defSortKey, setDefSortKey] = useState<'updatedAt' | 'createdAt' | 'name' | 'stages'>('updatedAt');
   const [defSortAsc, setDefSortAsc] = useState<boolean>(false);
+  const [membershipDef, setMembershipDef] = useState<WorkflowDefinition | null>(null);
 
   const DEFINITION_TRIGGER_OPTIONS: Array<{ key: typeof defFilterTrigger; label: string }> = [
     { key: 'all', label: '全部触发' },
@@ -259,7 +670,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   ];
 
   const DEFINITION_ENABLED_OPTIONS: Array<{ key: typeof defFilterEnabled; label: string; color: string }> = [
-    { key: 'all', label: '全部', color: 'var(--text-secondary)' },
+    { key: 'all', label: '全部状态', color: 'var(--text-secondary)' },
     { key: 'enabled', label: '已启用', color: '#22c55e' },
     { key: 'disabled', label: '已禁用', color: '#6B7280' },
   ];
@@ -275,6 +686,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     defFilterKeyword.trim() !== '' ||
     defFilterEnabled !== 'all' ||
     defFilterTrigger !== 'all' ||
+    defFilterProject !== PROJECT_FILTER_ALL ||
     defSortKey !== 'updatedAt' ||
     defSortAsc !== false;
 
@@ -282,9 +694,29 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     setDefFilterKeyword('');
     setDefFilterEnabled('all');
     setDefFilterTrigger('all');
+    setDefFilterProject(PROJECT_FILTER_ALL);
     setDefSortKey('updatedAt');
     setDefSortAsc(false);
   };
+
+  useEffect(() => subscribeProjectCreation('workflow', (context) => {
+    setEditingDef(null);
+    setProjectCreateSeed(context);
+    setShowPropertyDialog('create');
+  }), []);
+
+  const propertyInitial = useMemo<Partial<WorkflowDefinition> | undefined>(() => {
+    if (editingDef) return editingDef;
+    if (!projectCreateSeed) return undefined;
+    return {
+      name: `${projectCreateSeed.projectName} · 工作流`,
+      description: `由项目「${projectCreateSeed.projectName}」创建`,
+      version: '1.0.0',
+      trigger: { triggerType: 'manual' },
+      enabled: true,
+      projectId: projectCreateSeed.projectId,
+    };
+  }, [editingDef, projectCreateSeed]);
 
   // 每个 def 的实例数快速汇总（从 instances 计算）
   const defInstanceCounts = useMemo(() => {
@@ -361,6 +793,12 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
         const tt = def.trigger?.triggerType || 'manual';
         if (tt !== defFilterTrigger) return false;
       }
+      if (defFilterProject === PROJECT_FILTER_UNASSIGNED && def.projectId) return false;
+      if (
+        defFilterProject !== PROJECT_FILTER_ALL &&
+        defFilterProject !== PROJECT_FILTER_UNASSIGNED &&
+        def.projectId !== defFilterProject
+      ) return false;
       // 关键字（匹配名称、描述、版本号、定义ID）
       if (kw) {
         const haystack = [
@@ -391,12 +829,12 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     });
 
     return result;
-  }, [definitions, defFilterKeyword, defFilterEnabled, defFilterTrigger, defSortKey, defSortAsc]);
+  }, [definitions, defFilterKeyword, defFilterEnabled, defFilterTrigger, defFilterProject, defSortKey, defSortAsc]);
 
   // 筛选条件/排序变化时回到第 1 页：用「渲染期修正」（React adjust-during-render）而不是 effect ——
   // 在 effect 里同步 setState 会多一轮级联渲染，且 `react-hooks/set-state-in-effect` 会报。
   // 判据取各筛选态拼出的签名，变化即归零；本帧直接以第 1 页渲染，最终状态与原 effect 一致。
-  const defFilterSignature = `${defFilterKeyword}|${defFilterEnabled}|${defFilterTrigger}|${defSortKey}|${defSortAsc}`;
+  const defFilterSignature = `${defFilterKeyword}|${defFilterEnabled}|${defFilterTrigger}|${defFilterProject}|${defSortKey}|${defSortAsc}`;
   // 前值哨兵初值用 null（而非当帧签名）：筛选项在首帧就可能已有非默认值，
   // 用当帧值作初值会让判据第一帧就不成立，归零那次被静默丢掉。
   const [syncedFilterSignature, setSyncedFilterSignature] = useState<string | null>(null);
@@ -442,8 +880,8 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     // store 的 action 引用恒定（zustand 只创建一次），补进依赖后本 effect 仍等价于「挂载时跑一次」
   }, [loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals]);
 
-  const handleExportSingle = async (e: React.MouseEvent, id: string, name: string) => {
-    e.stopPropagation();
+  const handleExportSingle = async (e: React.MouseEvent | null, id: string, name: string) => {
+    e?.stopPropagation();
     try {
       const dirPath = await openDialog({
         directory: true,
@@ -533,19 +971,35 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   };
 
   const handleCreateAndEdit = () => {
+    useProjectCreationStore.getState().clear();
+    setProjectCreateSeed(null);
     setEditingDef(null);
     setShowPropertyDialog('create');
   };
 
   // ── 组织共享空间（团队版）──────────────────────────────────────
 
-  /** 「共享到组织…」：未登录先提示；否则拉取组织列表并打开弹窗 */
-  const handleOpenShareDialog = async (e: React.MouseEvent, def: WorkflowDefinition) => {
-    e.stopPropagation();
-    if (!account) {
-      showToast('请先登录平台账号', 'warning');
-      return;
+  /** 组织协作先确认登录；能力由所选组织决定，不再用个人账号能力提前拦截。 */
+  const ensureSignedIn = async (): Promise<boolean> => {
+    if (useAccountStore.getState().account) return true;
+    const ok = await confirmDialog({
+      title: '登录后使用团队协作',
+      message:
+        '登录后可选择所属组织。是否能共享工作流由该组织的订阅档位决定；个人账号无需重复购买团队版。',
+      confirmText: '登录',
+      cancelText: '稍后',
+      danger: false,
+    });
+    if (ok) {
+      await useAccountStore.getState().login();
     }
+    return false;
+  };
+
+  /** 「共享到组织…」：先登录并拉取组织列表，再按所选组织能力显示锁定或共享表单。 */
+  const handleOpenShareDialog = async (e: React.MouseEvent | null, def: WorkflowDefinition) => {
+    e?.stopPropagation();
+    if (!(await ensureSignedIn())) return;
     setShareTarget(def);
     setShareName(def.name);
     setShareOrgs(null);
@@ -616,6 +1070,8 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   /** 确认共享：调用后端生成导出 JSON 并 POST 到组织共享空间 */
   const handleConfirmShare = async () => {
     if (!shareTarget || !shareOrgId) return;
+    const selectedOrg = (shareOrgs ?? []).find((org) => String(org.id) === shareOrgId);
+    if (selectedOrg && !orgSupportsSharedSpace(selectedOrg)) return;
     setShareSubmitting(true);
     setShareError('');
     try {
@@ -643,12 +1099,9 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     }
   };
 
-  /** 「从组织导入…」：未登录先提示；否则拉取组织列表并打开弹窗 */
+  /** 「从组织导入…」：先确认登录，再拉取组织列表并按所选组织能力决定是否加载。 */
   const handleOpenImportOrgDialog = async () => {
-    if (!account) {
-      showToast('请先登录平台账号', 'warning');
-      return;
-    }
+    if (!(await ensureSignedIn())) return;
     setShowImportOrg(true);
     setImportOrgs(null);
     setImportOrgId('');
@@ -661,8 +1114,13 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
       if (orgs.length === 0) {
         showToast('你还没有加入任何组织', 'warning');
       } else {
-        setImportOrgId(String(orgs[0].id));
-        await loadOrgSharedWorkflows(orgs[0].id);
+        const firstOrg = orgs[0];
+        setImportOrgId(String(firstOrg.id));
+        if (orgSupportsSharedSpace(firstOrg)) {
+          await loadOrgSharedWorkflows(firstOrg.id);
+        } else {
+          setImportItems([]);
+        }
       }
     } catch (err) {
       setImportError(errorMessage(err));
@@ -672,6 +1130,8 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   /** 确认导入：取资源详情 → 后端新建本地工作流 → 刷新列表 */
   const handleImportFromOrg = async () => {
     if (!importOrgId || importItemId == null) return;
+    const selectedOrg = (importOrgs ?? []).find((org) => String(org.id) === importOrgId);
+    if (selectedOrg && !orgSupportsSharedSpace(selectedOrg)) return;
     setImportSubmitting(true);
     setImportError('');
     try {
@@ -702,8 +1162,15 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
 
   const handleEditProperties = (e: React.MouseEvent, def: WorkflowDefinition) => {
     e.stopPropagation();
+    useProjectCreationStore.getState().clear();
+    setProjectCreateSeed(null);
     setEditingDef(def);
     setShowPropertyDialog('edit');
+  };
+
+  const handleDefinitionProjectChanged = async () => {
+    await loadDefinitions();
+    await useProjectStore.getState().loadProjects();
   };
 
   const handlePropertyConfirm = async (data: {
@@ -712,11 +1179,11 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     version: string;
     trigger: { triggerType: 'manual' | 'cron' | 'event'; cron?: string };
     enabled: boolean;
-    icon?: string;
+    icon?: string | null;
+    projectId?: string;
     inputSchema?: Record<string, { type: string; description?: string; required?: boolean; default?: JsonValue }>;
     outputSchema?: Record<string, { type: string; description?: string }>;
   }) => {
-    setShowPropertyDialog(null);
     if (editingDef) {
       // Edit mode: update existing definition
       try {
@@ -726,12 +1193,18 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           version: data.version,
           trigger: data.trigger,
           enabled: data.enabled,
-          ...(data.icon !== undefined ? { icon: data.icon } : {}),
+          icon: data.icon ?? null,
+          projectId: data.projectId,
           ...(data.inputSchema !== undefined ? { inputSchema: data.inputSchema } : {}),
           ...(data.outputSchema !== undefined ? { outputSchema: data.outputSchema } : {}),
         });
+        useProjectCreationStore.getState().clear();
+        setProjectCreateSeed(null);
+        setShowPropertyDialog(null);
+        setEditingDef(null);
       } catch (err) {
         console.error('更新工作流属性失败:', err);
+        throw err;
       }
     } else {
       // Create mode: create and navigate to editor
@@ -741,14 +1214,20 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
       def.trigger = data.trigger;
       def.enabled = data.enabled;
       if (data.icon) def.icon = data.icon;
+      def.projectId = data.projectId;
       if (data.inputSchema) def.inputSchema = data.inputSchema;
       if (data.outputSchema) def.outputSchema = data.outputSchema;
       try {
         const id = await createDefinition(def);
+        useProjectCreationStore.getState().clear();
+        setProjectCreateSeed(null);
+        setShowPropertyDialog(null);
+        setEditingDef(null);
         selectDefinition(id);
         navigate(`/workflow/editor?id=${id}`);
       } catch (err) {
         console.error('创建工作流失败:', err);
+        throw err;
       }
     }
   };
@@ -1043,6 +1522,27 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     return () => clearInterval(timer);
   }, [runningByDef.size]);
 
+  const selectedShareOrg =
+    (shareOrgs ?? []).find((org) => String(org.id) === shareOrgId) ?? null;
+  const shareOrgLocked = Boolean(selectedShareOrg && !orgSupportsSharedSpace(selectedShareOrg));
+  const selectedImportOrg =
+    (importOrgs ?? []).find((org) => String(org.id) === importOrgId) ?? null;
+  const importOrgLocked = Boolean(selectedImportOrg && !orgSupportsSharedSpace(selectedImportOrg));
+  const shareCapabilityBlocked =
+    shareOrgLocked || /团队版|当前组织档位|能力/.test(shareError);
+  const importCapabilityBlocked =
+    importOrgLocked || /团队版|当前组织档位|能力/.test(importError);
+  const openOrganizationUpgrade = (
+    org: MyOrg | null,
+    source: 'workflow-share' | 'workflow-import',
+  ) => {
+    void openOrganization({
+      organizationId: org?.id,
+      capability: CAP_TEAM_SHARED_SPACE,
+      source,
+    });
+  };
+
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: embedded ? 'var(--bg-content)' : 'var(--bg-primary)' }}>
       {!embedded && (
@@ -1051,8 +1551,6 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           titleText="工作流管理"
           onBack={() => navigate('/')}
           onOpenSettings={() => navigate('/settings')}
-          onOpenMarket={() => navigate('/market')}
-          onOpenInspirations={() => navigate('/inspirations')}
         />
       )}
       {/* Tab navigation — 与设置页同一套UI。
@@ -1087,13 +1585,13 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
         <PageToolbar
           collapseAll
           actions={[
-            // 待处理入口：审批卡与人工输入统一在指挥中心就地处理（这里只做入口与计数）
+            // 待处理入口：审批卡与人工输入统一在运行与待办中就地处理（这里只做入口与计数）
             ...(pendingCount > 0
               ? ([
                   {
                     key: 'pending',
                     label: `待处理 ${pendingCount}`,
-                    title: '有待审批的工具调用或等待输入，点击到指挥中心处理',
+                    title: '有待审批的工具调用或等待输入，点击到运行与待办处理',
                     icon: <AlertTriangle size={14} />,
                     priority: 0,
                     alwaysVisible: true,
@@ -1179,119 +1677,52 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           <>
             {/* ── 工作流定义筛选工具栏 ── */}
             {definitions.length > 0 && (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                  padding: '10px 12px',
-                  marginBottom: 12,
-                  borderRadius: 6,
-                  backgroundColor: 'var(--bg-secondary)',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                {/* Row：控件单行布局 */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Filter size={12} style={{ color: 'var(--text-tertiary)' }} />
-                    <span className="text-[11px]" style={{ color: 'var(--text-tertiary)', fontWeight: 500 }}>筛选：</span>
+              <div className="pd-filter-shell">
+                <div className="pd-filter-row">
+                  <div className="pd-filter-label">
+                    <Filter size={12} />
+                    <span>筛选</span>
                   </div>
 
-                  {/* 启用状态药丸（容器固定 28px，与同行 Select(size=sm) 等高） */}
-                  <div
-                    aria-label="启用状态"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 3,
-                      flexWrap: 'nowrap',
-                      padding: '2px 4px',
-                      border: '1px solid var(--border)',
-                      backgroundColor: 'var(--bg-primary)',
-                      borderRadius: 4,
-                      height: 28,
-                      overflowX: 'auto',
-                      scrollbarWidth: 'thin',
-                    }}
-                  >
-                    {DEFINITION_ENABLED_OPTIONS.map(opt => {
-                      const active = defFilterEnabled === opt.key;
-                      return (
-                        <button
-                          key={opt.key}
-                          onClick={() => setDefFilterEnabled(opt.key)}
-                          className="text-[10px] px-2 py-0.5 rounded-full transition-colors whitespace-nowrap"
-                          style={{
-                            border: active ? '1px solid ' + opt.color : '1px solid transparent',
-                            backgroundColor: active ? (opt.key === 'all' ? 'rgba(var(--accent-rgb, var(--accent)), 0.1)' : opt.color + '22') : 'transparent',
-                            color: active ? (opt.key === 'all' ? 'var(--accent)' : opt.color) : 'var(--text-tertiary)',
-                            fontWeight: active ? 500 : 400,
-                            flexShrink: 0,
-                          }}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <Select
+                    value={defFilterEnabled}
+                    onChange={v => setDefFilterEnabled(v as typeof defFilterEnabled)}
+                    options={DEFINITION_ENABLED_OPTIONS.map(opt => ({ value: opt.key, label: opt.label }))}
+                    size="sm"
+                    className="shrink-0"
+                    style={{ width: 106 }}
+                    title="按启用状态筛选"
+                    ariaLabel="按启用状态筛选"
+                  />
 
-                  {/* 触发方式：平铺按钮组（下拉看不到"有哪几种"，平铺更直观，也与左侧启用状态同形） */}
-                  <span className="inline-flex items-center gap-1 text-[11px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                    触发：
-                  </span>
-                  <div
-                    aria-label="触发方式"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 3,
-                      flexWrap: 'nowrap',
-                      padding: '2px 4px',
-                      border: '1px solid var(--border)',
-                      backgroundColor: 'var(--bg-primary)',
-                      borderRadius: 4,
-                      height: 28,
-                      overflowX: 'auto',
-                      scrollbarWidth: 'thin',
-                    }}
-                  >
-                    {DEFINITION_TRIGGER_OPTIONS.map(opt => {
-                      const active = defFilterTrigger === opt.key;
-                      return (
-                        <button
-                          key={opt.key}
-                          onClick={() => setDefFilterTrigger(opt.key)}
-                          className="text-[10px] px-2 py-0.5 rounded-full transition-colors whitespace-nowrap"
-                          style={{
-                            border: active ? '1px solid var(--accent)' : '1px solid transparent',
-                            backgroundColor: active ? 'var(--accent-light)' : 'transparent',
-                            color: active ? 'var(--accent)' : 'var(--text-tertiary)',
-                            fontWeight: active ? 500 : 400,
-                            flexShrink: 0,
-                          }}
-                          title={`只看「${opt.label}」触发的工作流`}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <Select
+                    value={defFilterTrigger}
+                    onChange={v => setDefFilterTrigger(v as typeof defFilterTrigger)}
+                    options={DEFINITION_TRIGGER_OPTIONS.map(opt => ({ value: opt.key, label: opt.label }))}
+                    size="sm"
+                    className="shrink-0"
+                    style={{ width: 106 }}
+                    title="按触发方式筛选"
+                    ariaLabel="按触发方式筛选"
+                  />
 
-                  {/* 排序 */}
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <span className="inline-flex items-center gap-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                      <Calendar size={11} />
-                      排序：
-                    </span>
+                  <ProjectFilter
+                    value={defFilterProject}
+                    onChange={setDefFilterProject}
+                    width={132}
+                  />
+
+                  <div className="pd-filter-group">
+                    <ArrowUpDown size={11} />
                     <Select
                       value={defSortKey}
                       onChange={v => setDefSortKey(v as typeof defSortKey)}
                       options={DEFINITION_SORT_OPTIONS.map(s => ({ value: s.key, label: s.label }))}
                       size="sm"
                       className="shrink-0"
-                      style={{ minWidth: 96 }}
+                      style={{ width: 108 }}
                       title="排序方式"
+                      ariaLabel="排序方式"
                     />
                     <button
                       onClick={() => setDefSortAsc(v => !v)}
@@ -1302,30 +1733,14 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                         color: defSortAsc ? '#fff' : 'var(--text-secondary)',
                         height: 28,
                       }}
-                      title={defSortAsc ? '降序' : '升序'}
+                      title={defSortAsc ? '当前升序，点击改为降序' : '当前降序，点击改为升序'}
                     >
                       <ArrowUpDown size={11} />
                       <span className="text-[10px] font-mono">{defSortAsc ? '↑' : '↓'}</span>
                     </button>
                   </div>
 
-                  {/* 关键字搜索（高度对齐同行 Select(size=sm) 的 28px，不再靠内容撑高） */}
-                  <div
-                    className="pd-field"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      border: '1px solid var(--border)',
-                      backgroundColor: 'var(--bg-primary)',
-                      borderRadius: 4,
-                      height: 28,
-                      padding: '0 6px',
-                      flex: '1 1 200px',
-                      minWidth: 180,
-                      maxWidth: 320,
-                    }}
-                  >
+                  <div className="pd-field pd-filter-search">
                     <Search size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                     <input
                       value={defFilterKeyword}
@@ -1346,18 +1761,10 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                     )}
                   </div>
 
-                  {/* 清除全部筛选 */}
                   <button
                     onClick={clearDefFilters}
                     disabled={!hasDefFilter}
-                    className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors whitespace-nowrap inline-flex items-center"
-                    style={{
-                      border: '1px solid var(--border)',
-                      background: hasDefFilter ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
-                      color: hasDefFilter ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                      cursor: hasDefFilter ? 'pointer' : 'not-allowed',
-                      opacity: hasDefFilter ? 1 : 0.5,
-                    }}
+                    className="pd-filter-clear pd-btn"
                   >
                     清除筛选
                   </button>
@@ -1393,8 +1800,15 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-base" style={{ flexShrink: 0 }}>{def.icon || '🔀'}</span>
+                          {def.icon ? (
+                            <span className="text-base" style={{ flexShrink: 0 }}>{def.icon}</span>
+                          ) : (
+                            <span className="workflow-default-icon" aria-hidden="true">
+                              <WorkflowIcon size={14} />
+                            </span>
+                          )}
                           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{def.name}</span>
+                          <ProjectBadge projectId={def.projectId} className="max-w-[152px]" />
                           <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
                             backgroundColor: def.enabled ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)',
                             color: def.enabled ? '#22c55e' : 'var(--text-tertiary)',
@@ -1470,16 +1884,6 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                               </button>
                             );
                           })()}
-                          {instCount > 0 && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setResultDefId(def.id); }}
-                              className="pd-btn p-1.5 rounded hover:opacity-80"
-                              style={{ color: 'var(--text-secondary)' }}
-                              title="查看最近一次执行结果"
-                            >
-                              <ScrollText size={14} />
-                            </button>
-                          )}
                           <button
                             onClick={(e) => { handleEditProperties(e, def); }}
                             className="pd-btn p-1.5 rounded hover:opacity-80"
@@ -1488,38 +1892,17 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                           >
                             <Settings size={14} />
                           </button>
-                          <button
-                            onClick={(e) => { handleExportSingle(e, def.id, def.name); }}
-                            className="pd-btn p-1.5 rounded hover:opacity-80"
-                            style={{ color: 'var(--text-secondary)' }}
-                            title="导出"
-                          >
-                            <Upload size={14} />
-                          </button>
-                          <button
-                            onClick={(e) => { void handleOpenShareDialog(e, def); }}
-                            className="pd-btn p-1.5 rounded hover:opacity-80"
-                            style={{ color: 'var(--text-secondary)' }}
-                            title="共享到组织"
-                          >
-                            <Share2 size={14} />
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDuplicate(def.id, def.name); }}
-                            className="pd-btn p-1.5 rounded hover:opacity-80"
-                            style={{ color: 'var(--text-secondary)' }}
-                            title="复制"
-                          >
-                            <Copy size={14} />
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDelete(def.id, def.name); }}
-                            className="pd-btn p-1.5 rounded hover:opacity-80"
-                            style={{ color: 'var(--text-secondary)' }}
-                            title="删除"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          <DefinitionMoreMenu
+                            hasResult={instCount > 0}
+                            canRemoteRun={canRemoteRun}
+                            onViewResult={() => setResultDefId(def.id)}
+                            onRemoteRun={() => setRemoteRunDef(def)}
+                            onExport={() => handleExportSingle(null, def.id, def.name)}
+                            onShare={() => void handleOpenShareDialog(null, def)}
+                            onProject={() => setMembershipDef(def)}
+                            onDuplicate={() => handleDuplicate(def.id, def.name)}
+                            onDelete={() => handleDelete(def.id, def.name)}
+                          />
                         </div>
                       </div>
                       {def.description && (
@@ -1652,9 +2035,25 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
       {showPropertyDialog && (
         <WorkflowPropertyDialog
           mode={showPropertyDialog}
-          initial={editingDef || undefined}
+          initial={propertyInitial}
           onConfirm={handlePropertyConfirm}
-          onClose={() => { setShowPropertyDialog(null); setEditingDef(null); }}
+          onClose={() => {
+            useProjectCreationStore.getState().clear();
+            setShowPropertyDialog(null);
+            setEditingDef(null);
+            setProjectCreateSeed(null);
+          }}
+        />
+      )}
+
+      {membershipDef && (
+        <ProjectMembershipDialog
+          workType="workflow"
+          workId={membershipDef.id}
+          workTitle={membershipDef.name}
+          currentProjectId={membershipDef.projectId}
+          onClose={() => setMembershipDef(null)}
+          onChanged={handleDefinitionProjectChanged}
         />
       )}
 
@@ -1669,6 +2068,13 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
             void startDefinitionRun(target, input);
           }}
           onClose={() => setInputDialogDef(null)}
+        />
+      )}
+
+      {remoteRunDef && (
+        <RemoteRunDialog
+          definition={remoteRunDef}
+          onClose={() => setRemoteRunDef(null)}
         />
       )}
 
@@ -1887,7 +2293,17 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
               {shareLoading ? (
                 <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>正在获取组织列表…</div>
               ) : shareOrgs && shareOrgs.length === 0 ? (
-                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>你还没有加入任何组织</div>
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>
+                  <div>你还没有加入任何组织</div>
+                  <button
+                    type="button"
+                    className="mt-2 text-[11px]"
+                    style={{ color: 'var(--accent)' }}
+                    onClick={() => openOrganizationUpgrade(null, 'workflow-share')}
+                  >
+                    创建或加入组织
+                  </button>
+                </div>
               ) : (
                 <>
                   <div>
@@ -1912,7 +2328,14 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                   </div>
                 </>
               )}
-              {shareError && (
+              {shareCapabilityBlocked && (
+                <TeamShareLock
+                  organizationName={selectedShareOrg?.name}
+                  canManage={canManageOrganization(selectedShareOrg)}
+                  onUpgrade={() => openOrganizationUpgrade(selectedShareOrg, 'workflow-share')}
+                />
+              )}
+              {shareError && !shareCapabilityBlocked && (
                 <div className="text-xs px-2 py-1.5 rounded" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
                   {shareError}
                 </div>
@@ -1929,13 +2352,16 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
               </button>
               <button
                 onClick={() => void handleConfirmShare()}
-                disabled={shareSubmitting || shareLoading || !shareOrgId}
+                disabled={shareSubmitting || shareLoading || !shareOrgId || shareOrgLocked}
                 className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
                 style={{
                   backgroundColor: 'var(--accent)',
                   color: '#fff',
-                  opacity: shareSubmitting || shareLoading || !shareOrgId ? 0.5 : 1,
-                  cursor: shareSubmitting || shareLoading || !shareOrgId ? 'default' : 'pointer',
+                  opacity: shareSubmitting || shareLoading || !shareOrgId || shareOrgLocked ? 0.5 : 1,
+                  cursor:
+                    shareSubmitting || shareLoading || !shareOrgId || shareOrgLocked
+                      ? 'default'
+                      : 'pointer',
                 }}
               >
                 {shareSubmitting ? '共享中…' : '确认共享'}
@@ -1967,6 +2393,13 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                   value={importOrgId}
                   onChange={(v) => {
                     setImportOrgId(v);
+                    setImportItemId(null);
+                    setImportError('');
+                    const nextOrg = (importOrgs ?? []).find((org) => String(org.id) === v);
+                    if (nextOrg && !orgSupportsSharedSpace(nextOrg)) {
+                      setImportItems([]);
+                      return;
+                    }
                     void loadOrgSharedWorkflows(Number(v));
                   }}
                   placeholder="请选择组织"
@@ -1976,12 +2409,34 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                 />
               ) : (
                 <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
-                  {importOrgs === null ? '正在获取组织列表…' : '你还没有加入任何组织'}
+                  {importOrgs === null ? (
+                    '正在获取组织列表…'
+                  ) : (
+                    <>
+                      <div>你还没有加入任何组织</div>
+                      <button
+                        type="button"
+                        className="mt-2 text-[11px]"
+                        style={{ color: 'var(--accent)' }}
+                        onClick={() => openOrganizationUpgrade(null, 'workflow-import')}
+                      >
+                        创建或加入组织
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
             <div className="flex-1 overflow-y-auto px-4 py-2">
-              {importItemsLoading ? (
+              {importCapabilityBlocked ? (
+                <div className="py-2">
+                  <TeamShareLock
+                    organizationName={selectedImportOrg?.name}
+                    canManage={canManageOrganization(selectedImportOrg)}
+                    onUpgrade={() => openOrganizationUpgrade(selectedImportOrg, 'workflow-import')}
+                  />
+                </div>
+              ) : importItemsLoading ? (
                 <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>正在加载共享工作流…</div>
               ) : importItems && importItems.length === 0 ? (
                 <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>该组织暂无共享工作流</div>
@@ -2009,7 +2464,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                   </label>
                 ))
               )}
-              {importError && (
+              {importError && !importCapabilityBlocked && (
                 <div className="text-xs px-2 py-1.5 rounded my-2" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
                   {importError}
                 </div>
@@ -2026,13 +2481,16 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
               </button>
               <button
                 onClick={() => void handleImportFromOrg()}
-                disabled={importSubmitting || importItemId == null}
+                disabled={importSubmitting || importItemId == null || importOrgLocked}
                 className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
                 style={{
                   backgroundColor: 'var(--accent)',
                   color: '#fff',
-                  opacity: importSubmitting || importItemId == null ? 0.5 : 1,
-                  cursor: importSubmitting || importItemId == null ? 'default' : 'pointer',
+                  opacity: importSubmitting || importItemId == null || importOrgLocked ? 0.5 : 1,
+                  cursor:
+                    importSubmitting || importItemId == null || importOrgLocked
+                      ? 'default'
+                      : 'pointer',
                 }}
               >
                 {importSubmitting ? '导入中…' : '导入'}

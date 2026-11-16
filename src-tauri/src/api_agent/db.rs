@@ -171,6 +171,8 @@ pub struct MemoryUpdate {
 pub struct UpdateOutcome {
     pub before: MemoryEntry,
     pub after: MemoryEntry,
+    /// 本次写入后为满足"归一化内容唯一"而删除的重复 key。
+    pub deduped_keys: Vec<String>,
 }
 
 /// SQLite 版 KV 记忆库
@@ -234,6 +236,16 @@ impl MemoryStore {
             limit: clamp_memory_max_entries(limit),
         };
 
+        // 旧版本允许 update_memory / 设置页编辑制造同内容条目。启动时先做一次确定性收敛，
+        // 让存量重复项自愈，不需要用户去列表里逐条手删。
+        let deduped = store.dedupe_exact_existing_memories();
+        if deduped > 0 {
+            log::info!(
+                "[Agent DB] 记忆库自动去重: 合并删除 {} 条同内容记忆",
+                deduped
+            );
+        }
+
         // 打开即做一次懒惰维护（僵尸清理 + 配额驱逐），保持库自愈
         let cleaned = store.prune();
         if cleaned > 0 {
@@ -280,8 +292,8 @@ impl MemoryStore {
     /// 避免"反复覆盖=高频"失真；编辑过的条目靠 `updated_at` 参与存活判定，见
     /// `maintenance_candidates`）。
     ///
-    /// 仅供设置页手动编辑入口使用：不做内容级去重（不同 key 的等价内容会各占一行），
-    /// 工具路径请用 `save_memory`。
+    /// 设置页手动编辑入口：保留当前编辑的 key；若其内容与其它会话记忆归一化等价，
+    /// 会合并标签、pin 与使用热度后删除重复行。工具路径请用 `save_memory` / `update_memory`。
     pub fn upsert_memory(
         &self,
         key: &str,
@@ -314,6 +326,18 @@ impl MemoryStore {
                     params![key, value, category, now, pin as i64, tags],
                 )
                 .unwrap();
+            }
+
+            match dedupe_exact_session_values(&conn, Some(key)) {
+                Ok(keys) if !keys.is_empty() => {
+                    log::info!(
+                        "[Agent DB] 设置页保存记忆后收敛重复项 key={}: {:?}",
+                        key,
+                        keys
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => log::warn!("[Agent DB] 设置页保存后去重失败: {}", e),
             }
 
             conn.query_row(
@@ -373,6 +397,7 @@ impl MemoryStore {
                                 key
                             ],
                         );
+                        let _ = dedupe_exact_session_values(&conn, Some(key));
                         let entry = get_entry_by_key(&conn, key).expect("刚更新的记忆必存在");
                         SaveOutcome::Merged {
                             entry,
@@ -385,13 +410,12 @@ impl MemoryStore {
             } else {
                 let candidates = list_entries_by_category(&conn, category);
 
-                // 归一化内容完全等价：合并进已有条目，不新增
-                if let Some(existing) = candidates
-                    .iter()
-                    .filter(|e| normalize_value(&e.value) == new_norm)
-                    .max_by_key(|e| e.access_count)
-                {
-                    let entry = merge_into_existing(&conn, existing, &existing.value, pin, tags);
+                // 归一化内容完全等价：跨分类也只保留一条。完全相同正文的 category
+                // 只是同一事实的不同标注，不值得为它留下重复内容。
+                if let Some(existing) = find_exact_session_duplicate(&conn, &new_norm) {
+                    let _ = merge_into_existing(&conn, &existing, &existing.value, pin, tags);
+                    let _ = dedupe_exact_session_values(&conn, Some(&existing.key));
+                    let entry = get_entry_by_key(&conn, &existing.key).expect("刚合并的记忆必存在");
                     SaveOutcome::Merged {
                         entry,
                         existing_key: existing.key.clone(),
@@ -416,6 +440,7 @@ impl MemoryStore {
                          VALUES (?1, ?2, ?3, ?4, ?4, 1, ?4, ?5, ?6)",
                         params![key, value, category, now, pin as i64, tags],
                     );
+                    let _ = dedupe_exact_session_values(&conn, Some(key));
                     let entry = get_entry_by_key(&conn, key).expect("刚插入的记忆必存在");
                     SaveOutcome::Inserted(entry)
                 }
@@ -430,18 +455,22 @@ impl MemoryStore {
         outcome
     }
 
-    /// 直接更新一条既有记忆的语义字段（不新增、不做内容级合并）。
+    /// 直接更新一条既有记忆的语义字段（不新增）。
     ///
     /// 语义：
     /// - `key` 定位条目，不存在即报错（新增走 `save_memory`，本方法绝不隐式建行）；
     /// - `patch` 中为 `None` 的字段保持原值；
     /// - `new_key` 改名：目标 key 已被占用时报错，不覆盖另一条记忆；
     /// - `tags` 整体替换（空串即清空），`pin` 可双向设置；
+    /// - 更新后若与其它会话记忆归一化等价，保留当前 key，合并标签/pin/热度并删除重复行；
     /// - 只刷新 `updated_at`：`access_count` 与 `last_accessed_at` 是检索热度信号，编辑不刷新它们；
     /// - `created_at` 不变。
     pub fn update_memory(&self, key: &str, patch: &MemoryUpdate) -> Result<UpdateOutcome, String> {
         let conn = self.conn.lock().unwrap();
-        let before = get_entry_by_key(&conn, key).ok_or_else(|| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("开始更新记忆事务失败: {}", e))?;
+        let before = get_entry_by_key(&tx, key).ok_or_else(|| {
             format!(
                 "记忆不存在（key={}）：本工具只改已有条目，新增请用 save_memory",
                 key
@@ -450,7 +479,7 @@ impl MemoryStore {
 
         let next_key = match patch.new_key.as_deref().filter(|k| *k != key) {
             Some(target) => {
-                if get_entry_by_key(&conn, target).is_some() {
+                if get_entry_by_key(&tx, target).is_some() {
                     return Err(format!(
                         "目标 key 已存在（key={}）：改名会覆盖既有记忆，已拒绝；请换一个 key，或先用 delete_memory 处理它",
                         target
@@ -472,7 +501,7 @@ impl MemoryStore {
         };
         let next_pin = patch.pin.unwrap_or(before.pin);
 
-        conn.execute(
+        tx.execute(
             "UPDATE key_memories
              SET key = ?1, value = ?2, category = ?3, tags = ?4, pin = ?5, updated_at = ?6
              WHERE key = ?7",
@@ -488,8 +517,15 @@ impl MemoryStore {
         )
         .map_err(|e| format!("更新记忆失败: {}", e))?;
 
-        let after = get_entry_by_key(&conn, &next_key).expect("刚更新的记忆必存在");
-        Ok(UpdateOutcome { before, after })
+        let deduped_keys = dedupe_exact_session_values(&tx, Some(&next_key))?;
+        let after = get_entry_by_key(&tx, &next_key).expect("刚更新的记忆必存在");
+        tx.commit()
+            .map_err(|e| format!("提交记忆更新事务失败: {}", e))?;
+        Ok(UpdateOutcome {
+            before,
+            after,
+            deduped_keys,
+        })
     }
 
     /// 检索记忆（工具/查询路径）：先只读检索排序，再对命中返回子集刷新访问计数。
@@ -1022,6 +1058,20 @@ impl MemoryStore {
             .collect()
     }
 
+    /// 启动时收敛存量同内容条目。知识库条目不计入候选；
+    /// 没有明确当前 key 时优先保留更短的 key（通常是未带「修订版/副本」后缀的正名），
+    /// 再按 pin → 最近编辑 → 使用次数决定并列项。
+    fn dedupe_exact_existing_memories(&self) -> usize {
+        let conn = self.conn.lock().unwrap();
+        match dedupe_exact_session_values(&conn, None) {
+            Ok(keys) => keys.len(),
+            Err(e) => {
+                log::warn!("[Agent DB] 记忆库自动去重失败: {}", e);
+                0
+            }
+        }
+    }
+
     /// 执行懒惰维护：删除全部候选条目（僵尸清理 + 配额驱逐）。返回删除条数。
     pub fn prune(&self) -> usize {
         let keys: Vec<String> = self
@@ -1305,6 +1355,115 @@ fn list_entries_by_category(conn: &Connection, category: &str) -> Vec<MemoryEntr
     stmt.query_map(params![category], row_to_entry)
         .map(|it| it.filter_map(|r| r.ok()).collect())
         .unwrap_or_default()
+}
+
+/// 读取全部会话级 KV 记忆（排除知识库条目）。
+fn list_session_entries(conn: &Connection) -> Vec<MemoryEntry> {
+    let mut stmt = match conn.prepare(&format!(
+        "SELECT key, value, category, created_at, updated_at, access_count, last_accessed_at, pin, tags
+         FROM key_memories WHERE {}",
+        QUOTA_EXEMPT_SQL
+    )) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map([], row_to_entry)
+        .map(|it| it.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+}
+
+/// 找出与给定归一化正文完全等价的会话记忆（不含知识库条目）。
+fn find_exact_session_duplicate(conn: &Connection, value_norm: &str) -> Option<MemoryEntry> {
+    list_session_entries(conn)
+        .into_iter()
+        .filter(|e| normalize_value(&e.value) == value_norm)
+        .max_by_key(|e| (e.access_count, e.updated_at))
+}
+
+/// 合并所有归一化正文完全相同的会话记忆，返回被删除的重复 key。
+///
+/// `preferred_key` 命中时必保留该条（用于 update / 设置页编辑的明确意图）；
+/// 启动清理没有 preferred，按稳定优先级选一条。标签取并集、pin 取或、
+/// 使用次数求和、最近访问/编辑时间取较大值，避免为了去重丢失元数据。
+fn dedupe_exact_session_values(
+    conn: &Connection,
+    preferred_key: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let entries = list_session_entries(conn);
+    let mut groups: std::collections::HashMap<String, Vec<MemoryEntry>> =
+        std::collections::HashMap::new();
+    for entry in entries {
+        let norm = normalize_value(&entry.value);
+        if !norm.is_empty() {
+            groups.entry(norm).or_default().push(entry);
+        }
+    }
+
+    let mut removed = Vec::new();
+    for (_, mut group) in groups {
+        if group.len() < 2 {
+            continue;
+        }
+        group.sort_by(|a, b| {
+            let a_preferred = preferred_key == Some(a.key.as_str());
+            let b_preferred = preferred_key == Some(b.key.as_str());
+            b_preferred
+                .cmp(&a_preferred)
+                .then_with(|| a.key.chars().count().cmp(&b.key.chars().count()))
+                .then_with(|| b.pin.cmp(&a.pin))
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+                .then_with(|| b.access_count.cmp(&a.access_count))
+                .then_with(|| a.key.cmp(&b.key))
+        });
+
+        let keep = group.remove(0);
+        let tags = group.iter().fold(keep.tags.clone(), |tags, entry| {
+            merge_tags(&tags, &entry.tags)
+        });
+        let pin = keep.pin || group.iter().any(|entry| entry.pin);
+        let created_at = group
+            .iter()
+            .fold(keep.created_at, |at, entry| at.min(entry.created_at));
+        let updated_at = group
+            .iter()
+            .fold(keep.updated_at, |at, entry| at.max(entry.updated_at));
+        let last_accessed_at = group.iter().fold(keep.last_accessed_at, |at, entry| {
+            at.max(entry.last_accessed_at)
+        });
+        let access_count = group.iter().fold(keep.access_count, |count, entry| {
+            count.saturating_add(entry.access_count)
+        });
+
+        conn.execute(
+            "UPDATE key_memories
+             SET created_at = ?1, updated_at = ?2, access_count = ?3,
+                 last_accessed_at = ?4, pin = ?5, tags = ?6
+             WHERE key = ?7",
+            params![
+                created_at,
+                updated_at,
+                access_count,
+                last_accessed_at,
+                pin as i64,
+                tags,
+                keep.key
+            ],
+        )
+        .map_err(|e| format!("合并重复记忆失败(key={}): {}", keep.key, e))?;
+
+        for duplicate in group {
+            let deleted = conn
+                .execute(
+                    "DELETE FROM key_memories WHERE key = ?1",
+                    params![duplicate.key],
+                )
+                .map_err(|e| format!("删除重复记忆失败(key={}): {}", duplicate.key, e))?;
+            if deleted > 0 {
+                removed.push(duplicate.key);
+            }
+        }
+    }
+    Ok(removed)
 }
 
 /// 单对内容的合并判定（同名 key 写入与跨 key 近似去重共用）。
@@ -2003,6 +2162,7 @@ mod tests {
         let UpdateOutcome {
             before: b,
             after: a,
+            ..
         } = store.update_memory("k1", &patch).unwrap();
 
         assert_eq!(b.key, "k1");
@@ -2023,6 +2183,102 @@ mod tests {
             .iter()
             .all(|e| e.key != "k1"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_update_memory_collapses_exact_duplicate_after_value_change() {
+        let (store, dir) = temp_store();
+        store.save_memory(
+            "知识管理核心理念",
+            "旧版本强调先分类再整理。",
+            "fact",
+            false,
+            "知识管理,旧版",
+        );
+        store.save_memory(
+            "知识管理核心理念（修订版）",
+            "知识管理应围绕可检索、可追溯、可维护三条原则持续演进。",
+            "fact",
+            true,
+            "知识管理,修订",
+        );
+        assert_eq!(store.count(), 2);
+
+        let outcome = store
+            .update_memory(
+                "知识管理核心理念",
+                &MemoryUpdate {
+                    value: Some(
+                        "知识管理应围绕可检索、可追溯、可维护三条原则持续演进。".to_string(),
+                    ),
+                    tags: Some("定稿".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(outcome.deduped_keys, vec!["知识管理核心理念（修订版）"]);
+        assert_eq!(store.count(), 1);
+        let kept = entry_of(&store, "知识管理核心理念");
+        assert!(kept.pin, "删除重复项时不能丢失另一条的 pin");
+        assert!(kept.tags.contains("修订"));
+        assert!(kept.tags.contains("定稿"));
+        assert!(store
+            .list_all(None, Some("知识管理核心理念（修订版）"))
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_upsert_memory_collapses_exact_duplicate_and_merges_metadata() {
+        let (store, dir) = temp_store();
+        store.save_memory("k1", "first", "fact", false, "a");
+        store.save_memory("k2", "second", "fact", true, "b");
+
+        let kept = store.upsert_memory("k1", "second", "fact", false, "c");
+
+        assert_eq!(kept.key, "k1");
+        assert!(kept.pin, "重复条目的 pin 应并入保留条目");
+        assert!(kept.tags.contains("b"));
+        assert!(kept.tags.contains("c"));
+        assert_eq!(store.count(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_startup_collapses_legacy_exact_duplicate_values() {
+        let (store, dir) = temp_store();
+        let now = now_secs();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute("DELETE FROM key_memories", []).unwrap();
+            for (key, tags, pin, updated_at) in [
+                ("知识管理核心理念", "canonical", true, now),
+                ("知识管理核心理念（修订版）", "legacy", false, now + 10),
+            ] {
+                conn.execute(
+                    "INSERT INTO key_memories
+                         (key, value, category, created_at, updated_at, access_count,
+                          last_accessed_at, pin, tags)
+                     VALUES (?1, ?2, 'fact', ?3, ?4, 1, ?4, ?5, ?6)",
+                    params![key, "同一条修订版正文", now, updated_at, pin as i64, tags],
+                )
+                .unwrap();
+            }
+        }
+        drop(store);
+
+        let reopened = MemoryStore::new(&dir, MEMORY_MAX_ENTRIES_DEFAULT).unwrap();
+        assert_eq!(reopened.count(), 1);
+        let kept = entry_of(&reopened, "知识管理核心理念");
+        assert_eq!(kept.value, "同一条修订版正文");
+        assert!(kept.tags.contains("canonical"));
+        assert!(kept.tags.contains("legacy"));
+
+        drop(reopened);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2421,11 +2677,11 @@ mod tests {
     }
 
     #[test]
-    fn test_save_memory_same_content_other_category_inserts() {
+    fn test_save_memory_same_content_other_category_merges_exact_duplicate() {
         let (store, dir) = temp_store();
 
         store.save_memory("k1", "alpha beta gamma delta epsilon", "fact", false, "");
-        // 分类不同：内容等价也不合并，避免丢失分类语义
+        // 分类不同也不保留完全相同正文：否则“重命名/修订”会制造无法区分的重复项
         match store.save_memory(
             "k2",
             "alpha beta gamma delta epsilon",
@@ -2433,10 +2689,18 @@ mod tests {
             false,
             "",
         ) {
-            SaveOutcome::Inserted(entry) => assert_eq!(entry.key, "k2"),
-            other => panic!("expected Inserted, got {:?}", other),
+            SaveOutcome::Merged {
+                entry,
+                existing_key,
+                kind,
+            } => {
+                assert_eq!(kind, MergeKind::Exact);
+                assert_eq!(existing_key, "k1");
+                assert_eq!(entry.key, "k1");
+            }
+            other => panic!("expected Merged Exact, got {:?}", other),
         }
-        assert_eq!(store.count(), 2);
+        assert_eq!(store.count(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

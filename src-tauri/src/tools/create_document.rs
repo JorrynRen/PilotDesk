@@ -86,6 +86,71 @@ fn parse_blocks(content: &str) -> Vec<Value> {
         .collect()
 }
 
+/// 文档内容里的本地图片路径与输出文件一样，统一以工作目录为基准并规范化为绝对路径。
+/// URL/data URI 保持原值，避免把远程资源误当成本地路径。
+fn normalize_image_paths(value: &mut Value, cwd: &str) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_image_paths(item, cwd);
+            }
+        }
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("image") {
+                if let Some(path) = object.get("path").and_then(Value::as_str) {
+                    let path = path.trim();
+                    if !path.is_empty()
+                        && !path.starts_with("http://")
+                        && !path.starts_with("https://")
+                        && !path.starts_with("data:")
+                    {
+                        let normalized = crate::utils::paths::normalize_absolute_path(path, cwd)
+                            .to_string_lossy()
+                            .to_string();
+                        object.insert("path".to_string(), Value::String(normalized));
+                    }
+                }
+            }
+            for child in object.values_mut() {
+                normalize_image_paths(child, cwd);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod image_path_tests {
+    use super::*;
+
+    #[test]
+    fn document_image_paths_are_relative_to_the_work_root_and_absolute() {
+        let cwd = std::env::temp_dir().join("pilotdesk_document_image_root");
+        let mut value = serde_json::json!({
+            "type": "image",
+            "path": "assets/cover.png"
+        });
+
+        normalize_image_paths(&mut value, &cwd.to_string_lossy());
+
+        let resolved = std::path::Path::new(value["path"].as_str().unwrap());
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved, cwd.join("assets").join("cover.png"));
+    }
+
+    #[test]
+    fn remote_document_image_sources_are_not_rewritten() {
+        let mut value = serde_json::json!({
+            "type": "image",
+            "path": "https://example.com/cover.png"
+        });
+
+        normalize_image_paths(&mut value, "D:\\Project");
+
+        assert_eq!(value["path"], "https://example.com/cover.png");
+    }
+}
+
 /// slide 内支持的元素类型（PPT 技能兼容子集）。
 fn is_slide_element(t: &str) -> bool {
     matches!(
@@ -142,18 +207,16 @@ fn validate_blocks(blocks: &[Value], format: &str) -> Result<(), String> {
 
 /// 输出路径解析（绝对或相对 cwd）
 fn resolve_out(cwd: &str, file: &str) -> Result<PathBuf, String> {
-    let p = PathBuf::from(file.trim());
-    let abs = if p.is_absolute() {
-        p
-    } else {
-        PathBuf::from(cwd).join(&p)
-    };
+    let abs = crate::utils::paths::normalize_absolute_path(file.trim(), cwd);
     if let Some(parent) = abs.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {}", e))?;
         }
     }
-    Ok(abs)
+    Ok(crate::utils::paths::normalize_absolute_path(
+        &abs.to_string_lossy(),
+        cwd,
+    ))
 }
 
 /// 简单文本截断（避免异常长内容撑爆）
@@ -223,7 +286,10 @@ impl ToolHandler for CreateDocumentTool {
             .ok_or("缺少 file 参数（输出路径）")?;
         let content = arguments["content"].as_str().ok_or("缺少 content 参数")?;
         let abs = resolve_out(&self.cwd, file)?;
-        let blocks = parse_blocks(content);
+        let mut blocks = parse_blocks(content);
+        for block in &mut blocks {
+            normalize_image_paths(block, &self.cwd);
+        }
         validate_blocks(&blocks, format)?;
 
         match format {
@@ -237,7 +303,10 @@ impl ToolHandler for CreateDocumentTool {
             )),
         }?;
 
-        Ok(format!("已创建文档：{}", abs.display()))
+        Ok(format!(
+            "已创建文档：{}",
+            crate::utils::paths::path_display(&abs)
+        ))
     }
 }
 

@@ -44,35 +44,37 @@ export function EnclaveToolbarActions({
       {/* 出境闸门常驻状态：默认关闭，Agent 能否检索团队知识库受此约束 */}
       {activeOrgId && (
         <span
-          className="text-[11px] px-1.5 py-0.5 rounded"
+          className="text-[11px] px-1.5 py-0.5 rounded whitespace-nowrap"
           style={{
             backgroundColor: 'var(--bg-tertiary)',
             color: policy?.allowCloudModel ? 'var(--status-danger)' : 'var(--text-tertiary)',
           }}
           title="团队数据发送至云端模型的开关（在「组织与权限」页修改）"
         >
-          出境闸门：{policy?.allowCloudModel ? '允许' : '禁止'}
+          出境 {policy?.allowCloudModel ? '允许' : '禁止'}
         </span>
       )}
       {canManageRoot && (
         <button
           onClick={onToggleRoot}
-          className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
+          className="enclave-action-button text-xs px-2 py-1 rounded-lg flex shrink-0 items-center gap-1 whitespace-nowrap"
           style={{
             backgroundColor: rootOpen ? 'var(--bg-tertiary)' : 'transparent',
             color: 'var(--text-secondary)',
             border: '1px solid var(--border)',
           }}
           title="本机团队文件根目录：仅影响本机的存放位置（全局设置）"
+          aria-label="本机文件根"
         >
-          <FolderOpen size={12} /> 本机文件根
+          <FolderOpen size={12} />
+          <span className="enclave-action-label">本机文件根</span>
         </button>
       )}
       {create && (
         <button
           onClick={create.onToggle}
           disabled={create.disabled}
-          className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
+          className="enclave-action-button text-xs px-2 py-1 rounded-lg flex shrink-0 items-center gap-1 whitespace-nowrap"
           style={{
             // 与相邻按钮同口径：未展开用透明底，展开时才加 bg-tertiary
             backgroundColor: create.open ? 'var(--bg-tertiary)' : 'transparent',
@@ -81,8 +83,11 @@ export function EnclaveToolbarActions({
             opacity: create.disabled ? 0.5 : 1,
             cursor: create.disabled ? 'not-allowed' : 'pointer',
           }}
+          title={create.label}
+          aria-label={create.label}
         >
-          <Plus size={12} /> {create.label}
+          <Plus size={12} />
+          <span className="enclave-action-label">{create.label}</span>
         </button>
       )}
     </>

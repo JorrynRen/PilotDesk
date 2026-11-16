@@ -32,10 +32,9 @@ pub struct Room {
     /// 是否允许主持人在自动补人时添加 CLI 参与者（1=允许，0=禁止；按任务差异化限制，默认允许）
     #[serde(default = "default_allow_auto_cli")]
     pub allow_auto_cli: i64,
-    /// 房间统一产物目录（绝对路径；空则运行时回退 `<工作目录>/outputs/<房间标题>/`）。
-    /// 所有参与者产出的文件必须写入该目录，保证位置一致、房间内全局感知（v3.4ao）。
-    #[serde(default)]
-    pub output_dir: String,
+    /// 工作归属项目；None 表示未归入项目。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 
     // ── 以下为**派生字段**（不是表里的列，由 `store::list_rooms` 读时聚合）──
     /// 当前讨论轮次 = `room_events(kind='message')` 里 round 的最大值（与 Actor 重启续轮同口径）。

@@ -20,6 +20,8 @@ export interface HostPreview {
   agentType: string;
   hostSessionId: string;
   title: string;
+  /** 导入时使用的项目归属；null 表示不归入项目。 */
+  projectId: string | null;
   cwd: string | null;
   messages: HostPreviewMessage[];
 }

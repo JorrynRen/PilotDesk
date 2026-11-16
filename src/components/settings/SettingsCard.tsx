@@ -10,12 +10,8 @@ interface SettingsCardProps {
 export function SettingsCard({ children, className = '', highlight, style }: SettingsCardProps) {
   return (
     <div
-      className={`flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors ${className}`}
-      style={{
-        backgroundColor: highlight ? 'rgba(245, 158, 11, 0.06)' : 'var(--bg-raised)',
-        border: highlight ? '1px solid rgba(245, 158, 11, 0.2)' : '1px solid transparent',
-        ...style,
-      }}
+      className={`pd-settings-card ${highlight ? 'pd-settings-card-highlight' : ''} flex min-h-[38px] items-center justify-between gap-3 rounded-md px-3 py-2 transition-colors ${className}`}
+      style={style}
     >
       {children}
     </div>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { Globe, Plus, X, Settings2, ExternalLink, AlertTriangle, Search, LayoutGrid } from 'lucide-react';
+import { Globe, Plus, X, Settings2, ExternalLink, AlertTriangle, Search, PanelsTopLeft } from 'lucide-react';
 import { useCustomTabsStore, groupCustomTabs, PORTAL_TAB_ID, type CustomTab } from '../../stores/customTabsStore';
 import { useTerminal } from '../../TerminalManager';
 import { TabIcon } from '../common/TabIcon';
@@ -10,13 +10,6 @@ import { errorMessage } from '../../utils/errorMessage';
 
 /** 目录索引协议地址：?path=<encodeURIComponent(绝对路径)>，由后端动态生成文件列表页 */
 const DIRINDEX_BASE = 'http://dirindex.localhost/';
-
-/**
- * iframe 常驻上限（LRU）。
- * 标签按钮全部保留，但只让**最近使用**的最多 8 个标签挂载 iframe；超出即卸载最久未用者
- * （其 iframe 从 DOM 移除，网页状态释放），再次点开时重新加载 —— 用内存换标签数不设上限。
- */
-const FRAME_LRU_MAX = 8;
 
 /**
  * iframe 加载超时阈值（毫秒）——**兜底**手段。
@@ -50,23 +43,23 @@ function subtitleOf(url: string): string {
  *
  * 生命周期模型：
  * - CustomTabHost 常挂载（App 以 CSS 显隐），主视图切换不会卸载 iframe；
- * - 标签被激活时才创建 iframe，此后切换仅 display 显隐、网页状态保留；iframe 常驻数量上限 8（LRU），
- *   超出即卸载最久未用者（标签按钮仍全留），再次点开时重新加载；
- * - 顶栏标签有三态：激活（当前查看，主色高亮）/ 保活中（iframe 仍挂载但未查看，淡底 + 主色小圆点）/
- *   未加载（从未打开或已关闭，透明底）—— 用样式把"保活"与"当前查看"分开；
+ * - 标签被激活时才创建 iframe，此后切换仅 display 显隐、网页状态保留；
+ *   只有用户手动关闭标签才会卸载 iframe，不设自动淘汰上限；
+ * - 顶栏只显示仍处于挂载状态的标签：激活（当前查看，主色高亮）/
+ *   保活中（iframe 仍挂载但未查看，淡底 + 主色小圆点）；
  * - 「门户」是 custom 模式下的首页（非真实标签，用哨兵 id 表示）：按分组渲染全部标签卡片网格，
  *   卡片点击即打开该标签（顶栏切到该标签、加载其 iframe），另提供搜索 / 管理与「在浏览器打开」；
  *   进入 custom 模式时**默认落在此页**（无有效激活标签即回落门户），不预加载任何标签的 iframe；
  * - 顶栏「＋」与门户页「管理」都**导航到「设置 → 门户标签」**（`/settings?tab=customtabs`）：
  *   管理只有唯一实现（`CustomTabsSettings`），此处不再自建一套覆盖层，避免双份维护与行为漂移；
  * - 每个标签右上角的关闭角标（悬停 / 聚焦该标签时显现，触屏常显）：**关闭 = 卸载其 iframe**
- *   并把激活态回落门户页，但标签按钮**保留在顶栏** —— 关闭不是"让标签消失"，只是取消它的
- *   激活 / 加载状态，再次点击即重新加载；配置始终保留（删除配置在「设置 → 门户标签」里做）。
+ *   并把激活态回落门户页；关闭后该标签从顶栏移除，再次从门户页打开时重新加载。
+ *   配置始终保留（删除配置在「设置 → 门户标签」里做）。
  * - 已挂载的 iframe 跨视图常驻：切换主视图（会话 / 终端 / 群聊…）不卸载 iframe，
  *   只有用户手动关闭标签才卸载。
  */
 export function CustomTabHost() {
-  const { tabs, activeTabId, setActiveTab } = useCustomTabsStore();
+  const { tabs, activeTabId, setActiveTab, syncMountedTabs } = useCustomTabsStore();
   const { viewMode } = useTerminal();
   const navigate = useNavigate();
 
@@ -76,7 +69,7 @@ export function CustomTabHost() {
    */
   const openManage = useCallback(() => navigate('/settings?tab=customtabs'), [navigate]);
 
-  // 已挂载 iframe 的标签，**按最近使用排序（队首最新）**，并裁到 FRAME_LRU_MAX（LRU keep-alive）
+  // 已挂载 iframe 的标签，按首次挂载顺序稳定排列；只有手工关闭才会移出。
   const [activatedIds, setActivatedIds] = useState<string[]>([]);
   // 门户页搜索关键词（按名称 / 地址过滤）
   const [query, setQuery] = useState('');
@@ -138,8 +131,9 @@ export function CustomTabHost() {
   if (activeKey !== prevActiveKey) {
     setPrevActiveKey(activeKey);
     if (active) {
-      // LRU：移到队首（最近使用）并裁到上限；被裁掉的标签卸载 iframe，下次点开时重新加载
-      setActivatedIds((prev) => [active.id, ...prev.filter((id) => id !== active.id)].slice(0, FRAME_LRU_MAX));
+      // 已挂载的 iframe 不能再按最近使用重排。浏览器可能把兄弟节点的顺序变化视为
+      // 一次 DOM 移动并重新加载 iframe，导致标签间切换丢失页面状态。
+      setActivatedIds((prev) => (prev.includes(active.id) ? prev : [...prev, active.id]));
     }
   }
 
@@ -183,9 +177,9 @@ export function CustomTabHost() {
   }, [active, isPortal, tabs, embedProbe]);
 
   /**
-   * 关闭指定标签（顶栏标签行的关闭角标共用此逻辑）：**卸载其 iframe**（移出 LRU 窗口）
-   * 并把激活态回落门户页；标签按钮**保留在顶栏**（关闭不是"让标签消失"，只是取消激活 / 加载），
-   * 再次点击即重新加载。配置始终保留 —— 删除配置在「标签管理」里做。
+   * 关闭指定标签（顶栏标签行的关闭角标共用此逻辑）：**卸载其 iframe**
+   * 并把激活态回落门户页；关闭后该标签从顶栏移除，再次打开时重新加载。
+   * 配置始终保留 —— 删除配置在「标签管理」里做。
    */
   const closeTab = useCallback((closingId: string) => {
     setActivatedIds((prev) => prev.filter((id) => id !== closingId));
@@ -197,7 +191,7 @@ export function CustomTabHost() {
     setActiveTab(id);
   }, [setActiveTab]);
 
-  // 在 LRU 窗口内、src 就绪的标签 → 渲染为常驻 iframe（顺序即最近使用顺序）。
+  // 已打开且 src 就绪的标签 → 渲染为常驻 iframe（顺序固定为首次挂载顺序）。
   // 网络地址无需目录判定；本地路径等 dirByUrl 结果返回后再挂载，避免 src 切换触发二次加载。
   const frames = useMemo(
     () =>
@@ -209,6 +203,20 @@ export function CustomTabHost() {
         ),
     [tabs, activatedIds, dirByUrl]
   );
+  const mountedTabIds = useMemo(() => new Set(frames.map((tab) => tab.id)), [frames]);
+  // 顶栏只展示实际挂载的标签，并按配置顺序稳定排列，避免切换标签时按钮位置跳动。
+  const mountedTabs = useMemo(
+    () => tabs.filter((tab) => mountedTabIds.has(tab.id)),
+    [tabs, mountedTabIds],
+  );
+  // 左侧「门户广场」悬停面板与顶栏共用同一份运行时挂载状态。
+  // 圆点只表达 iframe 是否仍挂载，当前位置由标签底色表达。
+  useEffect(() => {
+    syncMountedTabs(mountedTabs.map((tab) => tab.id));
+  }, [mountedTabs, syncMountedTabs]);
+
+  // 只有应用真正卸载时才清空运行时标记；路由切换会保留主工作台与这里的 iframe。
+  useEffect(() => () => syncMountedTabs([]), [syncMountedTabs]);
 
   // 加载超时：对每个已挂载 iframe 起 8 秒计时；到点仍未 onload 则标记超时（已 loaded 的跳过）。
   // 帧集合变化（新增/关闭帧、地址变更）会重建计时器 —— 即"重新加载时重置计时"。
@@ -282,19 +290,17 @@ export function CustomTabHost() {
             }}
             title="门户：按分组查看全部标签"
           >
-            <LayoutGrid size={11} />
+            <PanelsTopLeft size={11} />
             门户
           </button>
         </div>
-        {/* 全部门户标签常驻此行（不做"关闭即消失"），标签有三种状态：
+        {/* 只展示当前已挂载的标签，标签有两种状态：
             - 激活态：当前正在查看 → 主色高亮；
-            - 保活中：iframe 仍挂载（LRU 窗口内）但不是当前查看的 → 未激活态 + 主色小圆点，
-              让"已加载、切换即时显示"与"未加载、点开才加载"能一眼区分；
-            - 未加载：从未打开 / 已关闭 → 透明底普通样式。
-            关闭只卸载 iframe 并回落门户页，标签按钮仍在此处，点一下即重新加载。 */}
-        {tabs.map((t) => {
+            - 保活中：iframe 仍挂载但不是当前查看的 → 淡底 + 主色小圆点。
+            关闭会卸载 iframe，并把按钮从顶栏移除；再次从门户页打开时重新加载。 */}
+        {mountedTabs.map((t) => {
           const isActive = t.id === activeTabId;
-          const keepAlive = !isActive && activatedIds.includes(t.id);
+          const keepAlive = !isActive;
           return (
             <div key={t.id} className="pd-tab-chip relative shrink-0">
               <button
@@ -371,7 +377,7 @@ export function CustomTabHost() {
             <div className="max-w-[1080px] mx-auto px-6 py-5">
               {/* 标题行 */}
               <div className="flex items-center gap-2 mb-4">
-                <LayoutGrid size={16} style={{ color: 'var(--accent)' }} />
+                <PanelsTopLeft size={16} style={{ color: 'var(--accent)' }} />
                 <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>门户</h2>
                 <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>共 {tabs.length} 个门户标签</span>
                 <div className="flex-1" />
@@ -426,8 +432,8 @@ export function CustomTabHost() {
                     </h3>
                     <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))' }}>
                       {g.items.map((t) => {
-                        // 「已打开」= iframe 当前真的挂载着（LRU 窗口内）；关闭后会摘掉这个标记
-                        const opened = activatedIds.includes(t.id);
+                        // 「已打开」= iframe 当前真的挂载着；关闭后会摘掉这个标记
+                        const opened = mountedTabIds.has(t.id);
                         // 主动探测结果：明确被拒的标签先在门户卡片上标出，并常显「在浏览器打开」出口
                         const probe = embedProbe[t.url];
                         const blocked = probe?.status === 'blocked';

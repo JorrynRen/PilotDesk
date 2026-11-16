@@ -331,6 +331,16 @@ fn get_app_setting(
 }
 
 #[tauri::command]
+fn resolve_default_workspace(
+    state: tauri::State<'_, DbState>,
+) -> Result<String, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    Ok(crate::utils::paths::resolve_workspace_path(None, "", &conn)
+        .to_string_lossy()
+        .to_string())
+}
+
+#[tauri::command]
 fn set_app_setting(
     state: tauri::State<'_, DbState>,
     key: String,
@@ -431,7 +441,6 @@ async fn agent_send_message_with_config(
     agent_type: String,
     message: String,
     mode: String,
-    cwd: Option<String>,
     system_prompt: Option<String>,
     agent_session_id: Option<String>,
     temperature: Option<f64>,
@@ -480,7 +489,7 @@ async fn agent_send_message_with_config(
         .get_conn()
         .map_err(|e| format!("数据库连接失败: {}", e))?;
     let include_clock = crate::commands::app_settings::load_clock_anchor_enabled(&conn);
-    let message = crate::utils::with_clock_anchor(&message, include_clock);
+    let mut message = crate::utils::with_clock_anchor(&message, include_clock);
 
     // ── CLI Agent 路径（原有逻辑）──
     // `agent_session_id` 缺省时以库为准：调用方可能持有一份过期的会话副本
@@ -527,16 +536,23 @@ async fn agent_send_message_with_config(
             return Err(err);
         }
     }
-    // cwd 为空时统一使用全局工作区路径
-    let resolved_cwd = if cwd.as_deref().map_or(true, |s| s.is_empty()) {
-        Some(
-            crate::utils::paths::resolve_workspace_path(None, "", &conn)
-                .to_string_lossy()
-                .to_string(),
-        )
-    } else {
-        cwd
-    };
+    // 普通会话不保存工作目录快照。运行根按宿主绑定/项目主目录/全局工作空间解析；
+    // 宿主绑定只由 ACP 导入流程写入，优先级高于会话项目归属。
+    let workspace_context = commands::projects::resolve_workspace_context(
+        &conn,
+        commands::projects::WorkspaceOwner::session(&session_id),
+    )
+    .map_err(|e| format!("解析会话工作目录失败: {}", e))?;
+    let artifact_root = workspace_context.artifact_root();
+    let resolved_workspace = workspace_context.workspace;
+    let resolved_cwd = resolved_workspace.work_root.clone();
+    let workspace_roots = resolved_workspace.runtime_roots([artifact_root.clone()]);
+    let workspace_context =
+        commands::projects::workspace_context_prompt(&resolved_workspace, Some(&artifact_root));
+    if !workspace_context.is_empty() {
+        message.push_str("\n\n");
+        message.push_str(&workspace_context);
+    }
     // ── 接入方式路由（v9 起 `agents.transport`）──
     // 非 `subprocess` 走传输抽象层；`subprocess` 仍走既有 execute_async（legacy/v2 开关不变）。
     // 本步只接线、不改 subprocess 行为：`transport` 列默认值就是 'subprocess'。
@@ -551,19 +567,20 @@ async fn agent_send_message_with_config(
                 session_id: sid.clone(),
                 token: run_token,
             };
-            let gate: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>> = app
-                .try_state::<PendingApprovals>()
-                .map(|p| {
+            let gate: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>> =
+                app.try_state::<PendingApprovals>().map(|p| {
                     std::sync::Arc::new(TauriApprovalGate {
                         pending: p.inner().clone(),
-                    }) as std::sync::Arc<dyn crate::agent::transport::ApprovalGate>
+                    })
+                        as std::sync::Arc<dyn crate::agent::transport::ApprovalGate>
                 });
             let result = crate::agent::run_transport_session(
                 app,
                 &desc,
                 &sid,
                 &message,
-                resolved_cwd.as_deref().unwrap_or_default(),
+                &resolved_cwd,
+                &workspace_roots,
                 agent_session_id.as_deref(),
                 gate,
                 // 宿主提供会话模式时它不参与判定，仅作"宿主无模式"时的兜底审批策略
@@ -593,7 +610,8 @@ async fn agent_send_message_with_config(
             config,
             message,
             mode,
-            resolved_cwd,
+            Some(resolved_cwd),
+            workspace_roots,
             system_prompt,
             agent_session_id,
         )
@@ -822,7 +840,6 @@ async fn agent_create_session(
     state: tauri::State<'_, DbState>,
     session_id: String,
     agent_type: String,
-    cwd: Option<String>,
 ) -> Result<(), String> {
     // 就绪门禁：草稿未完成安装、或启动命令在本机不可用时不允许建会话
     // （结构化错误交给前端引导安装；口径与「环境检测」一致）
@@ -848,8 +865,20 @@ async fn agent_create_session(
             }
         }
     }
+    let launch_cwd = {
+        let conn = state
+            .get_conn()
+            .map_err(|e| format!("数据库连接失败: {}", e))?;
+        commands::projects::resolve_workspace_context(
+            &conn,
+            commands::projects::WorkspaceOwner::session(&session_id),
+        )
+        .map_err(|e| format!("解析会话工作目录失败: {}", e))?
+        .workspace
+        .work_root
+    };
     let mut mgr = agent_mgr.lock().await;
-    mgr.create_session(&session_id, &agent_type, cwd.as_deref());
+    mgr.create_session(&session_id, &agent_type, Some(&launch_cwd));
     Ok(())
 }
 
@@ -928,7 +957,7 @@ pub(crate) fn get_api_agent_skills_dir() -> Option<String> {
 /// - `kind == "image"`：读取落盘文件转 `data:<mime>;base64,...`，送入多模态输入；
 ///   同时记录落盘路径，供图生图工具（generate_image / edit_image）引用；
 /// - 其余：仅生成路径说明，供模型通过 read_file 按需读取。
-fn split_attachments(attachments: &[Attachment]) -> (Vec<String>, String) {
+fn split_attachments(attachments: &[Attachment], cwd: &str) -> (Vec<String>, String) {
     use base64::Engine;
 
     let mut images = Vec::new();
@@ -936,8 +965,11 @@ fn split_attachments(attachments: &[Attachment]) -> (Vec<String>, String) {
     let mut image_lines = Vec::new();
 
     for att in attachments {
+        let normalized_path = crate::utils::paths::normalize_absolute_path(&att.path, cwd)
+            .to_string_lossy()
+            .to_string();
         if att.kind == "image" {
-            match std::fs::read(&att.path) {
+            match std::fs::read(&normalized_path) {
                 Ok(bytes) => {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                     let mime = if att.mime.is_empty() {
@@ -948,12 +980,12 @@ fn split_attachments(attachments: &[Attachment]) -> (Vec<String>, String) {
                     images.push(format!("data:{};base64,{}", mime, b64));
                 }
                 Err(e) => {
-                    log::warn!("[API Agent] 读取图片附件失败 {}: {}", att.path, e);
+                    log::warn!("[API Agent] 读取图片附件失败 {}: {}", normalized_path, e);
                 }
             }
-            image_lines.push(format!("- {} (路径: {})", att.name, att.path));
+            image_lines.push(format!("- {} (路径: {})", att.name, normalized_path));
         } else {
-            file_lines.push(format!("- {} (路径: {})", att.name, att.path));
+            file_lines.push(format!("- {} (路径: {})", att.name, normalized_path));
         }
     }
 
@@ -988,7 +1020,7 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
-/// 自动记忆检索（意图路由）的人类可读结果摘要，作为 memory_intent 调用记录的返回值。
+/// 自动检索记忆与知识库（意图路由）的人类可读结果摘要，作为 memory_intent 调用记录的返回值。
 /// 故障类状态附上具体原因，使前端可见归因、无需翻日志。
 ///
 /// 命中列表带**来源**（`【知识库·小说创作】黄金三章` / `【记忆·preference】用户偏好`）：
@@ -1012,18 +1044,18 @@ fn kv_retrieval_summary(trace: &crate::api_agent::memory_intent::RetrievalTrace)
                 // 详情里会逐个列出命中的 key
                 format!("命中 {} 条记忆 / 知识并注入上下文：{}", n, keys)
             } else {
-                "意图路由完成检索：0 命中，本轮不注入记忆".to_string()
+                "检索路由完成检索：0 命中，本轮不注入记忆或知识".to_string()
             }
         }
         "no_keywords" => {
-            "意图路由未返回任何关键词，本轮未检索、不注入记忆（消息可能没有可检索的主题）"
+            "检索路由未返回任何关键词，本轮未检索、不注入记忆或知识（消息可能没有可检索的主题）"
                 .to_string()
         }
         // 路由故障（含熔断冷却）时一律不注入：避免把与当前话题无关的高频记忆塞进上下文。
-        "route_breaker_open" => "意图路由处于熔断冷却期，本轮不注入记忆".to_string(),
-        "route_unavailable" => "意图路由不可用，本轮不注入记忆".to_string(),
-        "route_unparsed" => "意图路由响应解析失败，本轮不注入记忆".to_string(),
-        "empty_input" => "用户消息为空，未发起意图路由，本轮不注入记忆".to_string(),
+        "route_breaker_open" => "检索路由处于熔断冷却期，本轮不注入记忆或知识".to_string(),
+        "route_unavailable" => "检索路由不可用，本轮不注入记忆或知识".to_string(),
+        "route_unparsed" => "检索路由响应解析失败，本轮不注入记忆或知识".to_string(),
+        "empty_input" => "用户消息为空，未发起检索路由，本轮不注入记忆或知识".to_string(),
         other => {
             if trace.injected {
                 format!("记忆注入状态 {}：注入 {} 条：{}", other, n, keys)
@@ -1038,7 +1070,9 @@ fn kv_retrieval_summary(trace: &crate::api_agent::memory_intent::RetrievalTrace)
         out.push_str(&format!("。原因：{}", trace.reason));
     }
     if !memory_intent_succeeded(trace.status) {
-        out.push_str("；需要用户偏好或事实时模型可调用 search_memory。");
+        out.push_str(
+            "；需要用户偏好或事实时模型可调用 search_memory，需要资料时可调用 search_knowledge。",
+        );
     }
     out
 }
@@ -1050,7 +1084,7 @@ fn memory_intent_succeeded(status: &str) -> bool {
     matches!(status, "matched" | "no_keywords" | "empty_input")
 }
 
-/// 自动记忆检索记录的一行标题（思维链折叠行文案）。
+/// 自动检索记忆与知识库记录的一行标题（思维链折叠行文案）。
 /// 与 status 一一对应，作为系统步骤展示，不使用"调用 xxx"式工具语义。
 fn memory_retrieval_title(trace: &crate::api_agent::memory_intent::RetrievalTrace) -> String {
     let label = match trace.status {
@@ -1068,10 +1102,10 @@ fn memory_retrieval_title(trace: &crate::api_agent::memory_intent::RetrievalTrac
         "empty_input" => "无输入，本轮跳过".to_string(),
         other => format!("状态 {}", other),
     };
-    format!("自动记忆检索 · {}", label)
+    format!("自动检索记忆与知识库 · {}", label)
 }
 
-/// 自动记忆检索系统步骤的参数行（展开明细时显示）。
+/// 自动检索记忆与知识库系统步骤的参数行（展开明细时显示）。
 /// 只呈现"路由器实际用了什么模型、解析出什么"——命中与注入属于结论，放在 detail 里；
 /// 两者分开才能一眼分辨"模型没解析出关键词"与"关键词没命中记忆"。
 fn memory_retrieval_params(trace: &crate::api_agent::memory_intent::RetrievalTrace) -> String {
@@ -1151,7 +1185,7 @@ async fn run_api_agent(
             false,
             // 会话模式：审批由用户在内联审批卡上决定（不是工作流节点，无需工作流审批上下文）
             None,
-            // 会话模式：工作目录/授权边界沿用会话行自己的 cwd
+            // 会话模式：工作目录/授权边界由运行体内按项目主目录或全局工作空间解析
             None,
             // 交互式聊天不做模型覆盖：始终按会话行里的 厂商/模型
             None,
@@ -1235,6 +1269,37 @@ pub(crate) fn record_tool_approval_event(
 ///
 /// 任何失败都在此发一次 `agent-error`（含配置等启动期失败），使会话 UI 的失败提示
 /// 与流式事件走同一条通路，无需调用方各自发事件。
+#[derive(Debug, Clone)]
+pub(crate) struct WorkspaceRunOverride {
+    pub(crate) workspace: commands::projects::WorkspaceResolution,
+    pub(crate) extra_roots: Vec<String>,
+    /// 调用方已经确定的产物根（工作流使用）。None 时才按会话名派生。
+    pub(crate) artifact_root: Option<String>,
+}
+
+/// 解析一次运行实际采用的工作区。
+///
+/// 宿主绑定是唯一不可被调用方覆盖的工作根；其他场景可由工作流等项目上下文
+/// 提供更具体的本次运行工作区与产物根。
+fn resolve_effective_workspace(
+    session_workspace: commands::projects::WorkspaceResolution,
+    workspace_override: Option<WorkspaceRunOverride>,
+) -> (
+    commands::projects::WorkspaceResolution,
+    Vec<String>,
+    Option<String>,
+) {
+    match workspace_override {
+        Some(over)
+            if session_workspace.source != commands::projects::WorkspaceSource::HostBound =>
+        {
+            (over.workspace, over.extra_roots, over.artifact_root)
+        }
+        Some(over) => (session_workspace, over.extra_roots, None),
+        None => (session_workspace, Vec::new(), None),
+    }
+}
+
 pub(crate) async fn run_api_agent_inner(
     pool: &DbPool,
     app: &tauri::AppHandle,
@@ -1248,7 +1313,7 @@ pub(crate) async fn run_api_agent_inner(
     security_mode: Option<String>,
     persist_turn: bool,
     workflow_approval: Option<WorkflowApprovalTarget>,
-    workspace_override: Option<String>,
+    workspace_override: Option<WorkspaceRunOverride>,
     provider_override: Option<String>,
     model_override: Option<String>,
 ) -> Result<String, String> {
@@ -1296,7 +1361,7 @@ async fn run_api_agent_body(
     security_mode: Option<String>,
     persist_turn: bool,
     workflow_approval: Option<WorkflowApprovalTarget>,
-    workspace_override: Option<String>,
+    workspace_override: Option<WorkspaceRunOverride>,
     provider_override: Option<String>,
     model_override: Option<String>,
 ) -> Result<String, String> {
@@ -1309,6 +1374,31 @@ async fn run_api_agent_body(
     let session = commands::session::get_session_inner(&conn, session_id)
         .map_err(|e| format!("查询会话失败: {}", e))?
         .ok_or_else(|| format!("会话不存在: {}", session_id))?;
+    let session_workspace = commands::projects::resolve_workspace_context(
+        &conn,
+        commands::projects::WorkspaceOwner::session(session_id),
+    )
+    .map_err(|e| format!("解析会话工作目录失败: {}", e))?;
+    let session_artifact_name = session_workspace.owner_title.clone();
+    let session_workspace = session_workspace.workspace;
+    // 工作流可提供本次运行的项目工作区；但 ACP 宿主绑定目录是唯一最高优先级，
+    // 任何调用方都不能覆盖。
+    let (effective_workspace, extra_workspace_roots, artifact_override) =
+        resolve_effective_workspace(session_workspace, workspace_override);
+    let artifact_root = match artifact_override {
+        Some(root) if !root.trim().is_empty() => {
+            crate::utils::paths::normalize_absolute_path(root.trim(), "")
+                .to_string_lossy()
+                .to_string()
+        }
+        _ => effective_workspace.artifact_root(&session_artifact_name, "session"),
+    };
+    let effective_cwd = effective_workspace.work_root.clone();
+    let extra_workspace_roots = extra_workspace_roots
+        .into_iter()
+        .chain(std::iter::once(artifact_root.clone()));
+    let workspace_context =
+        commands::projects::workspace_context_prompt(&effective_workspace, Some(&artifact_root));
 
     // 1.1 API Agent 生成并持久化 agent_session_id（供外部系统恢复会话）
     // 用 match 而不是 `if is_none() { … } else { unwrap() }`：后者把"刚判过非空"和"取值"
@@ -1433,7 +1523,7 @@ async fn run_api_agent_body(
         )
         .await;
 
-    // 3.6.1 自动记忆检索的可观测记录：意图路由是轮前系统步骤（必须在组装 messages 之前跑完，
+    // 3.6.1 自动检索记忆与知识库的可观测记录：意图路由是轮前系统步骤（必须在组装 messages 之前跑完，
     // 结果用于拼 <memory_context>），因此它不是模型发起的工具调用——以独立的系统步骤事件发出，
     // 前端在思维链里按系统步骤渲染（不计入工具调用数），避免出现"有调用记录却无此工具"的假象。
     // 关闭意图路由（disabled）时不发事件，尊重用户显式关闭的预期。
@@ -1471,7 +1561,7 @@ async fn run_api_agent_body(
         }
     }
 
-    // 4. 组装 System Prompt（Base + MEMORY.md + USER.md + Skill 列表；KV 记忆块随后以 user 上下文注入）
+    // 4. 组装 System Prompt（Base + AGENTS.md + USER.md + Skill 列表；KV 记忆块随后以 user 上下文注入）
     let api_agent_base_prompt = concat!(
         "<agent_role>\n",
         "你是一个智能编程助手（PilotDesk Agent）。你可以：\n",
@@ -1485,7 +1575,7 @@ async fn run_api_agent_body(
         "8. 调用 read_kb_file 通读知识库里某份原文（按分块顺序；不传文件名会先列出有哪些文件）\n",
         "9. 调用 save_knowledge 把一条提炼过的知识写进指定知识库（目标库必填，直接入库）\n",
         "10. 调用 load_skill 加载特定技能——仅在确定需要该技能执行任务时使用\n",
-        "11. 调用 save_memory 保存重要信息供后续对话使用\n",
+        "11. 调用 save_memory 保存用户在后续对话中仍需使用、且已由用户明确陈述或确认的长期偏好、稳定事实或项目决策；没有合适内容时不要调用\n",
         "12. 调用 search_web 联网搜索（默认 Bing 中国版，返回标题/链接/摘要）——低风险\n",
         "13. 调用 fetch_web 抓取指定网页的正文文本——低风险\n",
         "14. 调用 browser 工具访问网页（action=fetch 抓取渲染后页面 / action=screenshot 截图）——中风险需确认\n",
@@ -1504,20 +1594,38 @@ async fn run_api_agent_body(
         "- 需要查用户整理过的资料（项目规范、公司制度、教程文档等）时用 search_knowledge，\n",
         "  不要拿 search_memory 去搜它们（它只匹配标题与标签，搜不到正文）；不确定用户有没有相关资料时，\n",
         "  先不带参数调用一次 search_knowledge 看清单，再带关键词检索\n",
-        "- 要「记住」东西时先分清去处：**关于用户/项目的偏好与事实**（如「我喜欢用 TypeScript」）→ save_memory；\n",
+        "- 要「记住」东西时先分清去处：**关于用户/项目的长期偏好与稳定事实**（如「我喜欢用 TypeScript」）→ save_memory；\n",
         "  **从资料或讨论里提炼出的可复用知识**（结论、规则、方案）→ save_knowledge，且**必须指定目标知识库**，\n",
         "  不确定存哪个库就先问用户，不要猜\n",
-        "- USER.md / MEMORY.md 是应用级记忆文件，已随本提示自动注入（见上方 <project_memory> /\n",
+        "- USER.md / AGENTS.md 是应用级记忆文件，已随本提示自动注入（见上方 <project_memory> /\n",
         "  <user_preferences>；对应块不存在即表示该文件不存在或为空），无需再用 read_file 读取；\n",
-        "  需要查询用户已保存的偏好/事实时调用 search_memory，需要补充长期记忆时调用 save_memory\n",
-        "- 这两个文件各有且只有一份，位置不同：MEMORY.md 在工作区目录下（项目级），USER.md 在 PilotDesk\n",
+        "  需要查询用户已保存的偏好/事实时调用 search_memory\n",
+        "- 这两个文件各有且只有一份，位置不同：AGENTS.md 在项目主目录下（项目级），USER.md 在 PilotDesk\n",
         "  配置目录下（用户级）——项目目录下没有 USER.md。二者真实路径已在 <environment> 中给出，\n",
         "  提及位置时只能照抄该路径，不要按“项目级/用户级”推断或拼接（例如把工作区目录与 USER.md 拼一起），\n",
         "  也不要假设它们在用户主目录下\n",
         "- 当需要最新信息、实时数据或事实核查时，使用 search_web 联网搜索；无法联网获取时如实告知用户\n",
-        "- save_memory 仅在以下场景使用：\n",
-        "  a) 用户明确要求你记住某事（如\"记住我喜欢用 TypeScript\"）\n",
-        "  b) 发现用户的个人偏好、项目决策或重要上下文（如\"我的项目数据库使用 PostgreSQL\"）\n",
+        "<memory_write_policy>\n",
+        "save_memory 是机会式工具，不是每轮必做任务，也不要在轮末例行检查记忆。\n",
+        "没有满足条件的内容时，本次结果就是 0 条：不要调用 save_memory，不要创建占位记录，\n",
+        "也不要向用户说明“已检查记忆”。只有当前用户消息或本轮已经由用户确认的内容出现了以下事件，\n",
+        "才应立即评估并在信息明确时保存：\n",
+        "1. 用户明确要求你记住某事，如“记住我喜欢用 TypeScript”。\n",
+        "2. 用户明确陈述跨会话仍然有效的个人偏好、稳定环境事实或长期约束，\n",
+        "   如“我的项目数据库使用 PostgreSQL”“以后默认用简体中文回答”。\n",
+        "3. 用户明确确认了一个项目决策或方案，如“确定采用 SQLite”“就按这个目录结构实施”。\n",
+        "   助手提出但用户尚未确认的推测、建议或方案不算已确认事实。\n",
+        "4. 用户明确修正了已有偏好、事实或项目决策。\n",
+        "保存时必须遵守：\n",
+        "- 只保存用户明确陈述或确认的信息，不把助手自己的推测写成用户事实。\n",
+        "- 不保存通用知识、临时任务要求、一次性格式要求、当前命令细节或稍后即失效的上下文。\n",
+        "- 不保存密码、API Key、令牌、私钥等敏感凭证。\n",
+        "- 同一轮有多条独立长期信息时可分别保存，但只保留最关键的内容，最多 3 条。\n",
+        "- important 仅在用户明确表示该信息重要或必须长期保留时设为 true，否则保持 false。\n",
+        "- 保存前不必强制调用 search_memory；后端会自动检查同名与等价内容。只有需要核对\n",
+        "  已有条目的准确 key 或完整内容时，才先调用 search_memory。\n",
+        "- 保存记忆不应改变当前任务方向；工具返回后继续完成用户原本的请求。\n",
+        "</memory_write_policy>\n",
         "- 不要为了一般性知识问答调用任何工具——直接回答即可\n",
         "- 如果找不到相关记忆或技能，如实告知并继续用你的知识回答\n",
         "</agent_role>\n",
@@ -1525,7 +1633,7 @@ async fn run_api_agent_body(
         "当前用户主目录: {HOME}\n",
         "当前用户桌面:  {DESKTOP}\n",
         "工作区目录:    {CWD}\n",
-        "项目记忆文件:  {MEMORY_MD}（项目级，位于工作区目录）\n",
+        "项目记忆文件:  {PROJECT_AGENTS}（项目级，位于项目主目录）\n",
         "用户偏好文件:  {USER_MD}（用户级，位于配置目录；工作区下没有 USER.md）\n",
         "</environment>"
     );
@@ -1537,25 +1645,16 @@ async fn run_api_agent_body(
     let desktop = dirs::desktop_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| format!("{}\\Desktop", home));
-    let cwd_display = if session.cwd.is_empty() {
-        "未知".to_string()
-    } else {
-        session.cwd.clone()
-    };
+    let cwd_display = effective_cwd.clone();
 
-    // 记忆文件真实路径：与运行时注入用的是同一套解析（记忆根复用 resolve_memory_root，
-    // USER.md 取统一配置根）。把路径写进 <environment>，避免模型按主目录猜路径后去读错文件
-    // ——那会命中工作区外的路径子策略，弹出与用户意图无关的审批。
+    // 记忆文件真实路径：项目记忆根与运行时 cwd 分离。ACP 宿主绑定只改变 cwd，
+    // 不能把项目 AGENTS.md 带到宿主目录；无项目时才复用全局工作空间。
     let memory_root = crate::commands::memory::resolve_memory_root(
         &conn,
-        if session.cwd.trim().is_empty() {
-            None
-        } else {
-            Some(&session.cwd)
-        },
+        Some(effective_workspace.memory_root.as_str()),
     );
-    let memory_md_display = std::path::Path::new(&memory_root)
-        .join("MEMORY.md")
+    let project_agents_display = std::path::Path::new(&memory_root)
+        .join("AGENTS.md")
         .to_string_lossy()
         .to_string();
     let user_md_display = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
@@ -1571,13 +1670,16 @@ async fn run_api_agent_body(
         .replace("{HOME}", &home)
         .replace("{DESKTOP}", &desktop)
         .replace("{CWD}", &cwd_display)
-        .replace("{MEMORY_MD}", &memory_md_display)
+        .replace("{PROJECT_AGENTS}", &project_agents_display)
         .replace("{USER_MD}", &user_md_display);
 
     let full_base_prompt = if system_prompt.is_empty() {
-        api_agent_base_prompt.to_string()
+        format!("{}\n\n{}", api_agent_base_prompt, workspace_context)
     } else {
-        format!("{}\n\n{}", api_agent_base_prompt, system_prompt)
+        format!(
+            "{}\n\n{}\n\n{}",
+            api_agent_base_prompt, workspace_context, system_prompt
+        )
     };
 
     let full_system_prompt = {
@@ -1609,16 +1711,14 @@ async fn run_api_agent_body(
                 })
                 .unwrap_or_default();
         let mut builder = SystemPromptBuilder::new(full_base_prompt)
-            .with_memory_md(Some(memory_root.as_str()))
+            .with_project_agents(Some(memory_root.as_str()))
             .with_user_md()
             .with_skills(visible_skills)
             .with_knowledge_bases(knowledge_briefs);
 
         // Git 仓库上下文
-        if !session.cwd.is_empty() {
-            if let Some(git) = GitContext::from_cwd(&session.cwd) {
-                builder = builder.with_git_context(&git);
-            }
+        if let Some(git) = GitContext::from_cwd(&effective_cwd) {
+            builder = builder.with_git_context(&git);
         }
 
         builder.build()
@@ -1743,7 +1843,7 @@ async fn run_api_agent_body(
     // 本次输入显式化（v3.5d）：只对当前消息注入实时时钟，并用 <user_request> 标记本轮的
     // 新指令边界；历史 user 消息保持原样回放——不再给每条历史消息统一盖“现在”时间戳，
     // 否则旧指令与当前指令前缀完全相同，模型会把已处理过的上一条也当成“本次请求”。
-    let (images, file_note) = split_attachments(attachments);
+    let (images, file_note) = split_attachments(attachments, &effective_cwd);
     let mut user_body = message.to_string();
     if !file_note.is_empty() {
         user_body.push_str(&file_note);
@@ -1829,14 +1929,14 @@ async fn run_api_agent_body(
         Some((p.api_endpoint, key, p.api_format))
     }));
 
-    // 本轮运行的工作目录 / 授权边界：工作流节点传产物目录（只对本轮生效，不改写会话行，
-    // 所以「延续会话」也不会把被续会话的旧 cwd 带过来）；会话模式沿用会话行自己的 cwd。
-    let effective_cwd = workspace_override.unwrap_or_else(|| session.cwd.clone());
+    // 本轮运行的工作目录 / 授权边界：工作流节点传工作根（只对本轮生效，不改写会话行）；
+    // 会话模式为项目主目录、全局工作空间，或 ACP 宿主恢复目录；
+    // 项目关联目录与产物目录都在额外安全根中。
+    let workspace_roots = effective_workspace.runtime_roots(extra_workspace_roots);
     // 飞地：数据出境闸门（装配期算一次；工具执行时还会复核策略）
     // 一期取主机快照中的首个组织作为「当前团队」。
     let (enclave_state, enclave_store, enclave_org_id, enclave_allowed, enclave_trust) = {
-        let state = app
-            .state::<std::sync::Arc<crate::enclave::EnclaveState>>();
+        let state = app.state::<std::sync::Arc<crate::enclave::EnclaveState>>();
         let state = (*state).clone();
         let store = state.store.clone();
         let trust =
@@ -1868,6 +1968,7 @@ async fn run_api_agent_body(
     };
     let env = crate::tools::ToolEnv {
         cwd: effective_cwd.clone(),
+        workspace_roots: workspace_roots.clone(),
         api_format: api_format.clone(),
         image: if matches!(api_format, ApiFormat::Anthropic) {
             None
@@ -1917,6 +2018,7 @@ async fn run_api_agent_body(
         .with_api_format(api_format)
         .with_permission_rules(permission_rules)
         .with_workspace(Some(effective_cwd.clone()))
+        .with_workspace_roots(workspace_roots)
         .with_security_mode(
             security_mode
                 .as_deref()
@@ -2393,31 +2495,7 @@ fn collect_files(root: &std::path::Path, max: usize) -> Vec<String> {
 
 /// 解析用户提供的路径（展开 ~ / %USERPROFILE%，相对路径基于 cwd）
 pub(crate) fn resolve_workspace_path(raw_path: &str, cwd: &str) -> std::path::PathBuf {
-    let expanded = if raw_path.starts_with("~/") || raw_path.starts_with("~\\") {
-        if let Some(home) = dirs::home_dir() {
-            home.join(&raw_path[2..]).to_string_lossy().to_string()
-        } else {
-            raw_path.to_string()
-        }
-    } else if raw_path.to_lowercase().starts_with("%userprofile%") {
-        if let Some(home) = dirs::home_dir() {
-            let rest = &raw_path[14..];
-            home.join(rest.trim_start_matches('\\').trim_start_matches('/'))
-                .to_string_lossy()
-                .to_string()
-        } else {
-            raw_path.to_string()
-        }
-    } else {
-        raw_path.to_string()
-    };
-
-    let p = std::path::Path::new(&expanded);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        std::path::Path::new(cwd).join(&expanded)
-    }
+    crate::utils::paths::normalize_absolute_path(raw_path, cwd)
 }
 
 /// 计算行级 diff（旧 vs 新），返回 `- old / + new` 文本。
@@ -2598,6 +2676,8 @@ pub fn run() {
     );
     // EnclaveState 以 Arc 托管：后台快照循环与命令层共享同一份状态。
     let enclave_state = std::sync::Arc::new(enclave::EnclaveState::new(enclave_store));
+    // API 共享网关只读取主库 Provider 配置；密钥不复制进团队库。
+    enclave_state.attach_main_db(pool.clone());
     // 应急开关随库走：启动时恢复运行态（任一组织处于「对外服务关闭」即视为关闭）
     let enclave_disabled = enclave_state
         .store
@@ -2651,7 +2731,6 @@ pub fn run() {
             commands::session::get_session_messages,
             commands::session::rename_session,
             commands::session::session_suggest_title,
-            commands::session::update_session_cwd,
             commands::session::update_session_model,
             commands::session::archive_session,
             commands::session::unarchive_session,
@@ -2665,6 +2744,15 @@ pub fn run() {
             commands::host_sessions::acp_delete_host_session,
             commands::session::search_sessions,
             commands::session::search_messages,
+            commands::projects::project_list,
+            commands::projects::project_get,
+            commands::projects::project_create,
+            commands::projects::project_update,
+            commands::projects::project_archive,
+            commands::projects::project_restore,
+            commands::projects::project_work_items,
+            commands::projects::project_set_work_membership,
+            commands::projects::session_workspace_info,
             commands::attachment::save_attachments,
             commands::attachment::groupchat_save_attachments,
             commands::attachment::delete_attachment,
@@ -2691,6 +2779,7 @@ pub fn run() {
             get_api_key,
             reorder_api_providers,
             get_app_setting,
+            resolve_default_workspace,
             set_app_setting,
             commands::memory::list_project_roots,
             commands::memory::get_project_memory,
@@ -2783,6 +2872,14 @@ pub fn run() {
             commands::cloud_sync::cloud_sync_now,
             commands::cloud_sync::cloud_sync_status,
             commands::cloud_sync::cloud_sync_set_enabled,
+            commands::remote_workflow::remote_device_register,
+            commands::remote_workflow::remote_device_status,
+            commands::remote_workflow::remote_devices_list,
+            commands::remote_workflow::remote_device_revoke,
+            commands::remote_workflow::remote_run_create,
+            commands::remote_workflow::remote_run_list,
+            commands::remote_workflow::remote_run_cancel,
+            commands::remote_workflow::remote_poll_once,
             agent_send_message_with_config,
             agent_stop_generation,
             agent_running_sessions,
@@ -2903,7 +3000,6 @@ pub fn run() {
             commands::groupchat::groupchat_send_message,
             commands::groupchat::groupchat_respond_confirmation,
             commands::groupchat::groupchat_set_director,
-            commands::groupchat::groupchat_set_output_dir,
             commands::groupchat::groupchat_set_max_parallel,
             commands::groupchat::groupchat_pause,
             commands::groupchat::groupchat_resume,
@@ -2941,11 +3037,10 @@ pub fn run() {
             commands::account::account_platform_base,
             commands::org_share::org_list_mine,
             commands::org_share::org_list_shared_workflows,
+            commands::org_share::org_list_shared_inspirations,
             commands::org_share::org_share_workflow,
             commands::org_share::org_import_workflow,
-            commands::org_credentials::org_list_credential_providers,
-            commands::org_credentials::org_apply_credential,
-            commands::org_credentials::org_report_credential,
+            commands::org_share::org_import_inspiration,
             utils::market::fetch_agents_config,
             utils::market::inspiration_market_index,
             utils::market::inspiration_market_fetch,
@@ -2981,7 +3076,42 @@ pub fn run() {
             commands::enclave::enclave_backup_config_set,
             commands::enclave::enclave_backup_now,
             commands::enclave::enclave_audit_list,
+            commands::enclave_api_share::enclave_api_share_access_info,
+            commands::enclave_api_share::enclave_api_share_provider_catalog,
+            commands::enclave_api_share::enclave_api_share_members_list,
+            commands::enclave_api_share::enclave_api_share_member_block,
+            commands::enclave_api_share::enclave_api_share_member_unblock,
+            commands::enclave_api_share::enclave_api_share_sources_list,
+            commands::enclave_api_share::enclave_api_share_source_create,
+            commands::enclave_api_share::enclave_api_share_source_update,
+            commands::enclave_api_share::enclave_api_share_source_delete,
+            commands::enclave_api_share::enclave_api_share_tokens_list,
+            commands::enclave_api_share::enclave_api_share_token_create,
+            commands::enclave_api_share::enclave_api_share_token_update,
+            commands::enclave_api_share::enclave_api_share_token_secret,
+            commands::enclave_api_share::enclave_api_share_token_revoke,
+            commands::enclave_api_share::enclave_api_share_token_archive,
+            commands::enclave_api_share::enclave_api_share_token_delete,
+            commands::enclave_api_share::enclave_api_share_usage,
+            commands::enclave_api_share::enclave_api_share_distributions_list,
+            commands::enclave_api_share::enclave_api_share_distribution_create,
+            commands::enclave_api_share::enclave_api_share_distribution_mark_sent,
+            commands::enclave_api_share::enclave_api_share_distribution_revoke,
+            commands::enclave_api_share::enclave_api_share_distribution_archive,
+            commands::enclave_api_share::enclave_api_share_distribution_delete,
+            commands::enclave_api_share::enclave_api_share_distribution_open,
+            commands::enclave_api_share::enclave_api_share_distribution_mark_applied,
+            commands::enclave_api_share::enclave_messenger_settings_get,
+            commands::enclave_api_share::enclave_messenger_settings_set,
+            commands::enclave_api_share::enclave_messenger_members,
+            commands::enclave_api_share::enclave_messenger_messages,
+            commands::enclave_api_share::enclave_messenger_send,
+            commands::enclave_api_share::enclave_messenger_send_file,
+            commands::enclave_api_share::enclave_messenger_file_get,
+            commands::enclave_api_share::enclave_messenger_recall,
+            commands::enclave_api_share::enclave_messenger_clear,
             commands::enclave_task::enclave_task_list,
+            commands::enclave_task::enclave_task_pending_summary,
             commands::enclave_task::enclave_team_stats,
             commands::enclave_task::enclave_task_split_preview,
             commands::enclave_transfer::enclave_transfer_list,
@@ -3101,9 +3231,13 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     // 等运行期状态稳定；定时调度首轮在 60s 后才会触发，不会误伤正在跑的实例
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    let live: std::collections::HashSet<String> =
-                        reconcile_executor.live_execution_ids().into_iter().collect();
-                    let Ok(conn) = reconcile_pool.get() else { return };
+                    let live: std::collections::HashSet<String> = reconcile_executor
+                        .live_execution_ids()
+                        .into_iter()
+                        .collect();
+                    let Ok(conn) = reconcile_pool.get() else {
+                        return;
+                    };
                     match workflow::reconcile_stale_executions(&conn, &live) {
                         Ok(0) => {}
                         Ok(n) => log::warn!(
@@ -3155,6 +3289,19 @@ pub fn run() {
                 commands::cloud_sync::run_auto_sync_loop(DbState { pool: sync_pool }).await;
             });
 
+            // 远程工作流轮询：仅登记过当前设备时联网；未登录、非专业版或离线时静默跳过。
+            let remote_pool = pool.clone();
+            let remote_executor = node_executor.clone();
+            let remote_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                commands::remote_workflow::run_remote_poll_loop(
+                    DbState { pool: remote_pool },
+                    remote_executor,
+                    remote_handle,
+                )
+                .await;
+            });
+
             // 启动飞地治理快照后台任务（默认每 30 分钟一轮；成功即按主库设置间隔，
             // 失败指数退避 30s→15min，失败只记日志——不阻塞 UI、不影响本地功能）
             let snap_state = enclave_state.clone();
@@ -3168,6 +3315,12 @@ pub fn run() {
             let host_state = enclave_state.clone();
             tauri::async_runtime::spawn(async move {
                 enclave::host::run_host_loop(host_state).await;
+            });
+
+            // API 共享用量立即清理一次，此后每个 UTC 日界清理超过保留期的聚合记录。
+            let api_share_maintenance_state = enclave_state.clone();
+            tauri::async_runtime::spawn(async move {
+                enclave::api_share::run_maintenance_loop(api_share_maintenance_state).await;
             });
 
             // 启动飞地知识库「待整理」后台消费（仅主机执行；能力不可用时只空转）
@@ -3225,6 +3378,17 @@ pub fn run() {
     app.run(|_app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             crate::agent::transport::acp::kill_all_live_sessions();
+            // Kill tracked process trees synchronously first. This path does not
+            // depend on the async manager lock, so shutdown cannot leave a PTY
+            // subtree behind while a terminal command is still in flight.
+            terminal::terminate_registered_processes();
+            if let Some(terminal_mgr) = _app.try_state::<AsyncMutex<terminal::TerminalManager>>() {
+                if let Ok(mut manager) = terminal_mgr.try_lock() {
+                    manager.close_all();
+                } else {
+                    log::warn!("[terminal] 应用退出时终端管理器仍被占用，已执行兜底清理");
+                }
+            }
         }
     });
 }
@@ -3232,6 +3396,154 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use crate::api_agent::memory_intent::RetrievalTrace;
+    use crate::{resolve_effective_workspace, WorkspaceRunOverride};
+
+    fn normalized(path: &str) -> String {
+        crate::utils::paths::normalize_absolute_path(path, "")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn workspace(
+        work_root: &str,
+        source: crate::commands::projects::WorkspaceSource,
+    ) -> crate::commands::projects::WorkspaceResolution {
+        crate::commands::projects::WorkspaceResolution {
+            work_root: work_root.to_string(),
+            project_root: Some("D:\\Project".to_string()),
+            linked_roots: vec!["D:\\Linked".to_string()],
+            memory_root: "D:\\Project".to_string(),
+            source,
+            global_workspace_configured: true,
+        }
+    }
+
+    #[test]
+    fn host_bound_workspace_cannot_be_replaced_by_workflow_override() {
+        let session = workspace(
+            "E:\\Host",
+            crate::commands::projects::WorkspaceSource::HostBound,
+        );
+        let (effective, extra_roots, artifact_root) = resolve_effective_workspace(
+            session,
+            Some(WorkspaceRunOverride {
+                workspace: workspace(
+                    "D:\\Project",
+                    crate::commands::projects::WorkspaceSource::Project,
+                ),
+                extra_roots: vec!["D:\\Project\\outputs\\Workflow".to_string()],
+                artifact_root: Some("D:\\Project\\outputs\\Workflow".to_string()),
+            }),
+        );
+
+        assert_eq!(effective.work_root, "E:\\Host");
+        assert_eq!(
+            effective.source,
+            crate::commands::projects::WorkspaceSource::HostBound
+        );
+        assert_eq!(effective.memory_root, "D:\\Project");
+        assert_eq!(
+            extra_roots,
+            vec!["D:\\Project\\outputs\\Workflow".to_string()]
+        );
+        assert_eq!(artifact_root, None);
+    }
+
+    #[test]
+    fn non_host_workspace_accepts_workflow_override() {
+        let session = workspace(
+            "D:\\Global",
+            crate::commands::projects::WorkspaceSource::Global,
+        );
+        let (effective, _, artifact_root) = resolve_effective_workspace(
+            session,
+            Some(WorkspaceRunOverride {
+                workspace: workspace(
+                    "D:\\Project",
+                    crate::commands::projects::WorkspaceSource::Project,
+                ),
+                extra_roots: Vec::new(),
+                artifact_root: Some("D:\\Project\\outputs\\Workflow".to_string()),
+            }),
+        );
+
+        assert_eq!(effective.work_root, "D:\\Project");
+        assert_eq!(
+            effective.source,
+            crate::commands::projects::WorkspaceSource::Project
+        );
+        assert_eq!(
+            artifact_root.as_deref(),
+            Some("D:\\Project\\outputs\\Workflow")
+        );
+    }
+
+    #[test]
+    fn session_workspace_uses_live_project_primary_except_host_resume() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES ('p1', 'Project', '', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_directories
+                (id, project_id, path, is_primary, sort_order, created_at, updated_at)
+             VALUES ('d1', 'p1', 'D:\\Latest', 1, 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions
+                (id, agent_type, title, host_resume_cwd, created_at, updated_at, project_id)
+             VALUES
+                ('following', 'claude', 'Following', NULL, 1, 1, 'p1'),
+                ('host', 'claude', 'Host import', 'E:\\Imported', 1, 1, 'p1'),
+                ('orphan', 'claude', 'Orphan', NULL, 1, 1, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at)
+             VALUES ('pilotdesk-workspace', 'D:\\Global', 1)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            crate::commands::projects::resolve_workspace_context(
+                &conn,
+                crate::commands::projects::WorkspaceOwner::session("following"),
+            )
+            .unwrap()
+            .workspace
+            .work_root,
+            normalized("D:\\Latest")
+        );
+        assert_eq!(
+            crate::commands::projects::resolve_workspace_context(
+                &conn,
+                crate::commands::projects::WorkspaceOwner::session("host"),
+            )
+            .unwrap()
+            .workspace
+            .work_root,
+            normalized("E:\\Imported")
+        );
+        assert_eq!(
+            crate::commands::projects::resolve_workspace_context(
+                &conn,
+                crate::commands::projects::WorkspaceOwner::session("orphan"),
+            )
+            .unwrap()
+            .workspace
+            .work_root,
+            normalized("D:\\Global")
+        );
+    }
 
     fn trace(status: &'static str, reason: &str) -> RetrievalTrace {
         RetrievalTrace {
@@ -3262,16 +3574,17 @@ mod tests {
             "route_unavailable",
             "请求失败（第 1 次，耗时 4002ms）: operation timed out",
         ));
-        assert!(s.contains("本轮不注入记忆"));
+        assert!(s.contains("本轮不注入记忆或知识"));
         assert!(s.contains("原因：请求失败"));
         assert!(s.contains("search_memory"));
+        assert!(s.contains("search_knowledge"));
     }
 
     #[test]
     fn summary_omits_reason_and_guidance_when_flow_completed() {
         let s = crate::kv_retrieval_summary(&trace("no_keywords", ""));
         assert!(s.contains("未返回任何关键词"));
-        assert!(s.contains("本轮未检索、不注入记忆"));
+        assert!(s.contains("本轮未检索、不注入记忆或知识"));
         assert!(!s.contains("原因："));
         assert!(!s.contains("search_memory"));
     }
@@ -3280,11 +3593,11 @@ mod tests {
     fn title_uses_system_step_wording_per_status() {
         assert_eq!(
             crate::memory_retrieval_title(&trace("route_unavailable", "x")),
-            "自动记忆检索 · 检索不可用，本轮跳过"
+            "自动检索记忆与知识库 · 检索不可用，本轮跳过"
         );
         assert_eq!(
             crate::memory_retrieval_title(&trace("no_keywords", "")),
-            "自动记忆检索 · 未返回关键词，本轮不检索"
+            "自动检索记忆与知识库 · 未返回关键词，本轮不检索"
         );
         let mut hit = trace("matched", "");
         hit.matched = vec![
@@ -3300,7 +3613,7 @@ mod tests {
         hit.injected = true;
         assert_eq!(
             crate::memory_retrieval_title(&hit),
-            "自动记忆检索 · 命中 2 条记忆 / 知识并注入"
+            "自动检索记忆与知识库 · 命中 2 条记忆 / 知识并注入"
         );
         // 摘要要带上来源：只报 key 的话，用户分不清哪条是资料、哪条是自己的记忆
         let detail = crate::kv_retrieval_summary(&hit);

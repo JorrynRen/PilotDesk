@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { X, Download } from 'lucide-react';
+import { X, Upload } from 'lucide-react';
 import type { InspirationItem } from '../../stores/inspirationStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -24,11 +24,12 @@ interface InspirationExportDialogProps {
 }
 
 /**
- * 「导出为市场 JSON（投稿用）」弹窗。
+ * 「JSON 导出」弹窗。
  *
  * 市场 id 预填后端由标题派生的合规默认值，用户可改；改动即实时校验。
  * 确认后用系统保存对话框选路径，再调 `export_inspiration_json` 落盘。
- * 导出内容**只含市场格式字段**（id/title/icon/tags/content），不含本地元数据。
+ * 文件可用于备份、分享，并保持与灵感市场 JSON 的字段兼容；只含
+ * id/title/icon/tags/content，不含本地元数据。
  */
 export function InspirationExportDialog({ inspiration, onClose }: InspirationExportDialogProps) {
   const [marketId, setMarketId] = useState('');
@@ -69,7 +70,7 @@ export function InspirationExportDialog({ inspiration, onClose }: InspirationExp
         marketId,
         destPath,
       });
-      showToast('已导出，可在市场投稿页上传该文件', 'success');
+      showToast('JSON 文件已导出，可用于备份或分享', 'success');
       onClose();
     } catch (e) {
       showToast(`导出失败：${errorMessage(e)}`, 'error');
@@ -92,7 +93,7 @@ export function InspirationExportDialog({ inspiration, onClose }: InspirationExp
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
           <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            导出为市场 JSON（投稿用）
+            JSON 导出
           </h3>
           <button onClick={onClose} className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
             <X size={16} />
@@ -102,12 +103,25 @@ export function InspirationExportDialog({ inspiration, onClose }: InspirationExp
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            将「{inspiration.title}」导出为符合灵感市场格式的 JSON，之后可在市场投稿页上传该文件。
+            将「{inspiration.title}」导出为独立 JSON 文件，可用于备份、分享给其他成员或设备，也可重新导入本机灵感库。
           </p>
+
+          <div
+            className="rounded-lg px-3 py-2.5 space-y-1.5 text-[11px] leading-relaxed"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-light)',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <p><strong style={{ color: 'var(--text-primary)' }}>备份</strong>：保存单条灵感，之后可通过“文件导入”恢复。</p>
+            <p><strong style={{ color: 'var(--text-primary)' }}>分享</strong>：发送给其他成员或设备，通过“文件导入”直接导入。</p>
+            <p><strong style={{ color: 'var(--text-primary)' }}>兼容</strong>：字段结构与灵感市场 JSON 一致，需要时也可用于投稿。</p>
+          </div>
 
           <div>
             <label className="block text-xs mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              市场 id
+              文件标识
             </label>
             <input
               type="text"
@@ -122,7 +136,7 @@ export function InspirationExportDialog({ inspiration, onClose }: InspirationExp
               }}
             />
             <p className="text-[10px] mt-1.5 leading-relaxed" style={{ color: error ? 'var(--danger, #EF4444)' : 'var(--text-tertiary)' }}>
-              {error ?? `规则：仅小写字母 / 数字 / 短横线（-），以字母或数字开头，长度 ≤ ${MARKET_ID_MAX_LEN}；id 即市场目录名，一旦发布不可更改。`}
+              {error ?? `用于生成文件名，并兼容灵感市场格式。仅小写字母 / 数字 / 短横线（-），以字母或数字开头，长度 ≤ ${MARKET_ID_MAX_LEN}。`}
             </p>
           </div>
         </div>
@@ -142,7 +156,7 @@ export function InspirationExportDialog({ inspiration, onClose }: InspirationExp
             className="pd-btn px-4 py-2 rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-50"
             style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
           >
-            <Download size={13} />
+            <Upload size={13} />
             {exporting ? '导出中...' : '选择位置并导出'}
           </button>
         </div>

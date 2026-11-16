@@ -5,7 +5,6 @@ export interface Session {
   id: string;
   agentType: string;
   title: string;
-  cwd: string;
   createdAt: number;
   updatedAt: number;
   lastMessagePreview: string;
@@ -23,9 +22,11 @@ export interface Session {
   temperature?: number;
   /** 最大生成 token 数 */
   maxTokens?: number;
+  /** 工作归属项目；缺省表示未归入项目 */
+  projectId?: string;
 }
 
-/** 项目级记忆（<记忆根>/MEMORY.md）读取结果 */
+/** 项目级规范与长期记忆（<记忆根>/AGENTS.md）读取结果 */
 export interface ProjectMemoryInfo {
   root: string;
   exists: boolean;
@@ -33,22 +34,22 @@ export interface ProjectMemoryInfo {
   charCount: number;
 }
 
-/** 已使用项目根列表（会话 cwd 去重 + 兜底工作区） */
+/** 可管理记忆根列表（全部项目主目录 + 全局工作空间） */
 export async function listProjectRoots(): Promise<string[]> {
   return await _invoke('list_project_roots');
 }
 
-/** 读取指定记忆根 MEMORY.md；cwd 为空=兜底记忆根 */
-export async function getProjectMemory(cwd?: string): Promise<ProjectMemoryInfo> {
-  return await _invoke('get_project_memory', { cwd: cwd || null });
+/** 读取指定记忆根 AGENTS.md；root 为空=兜底记忆根 */
+export async function getProjectMemory(root?: string): Promise<ProjectMemoryInfo> {
+  return await _invoke('get_project_memory', { root: root || null });
 }
 
-/** 写入指定记忆根 MEMORY.md */
-export async function updateProjectMemory(cwd: string | undefined, content: string): Promise<ProjectMemoryInfo> {
-  return await _invoke('update_project_memory', { cwd: cwd || null, content });
+/** 写入指定记忆根 AGENTS.md */
+export async function updateProjectMemory(root: string | undefined, content: string): Promise<ProjectMemoryInfo> {
+  return await _invoke('update_project_memory', { root: root || null, content });
 }
 
-/** MEMORY.md 新建模板 */
+/** AGENTS.md 新建模板 */
 export async function projectMemoryTemplate(): Promise<string> {
   return await _invoke('project_memory_template');
 }

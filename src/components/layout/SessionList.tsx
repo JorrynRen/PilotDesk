@@ -1,15 +1,13 @@
-import { useState, useEffect, useMemo, useRef, useCallback, memo, type ReactNode } from 'react';
-import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal, RefreshCw, Trash2, Download, Check, ListChecks, Loader2 } from 'lucide-react';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
+import { Plus, Search, Archive, X, ChevronDown, ChevronRight, RefreshCw, Trash2, Download, Check, ListChecks, Loader2, LogOut, MoreHorizontal, SquareCheckBig, Workflow } from 'lucide-react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useSessionStore } from '../../stores/sessionStore';
-import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { useEnvInfo, isAgentInstalled, isAgentAvailable } from '../../hooks/useEnvInfo';
+import { useEnvInfo, isAgentAvailable } from '../../hooks/useEnvInfo';
 import { isWorkflowSession } from '../../utils/sessionType';
 import { errorMessage } from '../../utils/errorMessage';
 import { useI18n } from '../../hooks/useI18n';
@@ -17,8 +15,21 @@ import { SessionListItem } from './SessionListItem';
 import { Select } from '../common/Select';
 import { AgentBadge } from '../common/AgentBadge';
 import { useHostPreviewStore } from '../../stores/hostPreviewStore';
-
-type NewSessionType = string;
+import {
+  subscribeProjectCreation,
+  useProjectCreationStore,
+} from '../../stores/projectCreationStore';
+import { useProjectStore } from '../../stores/projectStore';
+import {
+  PROJECT_FILTER_ALL,
+  PROJECT_FILTER_UNASSIGNED,
+  ProjectFilter,
+  ProjectMembershipDialog,
+} from '../project/ProjectPicker';
+import { ProjectWorkspaceContext } from '../project/ProjectWorkspaceContext';
+import { HEADER_ICON_BTN_STYLE } from './sessionListStyles';
+import { NewSessionDialog } from '../session/NewSessionDialog';
+import type { ProjectCreateContext } from '../../types/project';
 
 /** ACP `session/list` 返回的宿主会话（字段与后端 `HostSession` 对齐） */
 interface HostSessionRow {
@@ -53,15 +64,89 @@ function formatHostTime(value?: string | null): string {
 /** 「工作流会话」折叠分组的展开状态（纯 UI 状态，存 localStorage 即可，不入库）。 */
 const WORKFLOW_GROUP_STORAGE_KEY = 'pilotdesk.session-list.workflow-expanded';
 
-/**
- * 列表顶部图标操作钮的统一尺寸：13px 图标 + 4px 6px 内边距 ≈ 21×25。
- * 比 `pd-btn-sm` 默认（11px 图标 + 2px 8px）略大，又不至于在 36px 高的头部里显得突兀。
- *
- * 导出给同类页头复用（圆桌列表的「新建圆桌」），避免两处各写一套导致大小漂移。
- */
-export const HEADER_ICON_BTN_STYLE: React.CSSProperties = { padding: '4px 6px' };
+function SessionBatchMenu({
+  clearDisabled,
+  exitDisabled,
+  onClear,
+  onExit,
+}: {
+  clearDisabled: boolean;
+  exitDisabled?: boolean;
+  onClear: () => void;
+  onExit: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
 
-function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        className="pd-btn pd-batch-icon-btn"
+        onClick={() => setOpen((value) => !value)}
+        title="更多批量操作"
+        aria-label="更多批量操作"
+        aria-expanded={open}
+      >
+        <MoreHorizontal size={13} />
+      </button>
+      {open && (
+        <div role="menu" className="pd-menu pd-batch-menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="pd-menu-item disabled:opacity-40"
+            disabled={clearDisabled}
+            onClick={() => {
+              setOpen(false);
+              onClear();
+            }}
+          >
+            <X size={13} />
+            <span className="flex-1">清空选择</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="pd-menu-item disabled:opacity-40"
+            disabled={exitDisabled}
+            onClick={() => {
+              setOpen(false);
+              onExit();
+            }}
+          >
+            <LogOut size={13} />
+            <span className="flex-1">退出批量</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SessionListFn({
+  style,
+  onSessionSelected,
+}: {
+  style?: React.CSSProperties;
+  onSessionSelected?: () => void;
+} = {}) {
   const { t } = useI18n();
   const sessions = useSessionStore((s) => s.sessions);
   const archivedSessions = useSessionStore((s) => s.archivedSessions);
@@ -82,7 +167,6 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const [searchResults, setSearchResults] = useState<typeof sessions>([]);
   const [, setIsSearching] = useState(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // 「工作流会话」折叠分组：默认折叠，展开状态跨重启记忆
@@ -97,16 +181,9 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     });
   }, []);
   const [showNewDialog, setShowNewDialog] = useState(false);
-    const [newSessionType, setNewSessionType] = useState<NewSessionType>('');
-  const [selectedApiProvider, setSelectedApiProvider] = useState('');
-  const [selectedApiModel, setSelectedApiModel] = useState('');
-  const [customModel, setCustomModel] = useState('');
-  const [useCustomModel, setUseCustomModel] = useState(false);
-  const [customTitle, setCustomTitle] = useState('');
-  const [customCwd, setCustomCwd] = useState('');
-  const [sessionTemperature, setSessionTemperature] = useState(0.7);
-  const [sessionMaxTokens, setSessionMaxTokens] = useState<number | undefined>(undefined);
-  const [creating, setCreating] = useState(false);
+  const [newSessionSeed, setNewSessionSeed] = useState<ProjectCreateContext | null>(null);
+  const [projectFilter, setProjectFilter] = useState(PROJECT_FILTER_ALL);
+  const [membershipSession, setMembershipSession] = useState<(typeof sessions)[number] | null>(null);
   // 「宿主会话」视图：视图/选中宿主/右侧预览态放在独立 store（预览不是库里的会话）
   const {
     view,
@@ -133,33 +210,50 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   /** 宿主会话批量选择（只支持批量删除；批量导入见下方说明） */
   const [hostBatchMode, setHostBatchMode] = useState(false);
   const [selectedHostIds, setSelectedHostIds] = useState<Set<string>>(new Set());
+  const [hostCwd, setHostCwd] = useState('');
+  const [hostProjectId, setHostProjectId] = useState<string | null>(null);
   /** 正在删除的宿主会话（逐行反馈，避免"点了没反应"被重复点） */
   const [deletingHostIds, setDeletingHostIds] = useState<Set<string>>(new Set());
   /** 批量删除进行中 */
   const [hostBatchDeleting, setHostBatchDeleting] = useState(false);
   /** 当前列表数据所属的宿主（换宿主必须重拉，否则会显示上一个宿主的会话） */
   const loadedAgentRef = useRef<string | null>(null);
+  /** 当前列表数据对应的宿主目录；换项目/目录时 Agent 不变也必须重拉 */
+  const loadedHostCwdRef = useRef<string | null>(null);
+
+  const openNewSessionDialog = useCallback(() => {
+    useProjectCreationStore.getState().clear();
+    setNewSessionSeed(null);
+    setShowNewDialog(true);
+  }, []);
+
+  const closeNewSessionDialog = useCallback(() => {
+    useProjectCreationStore.getState().clear();
+    setShowNewDialog(false);
+    setNewSessionSeed(null);
+  }, []);
+
+  useEffect(() => subscribeProjectCreation('session', (context) => {
+    setNewSessionSeed(context);
+    setShowNewDialog(true);
+  }), []);
 
   const { getDisplayName, getEnabledAgentTypes, getTransport } = useAgentRegistry();
 
   // WebSocket for Agent session lifecycle
-  const { createAgentSession: wsCreateSession, closeAgentSession: wsCloseSession } = useAgentEvent();
+  const { closeAgentSession: wsCloseSession } = useAgentEvent();
 
-  // API providers from SQLite via store
-  const { providers: apiProviders, fetchProviders } = useApiProviderStore();
-
-  // 初始加载：只拉取会话列表与提供商。
+  // 初始加载：只拉取会话列表。
   // **不自动选中任何会话**：会话模式默认停在初始页（"输入消息开始新会话…"），
   // 选中哪个会话由用户点选决定；同理也不再恢复"上次打开的会话"。
   useEffect(() => {
     const init = async () => {
       await fetchSessions();
-      fetchProviders().catch(() => {});
     };
     init().catch((err) => {
       showToast(`加载会话失败: ${errorMessage(err)}`, 'error');
     });
-  }, [fetchSessions, fetchProviders]);
+  }, [fetchSessions]);
 
   /**
    * 工作流 Agent 会话不会自己出现在列表里：它们由后端在节点执行时自动写库
@@ -196,66 +290,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     };
   }, [refreshSessions]);
 
-  // Sync installed agents from envInfo (shared singleton, no extra detect_env call)。
-  // 用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮级联渲染
-  // （`react-hooks/set-state-in-effect`），两者行为一致。
   const { envInfo } = useEnvInfo();
-  /**
-   * ⚠️ 前值哨兵的初值必须是 `null`，**不能**写成 `useState(envInfo)`。
-   * `envInfo` 是跨页共享的单例：本组件挂载时它很可能已经有值。若初值就等于当帧值，
-   * 第一帧"前值 === 当前值"、判据不成立，这段同步**永远不会执行** ——
-   * 表现为 `installedAgents` 恒为空 → CLI Agent 类型被全部过滤掉 → 新建会话只剩 API 可选。
-   * （原 `useEffect(..., [envInfo])` 在挂载时也会跑一次，这是"变化即同步"的改写必须补回的那一次。）
-   */
-  const [syncedEnvInfo, setSyncedEnvInfo] = useState<typeof envInfo | null>(null);
-  if (syncedEnvInfo !== envInfo) {
-    setSyncedEnvInfo(envInfo);
-    if (envInfo?.agentVersions || envInfo?.agentHealth) {
-      // 已装判定走 health.installed：版本号取不到（探测超时 / 网络问题）不等于未安装
-      const types = new Set([
-        ...Object.keys(envInfo?.agentVersions ?? {}),
-        ...Object.keys(envInfo?.agentHealth ?? {}),
-      ]);
-      const installed = new Set<string>();
-      for (const agentType of types) {
-        if (isAgentInstalled(envInfo, agentType)) installed.add(agentType);
-      }
-      setInstalledAgents(installed);
-    }
-  }
-
-  /**
-   * 打开弹窗时把"会话方式"归一到确实可用的选项（默认 API 优先、其次第一个已装 CLI）：
-   * 否则默认值可能指向未安装的 CLI —— 按钮不亮、下拉空白，用户点创建才发现不可用。
-   * 用「渲染期修正」而不是 effect：不可用时立刻改写状态，收敛后即不再触发，与 effect 等价。
-   */
-  if (showNewDialog) {
-    // ACP 自描述（命令在 conn 里），不参与"是否已安装 CLI"的检测，故不要求 installedAgents；
-    // 但环境检测已判定不可用的 ACP 不列（选中后必然失败，原因在环境检测页可见）。
-    const cliTypes = getEnabledAgentTypes().filter((t) => {
-      if (t === 'api') return false;
-      if (getTransport(t) === 'acp') return envInfo?.agentHealth?.[t]?.available !== false;
-      return installedAgents.has(t);
-    });
-    const usable = newSessionType === 'api' ? apiProviders.length > 0 : cliTypes.includes(newSessionType);
-    if (!usable) {
-      if (apiProviders.length > 0) setNewSessionType('api');
-      else if (cliTypes.length > 0) setNewSessionType(cliTypes[0]);
-    }
-  }
-
-  // Load workspace setting from SQLite when dialog opens
-  useEffect(() => {
-    if (showNewDialog) {
-      invoke<string | null>('get_app_setting', { key: 'pilotdesk-workspace' })
-        .then((val) => {
-          if (val) {
-            setCustomCwd(val);
-          }
-        })
-        .catch(() => {});
-    }
-  }, [showNewDialog]);
 
   // 清空搜索词时立刻清掉结果。用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮
   // 级联渲染（`react-hooks/set-state-in-effect`），两者行为一致。
@@ -299,11 +334,11 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
   const displayList = showArchived ? archivedSessions : sessions;
   const isSearchActive = searchQuery.trim().length > 0;
-  const filteredList = isSearchActive
-    ? searchResults
-    : displayList.filter((s) =>
-        s.title.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+  const filteredList = (isSearchActive ? searchResults : displayList).filter((session) => {
+    if (projectFilter === PROJECT_FILTER_ALL) return true;
+    if (projectFilter === PROJECT_FILTER_UNASSIGNED) return !session.projectId;
+    return session.projectId === projectFilter;
+  });
 
   // 工作流会话（origin 前缀 `workflow`）是节点每次执行自动创建的内部会话：数量多、同名，
   // 混在时间组里会淹没用户自己的会话，因此收进列表底部一个折叠分组。
@@ -311,6 +346,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const foldsWorkflow = !showArchived && !isSearchActive;
   const visibleList = foldsWorkflow ? filteredList.filter((s) => !isWorkflowSession(s.origin)) : filteredList;
   const workflowList = foldsWorkflow ? filteredList.filter((s) => isWorkflowSession(s.origin)) : [];
+  const allWorkflowSelected =
+    workflowList.length > 0 && workflowList.every((s) => selectedIds.has(s.id));
 
   // Group by time。当前时间只在挂载时取一次（Date.now() 是渲染期不纯调用，react-hooks/purity
   // 不允许在渲染体里直接调用）；分组粒度是天，跨天重开即可，渲染语义不受影响。
@@ -326,15 +363,20 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
 
 
-  const selectAll = useCallback(() => {
+  const selectAll = () => {
     // 全选 = 当前可见项：折叠着的工作流会话不计入（与"看不见就不选"一致）
     const ids = new Set(visibleList.map((s) => s.id));
     setSelectedIds(ids);
-  }, [visibleList]);
+  };
 
-  const deselectAll = useCallback(() => {
+  const selectAllWorkflow = () => {
+    const ids = workflowList.map((s) => s.id);
+    setSelectedIds((prev) => new Set([...prev, ...ids]));
+  };
+
+  const deselectAll = () => {
     setSelectedIds(new Set());
-  }, []);
+  };
 
   const batchArchive = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -376,140 +418,6 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     showToast(`已删除 ${selectedIds.size} 个会话`, 'success');
   }, [selectedIds, fetchSessions]);
 
-  // 打开弹窗时重置表单状态。用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮
-  // 级联渲染（`react-hooks/set-state-in-effect`），两者行为一致。
-  const [prevShowNewDialog, setPrevShowNewDialog] = useState(showNewDialog);
-  if (prevShowNewDialog !== showNewDialog) {
-    setPrevShowNewDialog(showNewDialog);
-    if (showNewDialog) {
-      // Reset state
-      setUseCustomModel(false);
-      setCustomModel('');
-      setCustomTitle('');
-      setCustomCwd('');
-      setSessionTemperature(0.7);
-      setSessionMaxTokens(undefined);
-      // 宿主会话列表属于左侧视图，不再随弹窗开关重置
-
-      // Auto-select first enabled agent
-      const enabled = getEnabledAgentTypes().filter(t => t !== 'api');
-      if (enabled.length > 0 && !newSessionType) {
-        setNewSessionType(enabled[0]);
-      }
-    }
-  }
-
-  // Reload providers when dialog opens
-  useEffect(() => {
-    if (showNewDialog) {
-      fetchProviders().then(() => {
-        // After fetch, auto-select first provider via the updated store state
-      }).catch(() => {});
-    }
-  }, [showNewDialog, fetchProviders]);
-
-  // 提供商变化时同步模型（无选中时选第一个）。用「渲染期修正」而不是 effect：
-  // 在 effect 里同步 setState 会多一轮级联渲染（`react-hooks/set-state-in-effect`），两者行为一致。
-  const [prevProviderDeps, setPrevProviderDeps] = useState<[string, typeof apiProviders]>([selectedApiProvider, apiProviders]);
-  if (prevProviderDeps[0] !== selectedApiProvider || prevProviderDeps[1] !== apiProviders) {
-    setPrevProviderDeps([selectedApiProvider, apiProviders]);
-    if (apiProviders.length > 0 && !selectedApiProvider) {
-      setSelectedApiProvider(apiProviders[0].id);
-    }
-    const provider = apiProviders.find((p) => p.id === selectedApiProvider);
-    if (provider) {
-      setSelectedApiModel(provider.models[0] || '');
-      setUseCustomModel(false);
-      setCustomModel('');
-    }
-  }
-
-  const validateAndEnsureDir = async (dir: string): Promise<string | null> => {
-    // 空值：回落到全局工作区设置；没有则交给后端默认目录
-    if (!dir.trim()) {
-      try {
-        const globalDir = await invoke<string | null>('get_app_setting', { key: 'pilotdesk-workspace' });
-        if (globalDir) {
-          return await invoke<string>('ensure_dir', { path: globalDir });
-        }
-        return null; // No global setting either, use default
-      } catch {
-        return null;
-      }
-    }
-
-    /**
-     * 非空：**校验全部交给后端的 `ensure_dir`**，前端不再重复实现一遍。
-     *
-     * 这里原先有一份重复的校验（非法字符 / 纯盘符），而后端 `ensure_dir` 早就把
-     * 空值、盘符、非法字符、是否存在、是否目录、以及按需创建全都做完了，且文案更准确。
-     * 那份重复实现唯一的"贡献"是一个 bug：提示里写的是「如 C:\Users\work」，
-     * 但 `\U`、`\w` 在 JS 里是无效转义，实际渲染成「C:Userswork」。
-     * 删掉重复实现后，用户看到的是后端那条转义正确的提示（前缀带「目录校验失败: 」以说明上下文）。
-     */
-    try {
-      return await invoke<string>('ensure_dir', { path: dir.trim() });
-    } catch (err) {
-      showToast(`目录校验失败: ${errorMessage(err)}`, 'error');
-      return null;
-    }
-  };
-
-  const handleCreate = async () => {
-    setCreating(true);
-    try {
-      // Validate and resolve working directory
-      const resolvedCwd = await validateAndEnsureDir(customCwd);
-      if (resolvedCwd === null && customCwd.trim()) {
-        // User entered a path but validation failed
-        setCreating(false);
-        return;
-      }
-
-      if (newSessionType === 'api') {
-        // Check if API key is configured
-        const apiKey = await getApiKey(selectedApiProvider);
-        if (!apiKey) {
-          showToast('请先在「设置 - API 配置」中添加 API Key', 'error');
-          setCreating(false);
-          return;
-        }
-        const model = useCustomModel ? customModel.trim() : selectedApiModel;
-        if (!model) {
-          showToast('请选择或输入模型名称', 'error');
-          setCreating(false);
-          return;
-        }
-        // Create API direct session
-        const session = await createSession(
-          'api' as const,
-          resolvedCwd || undefined,
-          customTitle.trim() || null,
-          selectedApiProvider,
-          model,
-          sessionTemperature,
-          sessionMaxTokens,
-        );
-        setShowNewDialog(false);
-        selectSession(session.id);
-      } else {
-        const session = await createSession(
-          newSessionType,
-          resolvedCwd || undefined,
-          customTitle.trim() || null,
-        );
-        // Notify Sidecar to create the Agent session
-        wsCreateSession(session.id, newSessionType, resolvedCwd || undefined);
-        setShowNewDialog(false);
-        selectSession(session.id);
-      }
-    } catch (err) {
-      showToast(`创建会话失败: ${errorMessage(err)}`, 'error');
-    } finally {
-      setCreating(false);
-    }
-  };
-
   // ── 宿主会话（左侧「宿主会话」视图）──
   /** 可用的 ACP 宿主：只有环境检测判定可用的才出现（起不来就列不出会话来） */
   const hostAgents = useMemo(
@@ -521,8 +429,11 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   );
 
   const loadHostSessions = useCallback(
-    async (agentType: string, cursor?: string, force = false) => {
+    async (agentType: string, cursor?: string, force = false, cwdOverride?: string) => {
       if (!agentType) return;
+      const requestedCwd = (cwdOverride ?? hostCwd).trim();
+      loadedAgentRef.current = agentType;
+      loadedHostCwdRef.current = requestedCwd;
       const more = !!cursor;
       if (more) setHostLoadingMore(true);
       else {
@@ -542,7 +453,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       try {
         const outcome = await invoke<HostSessionListOutcome>('acp_list_sessions', {
           agentType,
-          cwd: customCwd.trim() || null,
+          cwd: requestedCwd || null,
           cursor: cursor ?? null,
         });
         if (outcome.status === 'unsupported') {
@@ -567,21 +478,26 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
         setHostLoadingMore(false);
       }
     },
-    [customCwd],
+    [hostCwd],
   );
 
   /** 切换宿主（下拉）：换人必须重拉，否则会显示上一个宿主的会话 */
-  const switchHostAgent = useCallback((agentType: string | null) => {
+  const switchHostAgent = useCallback((agentType: string | null, cwdOverride?: string) => {
     setAgentType(agentType);
     // 选中项属于上一个宿主，换了宿主必须清掉
     setSelectedHostIds(new Set());
     if (!agentType) return;
     // 右侧若还停着上一个宿主的预览，先收掉（否则标题与会话对不上）
     if (hostPreview && hostPreview.agentType !== agentType) closePreview();
-    if (loadedAgentRef.current === agentType || hostUnsupported[agentType]) return;
+    const requestedCwd = (cwdOverride ?? hostCwd).trim();
+    const sameLoadedQuery =
+      loadedAgentRef.current === agentType
+      && loadedHostCwdRef.current === requestedCwd;
+    if (sameLoadedQuery || hostUnsupported[agentType]) return;
     loadedAgentRef.current = agentType;
-    void loadHostSessions(agentType);
-  }, [hostPreview, hostUnsupported, closePreview, setAgentType, loadHostSessions]);
+    loadedHostCwdRef.current = requestedCwd;
+    void loadHostSessions(agentType, undefined, false, requestedCwd);
+  }, [hostCwd, hostPreview, hostUnsupported, closePreview, setAgentType, loadHostSessions]);
 
   /**
    * 进入宿主视图（下拉切换 / 弹窗入口共用）。
@@ -590,22 +506,41 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
    * 传了就优先用它，否则沿用上次选中的，最后才回退到第一个可用宿主。
    */
   const enterHostView = useCallback(
-    (preferred?: string | null) => {
+    (preferred?: string | null, cwd?: string, projectId?: string | null) => {
+      const nextCwd = cwd !== undefined ? cwd : hostCwd;
+      const nextProjectId = projectId !== undefined ? projectId : hostProjectId;
+      const projectChanged = nextProjectId !== hostProjectId;
+      const cwdChanged = cwd !== undefined && nextCwd.trim() !== hostCwd.trim();
+      if (cwdChanged) setHostCwd(cwd);
+      if (projectChanged) setHostProjectId(nextProjectId);
+      // 宿主会话的导入归属与恢复目录都属于当前预览上下文；切换后不能沿用上一份预览。
+      if (projectChanged || cwdChanged) closePreview();
       setView('host');
       const target =
         (preferred && hostAgents.includes(preferred) ? preferred : null) ??
         (hostAgent && hostAgents.includes(hostAgent) ? hostAgent : hostAgents[0]);
       if (!target) return;
       // 换宿主走同一套逻辑（清选择、收掉对不上的预览、重拉列表）
-      if (target !== hostAgent) {
-        switchHostAgent(target);
+      if (target !== hostAgent || loadedHostCwdRef.current !== nextCwd.trim()) {
+        switchHostAgent(target, nextCwd);
         return;
       }
       if (loadedAgentRef.current === target || hostUnsupported[target]) return;
       loadedAgentRef.current = target;
-      void loadHostSessions(target);
+      loadedHostCwdRef.current = nextCwd.trim();
+      void loadHostSessions(target, undefined, false, nextCwd);
     },
-    [hostAgent, hostAgents, hostUnsupported, setView, switchHostAgent, loadHostSessions],
+    [
+      hostAgent,
+      hostAgents,
+      hostCwd,
+      hostProjectId,
+      hostUnsupported,
+      setView,
+      switchHostAgent,
+      loadHostSessions,
+      closePreview,
+    ],
   );
 
   // 环境检测结果晚于进入宿主视图时（启动早期常见）补一次自动加载。
@@ -631,6 +566,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
         agentType: hostAgent,
         hostSessionId: row.sessionId,
         title: (row.title || '').trim() || '导入的会话',
+        projectId: hostProjectId,
         cwd: row.cwd ?? null,
         messages: messages.map((m, i) => ({
           id: `${row.sessionId}-${i}`,
@@ -643,7 +579,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     } finally {
       setPreviewingHostId(null);
     }
-  }, [hostAgent, previewingHostId, openPreview]);
+  }, [hostAgent, hostProjectId, previewingHostId, openPreview]);
 
   /** 导入为本地会话并切过去（宿主侧会话已导入过则直接打开） */
   const importHostSession = useCallback(async (row: HostSessionRow) => {
@@ -662,7 +598,15 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     const title = (row.title || '').trim() || '导入的会话';
     let createdId: string | null = null;
     try {
-      const local = await createSession(hostAgent, cwd ?? undefined, title);
+      const local = await createSession(
+        hostAgent,
+        title,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        hostProjectId ?? undefined,
+      );
       createdId = local.id;
       const count = await invoke<number>('acp_import_host_session', {
         agentType: hostAgent,
@@ -687,7 +631,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     } finally {
       setImportingHostId(null);
     }
-  }, [hostAgent, importingHostId, sessions, createSession, deleteSession, selectSession, closePreview, refreshSessions]);
+  }, [hostAgent, hostProjectId, importingHostId, sessions, createSession, deleteSession, selectSession, closePreview, refreshSessions]);
 
   /** 删除宿主侧会话（只删宿主，本地已导入副本保留） */
   const deleteHostSession = useCallback(async (row: HostSessionRow) => {
@@ -830,6 +774,11 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     }
   };
 
+  const handleProjectChanged = useCallback(async () => {
+    await refreshSessions();
+    await useProjectStore.getState().loadProjects();
+  }, [refreshSessions]);
+
   const handleDelete = useCallback(async (id: string) => {
     const session = sessions.find(s => s.id === id) || archivedSessions.find(s => s.id === id);
     // 删除会话会连带清理其用量记录（工作流节点会话亦在列表内），故二次确认
@@ -870,10 +819,13 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
         break;
       default:
         // 点击行本身 = 选中会话
-        if (!batchMode) selectSession(sessionId);
+        if (!batchMode) {
+          selectSession(sessionId);
+          onSessionSelected?.();
+        }
         else toggleBatchSelect(sessionId);
     }
-  }, [batchMode, selectSession, toggleBatchSelect, handleArchive, handleUnarchive, handleDelete]);
+  }, [batchMode, selectSession, toggleBatchSelect, handleArchive, handleUnarchive, handleDelete, onSessionSelected]);
 
   const renderItem = (session: (typeof sessions)[number]) => (
     <SessionListItem
@@ -885,6 +837,9 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       selected={selectedIds.has(session.id)}
       onToggleSelect={toggleBatchSelect}
       archived={showArchived}
+      onArchive={showArchived ? handleUnarchive : handleArchive}
+      onDelete={handleDelete}
+      onSetProject={isWorkflowSession(session.origin) ? undefined : setMembershipSession}
     />
   );
 
@@ -892,7 +847,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     if (items.length === 0) return null;
     return (
       <div key={label}>
-        <div className="px-3 py-1 text-[10px] " style={{ color: 'var(--text-secondary)' }}>
+        <div className="pd-session-group-label text-[10px]" style={{ color: 'var(--text-secondary)' }}>
           {label}
         </div>
         {items.map(renderItem)}
@@ -900,12 +855,6 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     );
   };
 
-  const currentApiProvider = apiProviders.find((p) => p.id === selectedApiProvider);
-  // 新建会话弹窗里的快捷入口：仅 ACP 接入且环境检测判定可用（点它跳到左侧宿主视图）
-  const hostImportAvailable =
-    newSessionType !== 'api' &&
-    getTransport(newSessionType) === 'acp' &&
-    isAgentAvailable(envInfo, newSessionType);
   /** 当前宿主的"不支持会话列表"说明（没有则为空） */
   const hostUnsupportedHint = hostAgent ? hostUnsupported[hostAgent] ?? null : null;
   /** 宿主会话的客户端过滤（标题 / 目录） */
@@ -940,13 +889,13 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
   return (
     <aside
-      className="w-[260px] shrink-0 flex flex-col overflow-hidden rounded-lg"
+      className="pd-session-list shrink-0 flex flex-col overflow-hidden rounded-lg"
       // 壳层风格：面板靠"底色 + 圆角 + 与相邻面板之间的 8px 缝"区分，不再画 border-right（见 App.tsx 工作区）
       style={{ backgroundColor: 'var(--bg-side)', ...style }}
     >
       {/* Header：标题即视图切换器（本地会话 / 宿主会话）；右侧只放图标按钮，
           260px 宽度下才放得下（原先三个按钮都带文字，已无余量） */}
-      <div className="flex items-center px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="pd-session-list-header flex items-center h-10" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="relative" data-session-view-menu>
           <button
             onClick={() => setViewMenuOpen((v) => !v)}
@@ -963,12 +912,10 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           </button>
           {viewMenuOpen && (
             <div
-              className="absolute left-0 top-full mt-1 z-20 py-1 rounded-lg overflow-hidden"
+              role="menu"
+              className="pd-menu absolute left-0 top-full mt-1 z-20"
               style={{
                 minWidth: 132,
-                backgroundColor: 'var(--bg-primary)',
-                border: '1px solid var(--border)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
               }}
             >
               {([
@@ -977,21 +924,20 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               ]).map((item) => (
                 <button
                   key={item.key}
+                  type="button"
+                  role="menuitem"
+                  data-active={view === item.key ? 'true' : undefined}
                   onClick={() => {
                     setViewMenuOpen(false);
                     if (item.key === 'host') {
-                      enterHostView();
+                      enterHostView(null, '', null);
                     } else {
                       setView('local');
                       setHostBatchMode(false);
                       setSelectedHostIds(new Set());
                     }
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left transition-colors hover:opacity-90"
-                  style={{
-                    color: view === item.key ? 'var(--accent)' : 'var(--text-secondary)',
-                    backgroundColor: view === item.key ? 'var(--accent-light)' : 'transparent',
-                  }}
+                  className="pd-menu-item"
                 >
                   {item.label}
                   {view === item.key && <Check size={11} className="ml-auto" />}
@@ -1022,7 +968,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               onClick={() => {
                 if (!hostAgent) return;
                 loadedAgentRef.current = hostAgent;
-                void loadHostSessions(hostAgent, undefined, true);
+                void loadHostSessions(hostAgent, undefined, true, hostCwd);
               }}
               disabled={!hostAgent || hostListLoading}
               className="pd-btn pd-btn-sm"
@@ -1056,7 +1002,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               <Archive size={13} />
             </button>
             <button
-              onClick={() => setShowNewDialog(true)}
+              onClick={openNewSessionDialog}
               className="pd-btn pd-btn-sm pd-btn-primary"
               style={HEADER_ICON_BTN_STYLE}
               title={t('sessionList.new.title', '新建会话')}
@@ -1069,108 +1015,106 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
       {/* Batch operations row - above search（仅本地会话视图有意义） */}
       {batchMode && view === 'local' && (
-        <div className="flex items-center gap-1 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="pd-batch-bar">
+          <span className="pd-batch-count">
+            {selectedIds.size > 0 ? `已选 ${selectedIds.size}` : '未选择'}
+          </span>
           <button
             onClick={selectAll}
-            className="pd-btn pd-btn-sm"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title={t('sessionList.selectAll.title', '全选')}
+            className="pd-btn pd-batch-icon-btn"
+            title={t('sessionList.selectAllRegular.title', '全选普通会话')}
+            aria-label={t('sessionList.selectAllRegular.title', '全选普通会话')}
           >
-            {t('sessionList.selectAll', '全')}
+            <SquareCheckBig size={13} />
           </button>
-          <button
-            onClick={deselectAll}
-            className="pd-btn pd-btn-sm"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title={t('sessionList.clearAll.title', '取消全选')}
-          >
-            {t('sessionList.clearAll', '重')}
-          </button>
-          <div className="w-px h-4 mx-0.5" style={{ backgroundColor: 'var(--border)' }} />
+          {workflowList.length > 0 && (
+            <button
+              onClick={selectAllWorkflow}
+              className="pd-btn pd-batch-icon-btn"
+              title={t('sessionList.selectAllWorkflow.title', `全选工作流会话（${workflowList.length}）`, { count: workflowList.length })}
+              aria-label={t('sessionList.selectAllWorkflow.title', `全选工作流会话（${workflowList.length}）`, { count: workflowList.length })}
+              aria-pressed={allWorkflowSelected}
+              style={{
+                color: allWorkflowSelected ? 'var(--accent)' : undefined,
+                backgroundColor: allWorkflowSelected ? 'var(--accent-light)' : undefined,
+              }}
+            >
+              <Workflow size={13} />
+            </button>
+          )}
           <button
             onClick={showArchived ? batchUnarchive : batchArchive}
-            className="pd-btn pd-btn-sm pd-btn-info"
+            className="pd-btn pd-batch-icon-btn"
             disabled={selectedIds.size === 0}
             title={showArchived ? t('sessionList.batchUnarchive.title', '批量取消归档') : t('sessionList.batchArchive.title', '批量归档')}
+            aria-label={showArchived ? t('sessionList.batchUnarchive.title', '批量取消归档') : t('sessionList.batchArchive.title', '批量归档')}
           >
-            {showArchived
-              ? t('sessionList.batchUnarchive', '消档({count})', { count: selectedIds.size })
-              : t('sessionList.batchArchive', '档({count})', { count: selectedIds.size })}
+            <Archive size={13} />
           </button>
           <button
             onClick={batchDelete}
-            className="pd-btn pd-btn-sm pd-btn-danger"
+            className="pd-btn pd-batch-icon-btn is-danger"
             disabled={selectedIds.size === 0}
             title={t('sessionList.batchDelete.title', '批量删除')}
+            aria-label={t('sessionList.batchDelete.title', '批量删除')}
           >
-            {t('sessionList.batchDelete', '删({count})', { count: selectedIds.size })}
+            <Trash2 size={13} />
           </button>
-          <div className="flex-1" />
-          <button
-            onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }}
-            className="pd-btn pd-btn-sm"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title={t('sessionList.exitBatch.title', '退出批量模式')}
-          >
-            {t('sessionList.exitBatch', '退')}
-          </button>
+          <SessionBatchMenu
+            clearDisabled={selectedIds.size === 0}
+            onClear={deselectAll}
+            onExit={() => {
+              setBatchMode(false);
+              setSelectedIds(new Set());
+            }}
+          />
         </div>
       )}
       {/* 宿主会话批量动作条：只提供批量删除。
           批量导入暂不做——每条导入都要单独拉起一次 ACP 进程并重放整段历史，
           N 条会话会串行等待 N 次，且会一次性在本地列表里堆出 N 条会话，风险大于收益。 */}
       {view === 'host' && hostBatchMode && (
-        <div className="flex items-center gap-1 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="pd-batch-bar">
+          <span className="pd-batch-count">
+            {selectedHostIds.size > 0 ? `已选 ${selectedHostIds.size}` : '未选择'}
+          </span>
           <button
             onClick={() => setSelectedHostIds(new Set(filteredHostSessions.map((r) => r.sessionId)))}
-            className="pd-btn pd-btn-sm"
+            className="pd-btn pd-batch-icon-btn"
             disabled={hostBatchDeleting}
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             title="全选"
+            aria-label="全选"
           >
-            {t('sessionList.selectAll', '全')}
+            <SquareCheckBig size={13} />
           </button>
-          <button
-            onClick={() => setSelectedHostIds(new Set())}
-            className="pd-btn pd-btn-sm"
-            disabled={hostBatchDeleting}
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="取消全选"
-          >
-            {t('sessionList.clearAll', '重')}
-          </button>
-          <div className="w-px h-4 mx-0.5" style={{ backgroundColor: 'var(--border)' }} />
           <button
             onClick={() => void batchDeleteHostSessions()}
             disabled={selectedHostIds.size === 0 || hostBatchDeleting}
-            className="pd-btn pd-btn-sm pd-btn-danger"
+            className="pd-btn pd-batch-icon-btn is-danger"
             title="批量删除宿主会话（只删宿主，本地已导入的副本保留）"
+            aria-label="批量删除宿主会话"
           >
             {hostBatchDeleting ? (
-              <span className="flex items-center gap-1">
-                <Loader2 size={11} className="animate-spin" />
-                删除中({selectedHostIds.size})
-              </span>
+              <Loader2 size={13} className="animate-spin" />
             ) : (
-              t('sessionList.batchDelete', '删({count})', { count: selectedHostIds.size })
+              <Trash2 size={13} />
             )}
           </button>
-          <div className="flex-1" />
-          <button
-            onClick={() => { setHostBatchMode(false); setSelectedHostIds(new Set()); }}
-            className="pd-btn pd-btn-sm"
-            disabled={hostBatchDeleting}
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="退出批量模式"
-          >
-            {t('sessionList.exitBatch', '退')}
-          </button>
+          <SessionBatchMenu
+            clearDisabled={selectedHostIds.size === 0 || hostBatchDeleting}
+            exitDisabled={hostBatchDeleting}
+            onClear={() => setSelectedHostIds(new Set())}
+            onExit={() => {
+              setHostBatchMode(false);
+              setSelectedHostIds(new Set());
+            }}
+          />
         </div>
       )}
 
       {/* Search / 宿主选择：宿主视图复用同一个输入框做客户端过滤 */}
       {view === 'host' ? (
-        <div className="px-3 py-1.5 space-y-1.5">
+        <div className="pd-session-search py-2 space-y-1.5">
           {hostAgents.length > 1 ? (
             <Select
               value={hostAgent ?? ''}
@@ -1183,6 +1127,12 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               {getDisplayName(hostAgents[0])}
             </div>
           ) : null}
+          <ProjectWorkspaceContext
+            projectId={hostProjectId}
+            workRoot={hostCwd || null}
+            rootSourceLabel={hostCwd ? '宿主会话目录' : undefined}
+            className="w-full"
+          />
           <div className="relative">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
             <input
@@ -1195,7 +1145,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           </div>
         </div>
       ) : (
-        <div className="px-3 py-1.5">
+        <div className="pd-session-search py-2 space-y-1.5">
           <div className="relative">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
             <input
@@ -1206,6 +1156,12 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               className="search-input"
             />
           </div>
+          <ProjectFilter
+            value={projectFilter}
+            onChange={setProjectFilter}
+            className="w-full"
+            width="100%"
+          />
         </div>
       )}
 
@@ -1217,7 +1173,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             const el = e.currentTarget;
             if (!hostNextCursor || hostLoadingMore || !hostAgent) return;
             if (el.scrollHeight - el.scrollTop - el.clientHeight < 24) {
-              void loadHostSessions(hostAgent, hostNextCursor);
+              void loadHostSessions(hostAgent, hostNextCursor, false, hostCwd);
             }
           }}
         >
@@ -1245,7 +1201,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                 {hostListError}
               </div>
               <button
-                onClick={() => hostAgent && void loadHostSessions(hostAgent, undefined, true)}
+                onClick={() => hostAgent && void loadHostSessions(hostAgent, undefined, true, hostCwd)}
                 className="pd-btn pd-btn-sm"
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
               >
@@ -1400,7 +1356,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
               </p>
               {!showArchived && (
                 <button
-                  onClick={() => setShowNewDialog(true)}
+                  onClick={openNewSessionDialog}
                   className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors"
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                 >
@@ -1448,328 +1404,28 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
       {/* New session dialog：遮罩不响应点击——误触外部会丢掉刚填的内容，只能走「取消 / 关闭」 */}
       {showNewDialog && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-        >
-          <div
-            className="w-auto min-w-[420px] max-w-[560px] rounded-xl p-4"
-            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
-          >
-            <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
-              {t('sessionList.dialog.title', '新建会话')}
-            </h3>
-
-            {/* 会话方式：一级「CLI Agent / API Agent」两个按钮 + 二级下拉（与 InputBar 快捷开始同构） */}
-            <div className="mb-4">
-              {(() => {
-                // 本地 Agent：已启用的「已安装 CLI」或可用 ACP（自描述、无需 CLI 检测）；API：需要有提供商
-                const cliTypes = getEnabledAgentTypes().filter((t) => {
-                  if (t === 'api') return false;
-                  if (getTransport(t) === 'acp') return envInfo?.agentHealth?.[t]?.available !== false;
-                  return installedAgents.has(t);
-                });
-                const hasApi = apiProviders.length > 0;
-                if (cliTypes.length === 0 && !hasApi) {
-                  return (
-                    <div className="w-full px-3 py-3 rounded-lg text-xs text-center"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}>
-                      {t('sessionList.dialog.noAgent', '暂无可用会话方式。请先在「设置」中配置 API 提供商或安装 CLI Agent。')}
-                    </div>
-                  );
-                }
-                const kind: 'cli' | 'api' = newSessionType === 'api' ? 'api' : 'cli';
-                const kindBtn = (target: 'cli' | 'api', label: string, icon: ReactNode) => (
-                  <button
-                    key={target}
-                    onClick={() => {
-                      if (target === 'api') setNewSessionType('api');
-                      else if (cliTypes.length > 0) setNewSessionType(cliTypes.includes(newSessionType) ? newSessionType : cliTypes[0]);
-                    }}
-                    className="flex-1 py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-1"
-                    style={{
-                      backgroundColor: kind === target ? 'var(--accent-light)' : 'var(--bg-secondary)',
-                      color: kind === target ? 'var(--accent)' : 'var(--text-secondary)',
-                      border: `1px solid ${kind === target ? 'var(--accent)' : 'var(--border)'}`,
-                    }}
-                  >
-                    {icon}
-                    {label}
-                  </button>
-                );
-                return (
-                  <>
-                    <div className="flex gap-2">
-                      {cliTypes.length > 0 && kindBtn('cli', 'CLI Agent', <Terminal size={12} />)}
-                      {hasApi && kindBtn('api', 'API Agent', <Key size={12} />)}
-                    </div>
-                    {kind === 'cli' && cliTypes.length > 0 && (
-                      <div className="mt-3">
-                        <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
-                          {t('sessionList.dialog.cliLabel', '选择 CLI Agent')}
-                        </label>
-                        <Select
-                          value={newSessionType}
-                          onChange={setNewSessionType}
-                          options={cliTypes.map((t) => ({ value: t, label: getDisplayName(t) }))}
-                          className="w-full"
-                        />
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-
-            {/* Agent sessions: optional title & cwd */}
-            {newSessionType !== 'api' && (
-              <div className="space-y-3 mb-4">
-                <div>
-                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    {t('sessionList.dialog.titleLabel', '会话标题（可选）')}
-                  </label>
-                  <input
-                    type="text"
-                    value={customTitle}
-                    onChange={(e) => setCustomTitle(e.target.value)}
-                    placeholder={t('sessionList.dialog.titlePlaceholder', `${getDisplayName(newSessionType)} 新会话`, { name: getDisplayName(newSessionType) })}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    {t('sessionList.dialog.cwdLabel', '工作目录（可选）')}
-                  </label>
-                  <div className="flex gap-2">
-                    <div
-                      className="flex-1 px-3 py-2 rounded-lg text-sm truncate"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                      title={customCwd || t('sessionList.dialog.cwdPlaceholder', '留空使用默认目录')}
-                    >
-                      {customCwd || t('sessionList.dialog.cwdPlaceholder', '留空使用默认目录')}
-                    </div>
-                    <button
-                      onClick={async () => {
-                        try {
-                          
-                          const selected = await openDialog({ directory: true, multiple: false });
-                          if (selected && typeof selected === 'string') {
-                            setCustomCwd(selected);
-                          }
-                        } catch { /* ignore */ }
-                      }}
-                      className="px-2.5 py-2 rounded-lg shrink-0 transition-colors hover:opacity-80"
-                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-                      title={t('sessionList.dialog.chooseDir', '选择目录')}
-                    >
-                      <FolderOpen size={14} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* API direct: provider & model selection */}
-            {newSessionType === 'api' && (
-              <div className="space-y-3 mb-4">
-                <div>
-                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    {t('sessionList.dialog.providerLabel', 'API 提供商')}
-                  </label>
-                  {apiProviders.length === 0 ? (
-                    <div
-                      className="px-3 py-2 rounded-lg text-xs"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
-                    >
-                      {t('sessionList.dialog.noProvider', '暂无配置的 API 提供商，请先在「设置 - API集成配置」中添加')}
-                    </div>
-                  ) : (
-                    <Select
-                      className="w-full"
-                      value={selectedApiProvider}
-                      onChange={setSelectedApiProvider}
-                      options={apiProviders.map((p) => ({
-                        value: p.id,
-                        label: `${p.name}${p.apiKeySet ? ` ${t('sessionList.dialog.configured', '(已配置)')}` : ` ${t('sessionList.dialog.notConfigured', '(未配置Key)')}`}`,
-                      }))}
-                    />
-                  )}
-                </div>
-
-                {currentApiProvider && (
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs " style={{ color: 'var(--text-secondary)' }}>
-                        {t('sessionList.dialog.modelLabel', '模型')}
-                      </label>
-                      <button
-                        onClick={() => setUseCustomModel((v) => !v)}
-                        className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded transition-colors"
-                        style={{
-                          color: useCustomModel ? 'var(--accent)' : 'var(--text-tertiary)',
-                          backgroundColor: useCustomModel ? 'var(--bg-tertiary)' : 'transparent',
-                        }}
-                      >
-                        {useCustomModel ? <X size={10} /> : null}
-                        {t('sessionList.dialog.custom', '自定义')}
-                      </button>
-                    </div>
-                    {useCustomModel ? (
-                      <input
-                        type="text"
-                        value={customModel}
-                        onChange={(e) => setCustomModel(e.target.value)}
-                        placeholder={t('sessionList.dialog.modelPlaceholder', '输入模型名称，如: gpt-4o-2024-08-06')}
-                        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                        style={{
-                          backgroundColor: 'var(--bg-tertiary)',
-                          color: 'var(--text-primary)',
-                          border: '1px solid var(--border)',
-                        }}
-                        autoFocus
-                      />
-                    ) : currentApiProvider.models.length > 0 ? (
-                      <Select
-                        className="w-full"
-                        value={selectedApiModel}
-                        onChange={setSelectedApiModel}
-                        options={currentApiProvider.models.map((m) => ({ value: m, label: m }))}
-                      />
-                    ) : (
-                      <div
-                        className="px-3 py-2 rounded-lg text-xs"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
-                      >
-                        {t('sessionList.dialog.noModel', '该提供商暂无预定义模型，请使用"自定义"输入模型名称')}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
-                      {t('sessionList.dialog.temperature', '温度 (Temperature)')}
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={2}
-                      step={0.1}
-                      value={sessionTemperature}
-                      onChange={(e) => setSessionTemperature(parseFloat(e.target.value) || 0.7)}
-                      className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
-                      {t('sessionList.dialog.maxTokens', '最大 Token (可选)')}
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={sessionMaxTokens ?? ''}
-                      onChange={(e) => setSessionMaxTokens(e.target.value ? parseInt(e.target.value) : undefined)}
-                      placeholder={t('sessionList.dialog.maxTokens.placeholder', '不限制')}
-                      className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    {t('sessionList.dialog.titleLabel', '会话标题（可选）')}
-                  </label>
-                  <input
-                    type="text"
-                    value={customTitle}
-                    onChange={(e) => setCustomTitle(e.target.value)}
-                    placeholder={`API: ${currentApiProvider?.name || ''} - ${useCustomModel ? customModel || t('sessionList.dialog.custom', '自定义') : selectedApiModel || t('sessionList.dialog.modelFallback', '模型')}`}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    {t('sessionList.dialog.cwdLabel', '工作目录（可选）')}
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={customCwd}
-                      onChange={(e) => setCustomCwd(e.target.value)}
-                      placeholder={t('sessionList.dialog.cwdPlaceholder', '留空使用默认目录')}
-                      className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                    />
-                    <button
-                      onClick={async () => {
-                        try {
-                          
-                          const selected = await openDialog({ directory: true, multiple: false });
-                          if (selected && typeof selected === 'string') {
-                            setCustomCwd(selected);
-                          }
-                        } catch { /* ignore */ }
-                      }}
-                      className="px-2.5 py-2 rounded-lg shrink-0 transition-colors hover:opacity-80"
-                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-                      title={t('sessionList.dialog.chooseDir', '选择目录')}
-                    >
-                      <FolderOpen size={14} />
-                    </button>
-                  </div>
-                </div>
-                <div
-                  className="px-3 py-2 rounded-lg text-xs"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-                >
-                  {t('sessionList.dialog.apiHint', '通过 API 直接与模型对话，无需 Agent 中转。请确保已在设置中配置对应 API Key。')}
-                </div>
-              </div>
-            )}
-
-            {/* 底部动作条：次要入口（从宿主导入）与「取消 / 创建」同级，
-                不再夹在表单中间打断填写节奏 */}
-            <div className="flex items-center gap-2">
-              {/* 宿主会话管理统一在左侧「宿主会话」视图里做：这里只做跳转，
-                  不再复制一套列表/导入 UI */}
-              {hostImportAvailable && (
-                <button
-                  onClick={() => {
-                    setShowNewDialog(false);
-                    // 带上弹窗里选中的 ACP Agent：否则会恒落到第一个可用宿主
-                    enterHostView(newSessionType);
-                  }}
-                  className="text-xs px-2 py-1.5 rounded-lg transition-colors hover:opacity-80"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
-                >
-                  {t('sessionList.import.entry', '从宿主导入会话…')}
-                </button>
-              )}
-              <span className="flex-1" />
-              <button
-                onClick={() => setShowNewDialog(false)}
-                className="px-3 py-1.5 rounded-lg text-xs"
-                style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
-              >
-                {t('sessionList.dialog.cancel', '取消')}
-              </button>
-              <button
-                onClick={handleCreate}
-                disabled={creating || (newSessionType === 'api' && apiProviders.length === 0)}
-                className="pd-btn px-3 py-1.5 rounded-lg text-xs  disabled:opacity-50"
-                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-              >
-                {creating ? t('sessionList.dialog.creating', '创建中...') : t('sessionList.dialog.create', '创建')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <NewSessionDialog
+          projectSeed={newSessionSeed}
+          onClose={closeNewSessionDialog}
+          onCreated={async (sessionId) => {
+            closeNewSessionDialog();
+            await selectSession(sessionId);
+          }}
+          onOpenHostSessions={(agentType, cwd, projectId) => {
+            closeNewSessionDialog();
+            enterHostView(agentType, cwd, projectId ?? null);
+          }}
+        />
+      )}
+      {membershipSession && (
+        <ProjectMembershipDialog
+          workType="session"
+          workId={membershipSession.id}
+          workTitle={membershipSession.title}
+          currentProjectId={membershipSession.projectId}
+          onClose={() => setMembershipSession(null)}
+          onChanged={handleProjectChanged}
+        />
       )}
     </aside>
   );

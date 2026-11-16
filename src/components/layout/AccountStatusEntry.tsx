@@ -11,17 +11,56 @@ import { Loader2, LogIn, LogOut } from 'lucide-react';
 
 import { AccountAvatar } from '../common/AccountAvatar';
 import { PlanBadge } from '../common/PlanBadge';
-import { capabilityLabel, useAccountStore } from '../../stores/accountStore';
-import { expiryText } from '../../utils/planText';
+import { UpgradePrompt } from '../common/UpgradePrompt';
+import { CAP_CLOUD_SYNC, capabilityLabel, useAccountStore } from '../../stores/accountStore';
+import { cloudSyncEntitlementLabel, expiryText } from '../../utils/planText';
+import { nextUpgradeOffer } from '../../utils/upgradeOffers';
 
 export function AccountStatusEntry() {
   const navigate = useNavigate();
-  const { account, loaded, loggingIn, login, logout, openPlatform } = useAccountStore();
+  const {
+    account,
+    loaded,
+    loggingIn,
+    login,
+    logout,
+    openPlatform,
+    openOrganization,
+    openUpgrade,
+  } =
+    useAccountStore();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // 组织来源：升级入口指到平台的组织页
+  // 组织来源：升级入口必须落在当前组织，不能退化成个人团队版购买。
   const fromOrganization = account?.source === 'organization';
+  const sourceOrganization =
+    account?.source === 'organization' ? account.organization : null;
+  const upgradeOffer = account ? nextUpgradeOffer(account.capabilities) : null;
+  const openRecommendedUpgrade = () => {
+    setOpen(false);
+    if (fromOrganization) {
+      if (sourceOrganization) {
+        void openOrganization({
+          organizationId: sourceOrganization.id,
+          capability: upgradeOffer?.capability,
+          source: 'account-menu',
+        });
+      } else {
+        void openPlatform('organizations');
+      }
+      return;
+    }
+    if (upgradeOffer) {
+      void openUpgrade({
+        plan: upgradeOffer.plan,
+        capability: upgradeOffer.capability,
+        source: 'account-menu',
+      });
+      return;
+    }
+    void openPlatform('upgrade');
+  };
 
   // 点击外部 / Esc 收起弹层
   useEffect(() => {
@@ -66,6 +105,7 @@ export function AccountStatusEntry() {
           border: '1px solid var(--border)',
         }}
         title={loggingIn ? '请在浏览器中完成登录与授权' : '登录平台账号'}
+        aria-label={loggingIn ? '请在浏览器中完成登录与授权' : '登录平台账号'}
       >
         {loggingIn ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />}
       </button>
@@ -87,13 +127,13 @@ export function AccountStatusEntry() {
           padding: 0,
           overflow: 'hidden',
           background: 'transparent',
-          border: `1px solid ${open ? 'var(--accent)' : 'var(--border)'}`,
+          border: 'none',
         }}
         title="账号与会员"
         aria-label={`账号：${account.nickname || account.email}`}
         aria-expanded={open}
       >
-        <AccountAvatar nickname={account.nickname} email={account.email} avatarId={account.avatarId} size={30} radius={7} />
+        <AccountAvatar nickname={account.nickname} email={account.email} avatarId={account.avatarId} size={32} radius={8} />
       </button>
 
       {/* 弹层挂在顶栏下方，右对齐（顶栏在最上方，所以向下弹出） */}
@@ -133,27 +173,57 @@ export function AccountStatusEntry() {
             <div className="mt-1" style={{ color: 'var(--text-secondary)' }}>
               已解锁：
               {account.capabilities.length > 0
-                ? account.capabilities.map(capabilityLabel).join('、')
+                ? account.capabilities
+                    .map((key) =>
+                      key === CAP_CLOUD_SYNC
+                        ? cloudSyncEntitlementLabel(account.quotas)
+                        : capabilityLabel(key),
+                    )
+                    .join('、')
                 : '无（免费档）'}
             </div>
             {account.stale && (
-              <div className="mt-1" style={{ color: '#F59E0B' }}>
+              <div className="mt-1" style={{ color: 'var(--status-warning)' }}>
                 离线：平台不可达，按上次已知权益显示。
               </div>
             )}
           </div>
 
+          {upgradeOffer && (
+            <UpgradePrompt
+              className="mt-2"
+              compact
+              capability={upgradeOffer.capability}
+              plan={upgradeOffer.plan}
+              title={upgradeOffer.title}
+              description={upgradeOffer.description}
+              source="account-menu"
+              onUpgrade={openRecommendedUpgrade}
+            />
+          )}
+
           <div className="mt-2 pt-2 flex items-center gap-2" style={{ borderTop: '1px solid var(--border)' }}>
-            <button
-              onClick={() => {
-                setOpen(false);
-                void openPlatform(fromOrganization ? 'organizations' : 'upgrade');
-              }}
-              className="pd-btn px-2 py-1 rounded text-[11px]"
-              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-            >
-              {fromOrganization ? '组织与订阅' : '升级 / 续费'}
-            </button>
+            {!upgradeOffer && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  if (sourceOrganization) {
+                    void openOrganization({
+                      organizationId: sourceOrganization.id,
+                      source: 'account-menu',
+                    });
+                  } else if (fromOrganization) {
+                    void openPlatform('organizations');
+                  } else {
+                    void openPlatform('upgrade');
+                  }
+                }}
+                className="pd-btn px-2 py-1 rounded text-[11px]"
+                style={{ backgroundColor: 'var(--accent)', color: 'var(--text-on-accent)' }}
+              >
+                {fromOrganization ? '组织与订阅' : '升级 / 续费'}
+              </button>
+            )}
             <button
               onClick={() => {
                 setOpen(false);

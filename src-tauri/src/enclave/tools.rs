@@ -20,11 +20,7 @@ use crate::enclave::{host, knowledge, org, EnclaveState};
 use crate::tools::{RiskLevel, ToolHandler};
 
 /// 工具体共用的闸门复核（主机本机）。
-fn allowed_now(
-    store: &EnclaveStore,
-    org_id: &str,
-    trust: TrustDomain,
-) -> Result<bool, String> {
+fn allowed_now(store: &EnclaveStore, org_id: &str, trust: TrustDomain) -> Result<bool, String> {
     store.with_conn(|c| {
         let policy = crate::enclave::org::get_allow_cloud_model(c, org_id)?;
         Ok(gate::team_content_injectable(
@@ -161,9 +157,9 @@ impl ToolHandler for SearchOrgKnowledgeTool {
             return Ok(json!({ "entries": brief, "count": brief.len() }).to_string());
         }
 
-        let entries = self.store.with_conn(|c| {
-            knowledge::search_entries(c, &self.org_id, None, &query, limit, 0)
-        })?;
+        let entries = self
+            .store
+            .with_conn(|c| knowledge::search_entries(c, &self.org_id, None, &query, limit, 0))?;
         let brief: Vec<serde_json::Value> = entries
             .iter()
             .map(|e| {
@@ -250,8 +246,8 @@ impl ToolHandler for ReadOrgKnowledgeEntryTool {
                 json!({ "kbId": kb_id, "memoryId": memory_id }),
             )
             .await?;
-            let entry: Option<serde_json::Value> = serde_json::from_value(data)
-                .map_err(|e| format!("解析主机知识条目失败：{}", e))?;
+            let entry: Option<serde_json::Value> =
+                serde_json::from_value(data).map_err(|e| format!("解析主机知识条目失败：{}", e))?;
             return match entry {
                 Some(e) => Ok(json!({
                     "memoryId": e["memoryId"],
@@ -266,9 +262,9 @@ impl ToolHandler for ReadOrgKnowledgeEntryTool {
             };
         }
 
-        let entry = self.store.with_conn(|c| {
-            knowledge::get_entry(c, &self.org_id, &kb_id, memory_id)
-        })?;
+        let entry = self
+            .store
+            .with_conn(|c| knowledge::get_entry(c, &self.org_id, &kb_id, memory_id))?;
         match entry {
             Some(e) => Ok(json!({
                 "memoryId": e.memory_id,

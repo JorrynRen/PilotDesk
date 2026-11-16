@@ -105,18 +105,22 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
               </button>
               {showEmojiPicker && (
                 <div
-                  className="absolute top-12 left-0 z-10 grid grid-cols-12 gap-0.5 p-2 rounded-lg shadow-lg"
-                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', minWidth: '360px' }}
+                  role="listbox"
+                  aria-label="选择图标"
+                  className="pd-menu absolute left-0 top-12 z-10 grid grid-cols-12 gap-0.5"
+                  style={{ minWidth: '360px' }}
                 >
                   {EMOJI_OPTIONS.map((e) => (
                     <button
                       type="button"
                       key={e}
+                      role="option"
+                      aria-selected={icon === e}
                       onClick={() => {
                         setIcon(e);
                         setShowEmojiPicker(false);
                       }}
-                      className="w-7 h-7 flex items-center justify-center rounded transition-colors hover:bg-[var(--bg-tertiary)]"
+                      className="pd-emoji-option"
                       style={{
                         outline: icon === e ? '1.5px solid var(--accent)' : 'none',
                         outlineOffset: '-1px',

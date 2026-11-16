@@ -44,6 +44,8 @@ pub struct PilotDeskLlmClient {
     permission_rules: PermissionRules,
     /// 工作区目录（工作区内路径免审批；房间 cwd）。
     workspace: Option<String>,
+    /// 房间产物目录 + 项目主目录与关联目录（统一安全路径）。
+    workspace_roots: Vec<String>,
     /// 会话安全模式（本次/本波次有效，不持久化；None 默认标准）。
     security_mode: Option<SecurityMode>,
     /// 流式 chunk 空闲超时（秒；0 = 禁用空闲检测）。与 app_settings `api_stream_idle_secs` 同源。
@@ -68,6 +70,7 @@ impl PilotDeskLlmClient {
             cancel: None,
             permission_rules: PermissionRules::default(),
             workspace: None,
+            workspace_roots: Vec::new(),
             security_mode: None,
             stream_idle_secs: DEFAULT_STREAM_IDLE_SECS,
         }
@@ -96,6 +99,12 @@ impl PilotDeskLlmClient {
     /// 设置工作区目录（工作区内路径免审批）。
     pub fn with_workspace(mut self, workspace: Option<String>) -> Self {
         self.workspace = workspace;
+        self
+    }
+
+    /// 设置房间运行时全部安全根。
+    pub fn with_workspace_roots(mut self, workspace_roots: Vec<String>) -> Self {
+        self.workspace_roots = workspace_roots;
         self
     }
 
@@ -361,6 +370,7 @@ impl LlmClient for PilotDeskLlmClient {
                     permission_rules: Some(self.permission_rules.clone()),
                     // 工作区目录（工作区内路径免审批）
                     workspace: self.workspace.clone(),
+                    workspace_roots: self.workspace_roots.clone(),
                     // 会话安全模式（本次/本波次有效）
                     security_mode: self.security_mode,
                     // 用量归因：写 api_usage_log.provider（AgentLoop 优先取此注入值）

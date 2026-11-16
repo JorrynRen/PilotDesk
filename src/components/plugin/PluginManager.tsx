@@ -2,7 +2,19 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  BookOpen,
+  Copy,
+  Package,
+  Plus,
+  RefreshCw,
+  Shield,
+  ShieldOff,
+  Store,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { usePluginStore, pluginSupportsWorkflow } from '../../stores/pluginStore';
 import { PluginReadmeDialog } from './PluginReadmeDialog';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
@@ -10,6 +22,7 @@ import { confirmDialog } from '../../stores/confirmStore';
 import { PluginIcon as SharedPluginIcon } from './PluginIcon';
 import type { PermissionCheck, PluginInstance } from '../../types/plugin';
 import { errorMessage } from '../../utils/errorMessage';
+import { SettingsButton, SettingsSection } from '../settings';
 
 /** 单个插件面板入口（来自 RightPanel 按插件分组的 registeredPanels） */
 export interface PluginPanelEntry {
@@ -30,7 +43,7 @@ interface PluginManagerProps {
 function PermissionBadge({ check }: { check: PermissionCheck }) {
   return (
     <span
-      className="text-[9px] px-1.5 py-0.5 rounded cursor-help"
+      className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded cursor-help"
       title={check.reason || undefined}
       style={{
         backgroundColor: check.allowed
@@ -46,12 +59,12 @@ function PermissionBadge({ check }: { check: PermissionCheck }) {
       }}
     >
       {check.permission}
-      {check.reason?.includes('高风险') && ' ⚠️'}
+      {check.reason?.includes('高风险') && <AlertTriangle size={9} />}
     </span>
   );
 }
 
-function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
+function SandboxInfoPanel({ onClose }: { onClose: () => void }) {
   const { sandboxInfo, fetchSandboxInfo, setSandboxEnabled } = usePluginStore();
   const [copied, setCopied] = useState(false);
 
@@ -68,115 +81,94 @@ function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
   };
 
   return (
-    <div className="mb-3 p-3 rounded-lg space-y-3" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>沙箱保护</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => !sandboxInfo.sandbox_enabled && setSandboxEnabled(true)}
-            className="pd-btn px-2 py-1 rounded text-[11px] flex items-center gap-1"
+    <SettingsSection
+      title="沙箱保护"
+      description="插件只能使用清单声明且已授权的权限；目录与清单大小也会在加载前校验。"
+      actions={
+        <>
+          <span
+            className="text-[10px] px-2 py-1 rounded-md font-medium"
             style={{
-              backgroundColor: sandboxInfo.sandbox_enabled ? 'var(--accent-light)' : 'var(--bg-secondary)',
-              color: sandboxInfo.sandbox_enabled ? 'var(--accent)' : 'var(--text-tertiary)',
-              opacity: sandboxInfo.sandbox_enabled ? 1 : 0.5,
-              cursor: sandboxInfo.sandbox_enabled ? 'default' : 'pointer',
+              backgroundColor: sandboxInfo.sandbox_enabled
+                ? 'rgba(16,185,129,0.12)'
+                : 'rgba(239,68,68,0.10)',
+              color: sandboxInfo.sandbox_enabled ? '#10B981' : '#EF4444',
             }}
-            title={sandboxInfo.sandbox_enabled ? '沙箱已启用' : '启用沙箱'}
           >
-            <Shield size={12} />
-            启用
-          </button>
-          <button
-            onClick={() => sandboxInfo.sandbox_enabled && setSandboxEnabled(false)}
-            className="pd-btn px-2 py-1 rounded text-[11px] flex items-center gap-1"
-            style={{
-              backgroundColor: !sandboxInfo.sandbox_enabled ? 'rgba(239,68,68,0.1)' : 'var(--bg-secondary)',
-              color: !sandboxInfo.sandbox_enabled ? '#EF4444' : 'var(--text-tertiary)',
-              opacity: !sandboxInfo.sandbox_enabled ? 1 : 0.5,
-              cursor: !sandboxInfo.sandbox_enabled ? 'default' : 'pointer',
-            }}
-            title={!sandboxInfo.sandbox_enabled ? '沙箱已禁用' : '禁用沙箱'}
+            {sandboxInfo.sandbox_enabled ? '已启用' : '已禁用'}
+          </span>
+          <SettingsButton
+            onClick={() => void setSandboxEnabled(!sandboxInfo.sandbox_enabled)}
+            variant={sandboxInfo.sandbox_enabled ? 'secondary' : 'success'}
+            icon={sandboxInfo.sandbox_enabled ? <ShieldOff size={12} /> : <Shield size={12} />}
           >
-            <ShieldOff size={12} />
-            禁用
-          </button>
-          <button
+            {sandboxInfo.sandbox_enabled ? '禁用沙箱' : '启用沙箱'}
+          </SettingsButton>
+          <SettingsButton
+            onClick={() => void fetchSandboxInfo()}
+            icon={<RefreshCw size={12} />}
+            title="刷新沙箱信息"
+          >
+            刷新
+          </SettingsButton>
+          <SettingsButton
             onClick={onClose}
-            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
-            style={{ color: 'var(--text-tertiary)' }}
-            title="关闭"
-          >
-            <X size={11} />
-          </button>
-        </div>
-      </div>
-
-      <div className="my-2" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
-
-      <div className="space-y-1.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-        <div className="flex items-center gap-1.5">
-          <span className="shrink-0 font-medium">插件目录:</span>
-          <code className="flex-1 break-all px-1.5 py-0.5 rounded text-[10px]" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+            variant="ghost"
+            icon={<X size={12} />}
+            title="收起沙箱信息"
+          />
+        </>
+      }
+    >
+      <div className="space-y-3 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+        <div className="pd-settings-inline-note flex items-center gap-2">
+          <span className="shrink-0 font-medium">插件目录</span>
+          <code className="min-w-0 flex-1 break-all font-mono text-[10px]" title={sandboxInfo.plugins_dir}>
             {sandboxInfo.plugins_dir}
           </code>
-          <button
+          <SettingsButton
             onClick={handleCopyPath}
-            className="pd-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]"
-            style={{ color: copied ? '#10B981' : 'var(--accent)' }}
+            variant="ghost"
+            icon={copied ? undefined : <Copy size={12} />}
+            title={copied ? '已复制' : '复制插件目录'}
           >
-            {copied ? '已复制' : <Copy size={11} />}
-          </button>
+            {copied ? '已复制' : undefined}
+          </SettingsButton>
         </div>
-        <div className="flex items-center gap-3">
-          <span>清单上限: <strong>{(sandboxInfo.max_manifest_size / 1024).toFixed(0)} KB</strong></span>
-          <span>已注册权限: <strong>{sandboxInfo.allowed_permissions.length}</strong></span>
-        </div>
-      </div>
 
-      <div>
-        <div className="text-[11px] font-medium mb-1.5" style={{ color: 'var(--text-primary)' }}>权限列表</div>
-        <div className="flex flex-wrap gap-1">
-          {sandboxInfo.allowed_permissions.map((perm) => {
-            const isHighRisk = sandboxInfo.high_risk_permissions.includes(perm);
-            return (
-              <span
-                key={perm}
-                className="text-[10px] px-1.5 py-0.5 rounded break-all"
-                style={{
-                  backgroundColor: isHighRisk ? 'rgba(245,158,11,0.15)' : 'var(--accent-light)',
-                  color: isHighRisk ? '#F59E0B' : 'var(--accent)',
-                }}
-                title={isHighRisk ? '高风险权限' : '低风险权限'}
-              >
-                {perm}
-                {isHighRisk && ' ⚠️'}
-              </span>
-            );
-          })}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="px-2 py-1 rounded-md" style={{ backgroundColor: 'var(--bg-field)' }}>
+            清单上限 <strong>{(sandboxInfo.max_manifest_size / 1024).toFixed(0)} KB</strong>
+          </span>
+          <span className="px-2 py-1 rounded-md" style={{ backgroundColor: 'var(--bg-field)' }}>
+            已注册权限 <strong>{sandboxInfo.allowed_permissions.length}</strong>
+          </span>
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>允许的插件权限</div>
+          <div className="flex flex-wrap gap-1.5">
+            {sandboxInfo.allowed_permissions.map((perm) => {
+              const isHighRisk = sandboxInfo.high_risk_permissions.includes(perm);
+              return (
+                <span
+                  key={perm}
+                  className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded break-all"
+                  style={{
+                    backgroundColor: isHighRisk ? 'rgba(245,158,11,0.15)' : 'var(--accent-light)',
+                    color: isHighRisk ? '#F59E0B' : 'var(--accent)',
+                  }}
+                  title={isHighRisk ? '高风险权限' : '低风险权限'}
+                >
+                  {perm}
+                  {isHighRisk && <AlertTriangle size={9} />}
+                </span>
+              );
+            })}
+          </div>
         </div>
       </div>
-
-      <div className="flex items-center gap-2 pt-1">
-        <button
-          onClick={handleCopyPath}
-          className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
-          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-        >
-          <Copy size={11} />
-          复制路径
-        </button>
-        <button
-          onClick={fetchSandboxInfo}
-          className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
-          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-        >
-          <RefreshCw size={11} />
-          刷新
-        </button>
-      </div>
-    </div>
+    </SettingsSection>
   );
 }
 
@@ -238,7 +230,7 @@ function PluginIcon({ plugin }: { plugin: PluginInstance }) {
 
 export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerProps) {
   const navigate = useNavigate();
-  const { plugins, loading, error, discover, enable, disable, installZip, uninstall, sandboxInfo } = usePluginStore();
+  const { plugins, loading, error, discover, enable, disable, installZip, uninstall } = usePluginStore();
   const [showSandbox, setShowSandbox] = useState(false);
   const [installStatus, setInstallStatus] = useState<string | null>(null);
   const [readmePlugin, setReadmePlugin] = useState<PluginInstance | null>(null);
@@ -293,139 +285,90 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
   }, [uninstall, discover]);
 
   return (
-    <div className="flex flex-col">
-      {/* 左右内边距交给外层（设置页内容区）：标题行、工具栏与卡片列表左右对齐 */}
-      <div className="pt-4 pb-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>插件管理</h3>
-              <span
-                className="text-[10px] px-1.5 py-0.5 rounded font-medium"
-                style={{
-                  backgroundColor: sandboxInfo?.sandbox_enabled
-                    ? 'rgba(16,185,129,0.15)'
-                    : 'var(--bg-tertiary)',
-                  color: sandboxInfo?.sandbox_enabled
-                    ? '#10B981'
-                    : 'var(--text-tertiary)',
-                }}
-              >
-                {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
-              </span>
-            </div>
-            {/* 与设置页其它分页一致：标题下给一行说明，不再单独画分隔线 */}
-            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-              安装、卸载与启停本地插件；在线插件商店在「资源市集 › 插件」。
-            </p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={handleInstallZip}
-              className="pd-btn text-xs px-2.5 py-1.5 rounded-lg transition-all"
-              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+    <div className="settings-page-stack">
+      <SettingsSection
+        title="插件管理"
+        description="安装、卸载与启停本地插件。在线插件请在资源市集的插件页获取。"
+        actions={
+          <>
+            <SettingsButton
+              onClick={() => void handleInstallZip()}
+              variant="primary"
+              icon={<Plus size={12} />}
               title="从压缩包安装插件"
             >
-              +安装
-            </button>
-            {/* 在线插件商店已迁至「资源市集 › 插件」：这里只留跳转入口 */}
-            <button
+              安装插件
+            </SettingsButton>
+            <SettingsButton
               onClick={() => navigate('/market?tab=plugins')}
-              className="pd-btn text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1"
-              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+              icon={<Store size={12} />}
               title="前往资源市集 › 插件"
             >
-              <Store size={12} />
               资源市集
-            </button>
-            <button
-              onClick={() => setShowSandbox(!showSandbox)}
-              className="pd-btn text-xs px-2.5 py-1.5 rounded-lg"
-              style={{
-                backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-field)',
-                color: showSandbox ? 'var(--accent)' : 'var(--text-tertiary)',
-              }}
+            </SettingsButton>
+            <SettingsButton
+              onClick={() => setShowSandbox((value) => !value)}
+              variant={showSandbox ? 'secondary' : 'ghost'}
+              icon={<Shield size={12} />}
               title={showSandbox ? '收起沙箱信息' : '查看沙箱信息'}
             >
               沙箱
-            </button>
+            </SettingsButton>
+          </>
+        }
+      >
+        {installStatus && (
+          <div
+            className="pd-settings-inline-note mb-3"
+            style={{
+              color: installStatus.startsWith('安装失败') ? 'var(--danger)' : 'var(--success)',
+              borderColor: installStatus.startsWith('安装失败') ? 'var(--danger)' : 'var(--success)',
+            }}
+          >
+            {installStatus}
           </div>
+        )}
+
+        {error && (
+          <div
+            className="pd-settings-inline-note mb-3"
+            style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
+          >
+            {error}
+          </div>
+        )}
+
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            {loading ? '正在扫描插件…' : `已安装插件${plugins.length > 0 ? ` · ${plugins.length} 个` : ''}`}
+          </div>
+          <SettingsButton
+            variant="ghost"
+            onClick={() => void discover()}
+            icon={<RefreshCw size={12} />}
+            title="刷新插件列表"
+          />
         </div>
-      </div>
 
-      <div className="pb-4">
-      {showSandbox ? (
-        <div><SandboxInfoPanel onClose={() => setShowSandbox(false)} /></div>
-      ) : (
-        <div>
-        <>
-          {installStatus && (
-            <div
-              className="text-[10px] py-1.5 px-3 rounded mb-3"
-              style={{
-                backgroundColor: installStatus.startsWith('安装失败')
-                  ? 'rgba(239,68,68,0.1)'
-                  : 'rgba(16,185,129,0.1)',
-                color: installStatus.startsWith('安装失败') ? '#EF4444' : '#10B981',
-              }}
-            >
-              {installStatus}
-            </div>)}
-
-          {loading && (
-            <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>
-              扫描插件中...
-            </div>)}
-
-          {error && (
-            <div
-              className="text-xs py-2 px-3 rounded mb-3"
-              style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}
-            >
-              {error}
-            </div>)}
-
-          {/* 已安装插件标题行 */}
-          {!loading && (
-            <>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)', margin: 0 }}>
-                已安装插件
-              </h3>
-              <div className="flex items-center gap-2">
-                {plugins.length > 0 && (
-                  <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
-                    共 {plugins.length} 个插件
-                  </span>
-                )}
-                <button
-                  onClick={discover}
-                  className="pd-btn text-[10px] px-2 py-1 rounded transition-all flex items-center gap-1"
-                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
-                  title="刷新插件列表"
-                >
-                  <RefreshCw size={11} />
-                  刷新
-                </button>
-              </div>
-            </div>
-            </>
-          )}
-
-          {!loading && plugins.length === 0 && (
-            <div className="text-xs py-8 text-center" style={{ color: 'var(--text-tertiary)' }}>
-              <p className="mb-2">暂无已安装的插件</p>
-              <p className="text-[10px] mb-3">
-                点击「+ 安装」按钮选择 .zip 压缩包安装插件
-              </p>
-              <p className="text-[10px]">
-                或将插件目录放置到{' '}
-                <code className="px-1 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-                  ~/.pilotdesk/plugins/
-                </code>
-              </p>
-            </div>)}
-
+        {loading ? (
+          <div className="pd-settings-empty">
+            <Package size={20} style={{ color: 'var(--text-tertiary)' }} />
+            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>扫描插件中…</span>
+          </div>
+        ) : plugins.length === 0 ? (
+          <div className="pd-settings-empty">
+            <Package size={20} style={{ color: 'var(--text-tertiary)' }} />
+            <p className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              暂无已安装插件
+            </p>
+            <p className="max-w-[440px] text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+              点击「安装插件」选择 .zip 压缩包，或将插件目录放入{' '}
+              <code className="px-1 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-field)' }}>
+                ~/.pilotdesk/plugins/
+              </code>
+            </p>
+          </div>
+        ) : (
           <div className="space-y-2">
             {plugins.map((plugin) => {
               const loadState = pluginRegistry.getPluginLoadState(plugin.path);
@@ -433,135 +376,127 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
               return (
                 <div
                   key={plugin.manifest.id}
-                  className="px-3 py-2.5 rounded-xl transition-colors overflow-hidden"
+                  className="rounded-md px-3 py-3 transition-colors"
                   style={{
-                    backgroundColor: 'var(--bg-secondary)',
+                    backgroundColor: 'var(--bg-raised)',
                     border: '1px solid var(--border)',
-                    opacity: plugin.enabled ? 1 : 0.5,
+                    opacity: plugin.enabled ? 1 : 0.62,
                   }}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
                       <PluginIcon plugin={plugin} />
-                      {/* 名称在设置页（宽栏）放得下，直接显示；窄栏时代只靠图标 title 提示 */}
-                      <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }} title={plugin.manifest.name}>
+                      <span className="text-xs truncate font-medium" style={{ color: 'var(--text-primary)' }} title={plugin.manifest.name}>
                         {plugin.manifest.name}
                       </span>
-                      <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }} title={`版本 v${plugin.manifest.version}`}>
+                      <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-tertiary)' }} title={`版本 v${plugin.manifest.version}`}>
                         v{plugin.manifest.version}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
+                    <div className="flex shrink-0 items-center gap-1">
+                      <SettingsButton
+                        variant="ghost"
                         onClick={() => setReadmePlugin(plugin)}
-                        className="pd-btn px-1.5 py-1 rounded text-[10px]"
-                        style={{ color: 'var(--accent)' }}
+                        icon={<BookOpen size={12} />}
                         title="查看 README"
-                      >
-                        📖
-                      </button>
-                      <button
-                        onClick={() => handleUninstall(plugin)}
-                        className="pd-btn px-1.5 py-1 rounded text-[10px]"
-                        style={{ color: '#EF4444' }}
+                      />
+                      <SettingsButton
+                        variant="ghost"
+                        onClick={() => void handleUninstall(plugin)}
+                        icon={<Trash2 size={12} />}
                         title="卸载插件"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                      <button
-                        onClick={() => (plugin.enabled ? disable(plugin.manifest.id) : enable(plugin.manifest.id))}
-                        className="px-2.5 py-1 rounded text-[10px] transition-all"
-                        style={{
-                          backgroundColor: plugin.enabled
-                            ? 'rgba(16,185,129,0.15)'
-                            : 'var(--bg-tertiary)',
-                          color: plugin.enabled ? '#10B981' : 'var(--text-secondary)',
-                        }}
+                        style={{ color: 'var(--danger)' }}
+                      />
+                      <SettingsButton
+                        onClick={() => void (plugin.enabled ? disable(plugin.manifest.id) : enable(plugin.manifest.id))}
+                        variant={plugin.enabled ? 'secondary' : 'success'}
                         disabled={!plugin.enabled && plugin.has_unauthorized_permissions}
-                        title={plugin.enabled ? '禁用插件' : '启用插件'}
+                        title={plugin.enabled ? '点击禁用插件' : '点击启用插件'}
+                        style={plugin.enabled ? { color: 'var(--success)' } : undefined}
                       >
                         {plugin.enabled
                           ? '已启用'
                           : plugin.has_unauthorized_permissions
                             ? '权限异常'
                             : '已禁用'}
-                      </button>
+                      </SettingsButton>
                     </div>
                   </div>
 
-                  <div className="my-2" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
+                  <div className="my-2.5" style={{ height: 1, backgroundColor: 'var(--border)' }} />
 
-                  <div>
-                    <p className="text-[10px] line-clamp-2 break-words" style={{ color: 'var(--text-secondary)' }}>
-                      {plugin.manifest.description}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5 min-w-0">
-                      <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-                        {plugin.manifest.author}
-                      </span>
-                      {plugin.permission_checks.map((check) => (
-                        <PermissionBadge key={check.permission} check={check} />
-                      ))}
-                    </div>
-                    {plugin.manifest.contributes && (
-                      <div className="flex flex-wrap items-center gap-1.5 mt-1 min-w-0">
-                        {plugin.manifest.contributes.panels && plugin.manifest.contributes.panels.length > 0 && (
-                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(59,130,246,0.1)', color: '#3B82F6' }}>
-                            {plugin.manifest.contributes.panels.length} 面板
-                          </span>)}
-                        {plugin.manifest.contributes.commands && plugin.manifest.contributes.commands.length > 0 && (
-                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(139,92,246,0.1)', color: '#8B5CF6' }}>
-                            {plugin.manifest.contributes.commands.length} 命令
-                          </span>)}
-                        {plugin.manifest.contributes.hooks && plugin.manifest.contributes.hooks.length > 0 && (
-                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
-                            {plugin.manifest.contributes.hooks.length} 钩子
-                          </span>)}
-                        {pluginSupportsWorkflow(plugin) && (
-                          <span
-                            className="text-[9px] px-1 py-0.5 rounded"
-                            style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22C55E' }}
-                            title="可在工作流的「插件」节点里选用：参数表单来自插件自写组件或命令的 input 模式"
-                          >
-                            工作流可用
-                          </span>)}
-                      </div>)}
+                  <p className="line-clamp-2 break-words text-[10px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                    {plugin.manifest.description}
+                  </p>
+                  <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-tertiary)' }}>
+                      {plugin.manifest.author}
+                    </span>
+                    {plugin.permission_checks.map((check) => (
+                      <PermissionBadge key={check.permission} check={check} />
+                    ))}
                   </div>
-                  {/* 插件面板入口：从插件列表直达面板预览（替代右侧头部「面板」下拉） */}
+                  {plugin.manifest.contributes && (
+                    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+                      {plugin.manifest.contributes.panels && plugin.manifest.contributes.panels.length > 0 && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(59,130,246,0.1)', color: '#3B82F6' }}>
+                          {plugin.manifest.contributes.panels.length} 面板
+                        </span>)}
+                      {plugin.manifest.contributes.commands && plugin.manifest.contributes.commands.length > 0 && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(139,92,246,0.1)', color: '#8B5CF6' }}>
+                          {plugin.manifest.contributes.commands.length} 命令
+                        </span>)}
+                      {plugin.manifest.contributes.hooks && plugin.manifest.contributes.hooks.length > 0 && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
+                          {plugin.manifest.contributes.hooks.length} 钩子
+                        </span>)}
+                      {pluginSupportsWorkflow(plugin) && (
+                        <span
+                          className="text-[9px] px-1.5 py-0.5 rounded"
+                          style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22C55E' }}
+                          title="可在工作流的「插件」节点里选用"
+                        >
+                          工作流可用
+                        </span>)}
+                    </div>)}
+
                   {plugin.enabled && onOpenPanel && myPanels.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      <span className="text-[9px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                        面板
-                      </span>
-                      {myPanels.map((p) => (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="shrink-0 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>面板</span>
+                      {myPanels.map((panel) => (
                         <button
-                          key={p.uniqueKey}
-                          onClick={() => onOpenPanel(p.uniqueKey)}
-                          className="pd-btn px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1 transition-colors"
+                          key={panel.uniqueKey}
+                          onClick={() => onOpenPanel(panel.uniqueKey)}
+                          className="pd-btn inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] transition-colors"
                           style={{
-                            backgroundColor: 'var(--bg-tertiary)',
+                            backgroundColor: 'var(--bg-field)',
                             color: 'var(--accent)',
                             border: '1px solid var(--border)',
                           }}
-                          title={`打开面板：${p.title}`}
+                          title={`打开面板：${panel.title}`}
                         >
-                          <SharedPluginIcon icon={p.icon} pluginId={p.pluginId} size={10} />
-                          <span className="truncate" style={{ maxWidth: 140 }}>{p.title}</span>
+                          <SharedPluginIcon icon={panel.icon} pluginId={panel.pluginId} size={10} />
+                          <span className="max-w-[140px] truncate">{panel.title}</span>
                         </button>
                       ))}
                     </div>
                   )}
-                  {plugin.error && (<p className="text-[10px] mt-1.5 break-words" style={{ color: '#EF4444' }}>{plugin.error}</p>)}
-                  {plugin.has_unauthorized_permissions && (<p className="text-[10px] mt-1 break-words" style={{ color: '#F59E0B' }}>包含未授权权限声明，请联系插件开发者或检查 manifest.json</p>)}
-                  {loadState?.error && (<p className="text-[10px] mt-1 break-words" style={{ color: '#EF4444' }}>加载错误: {loadState.error}</p>)}
+                  {plugin.error && <p className="mt-1.5 break-words text-[10px]" style={{ color: 'var(--danger)' }}>{plugin.error}</p>}
+                  {plugin.has_unauthorized_permissions && (
+                    <p className="mt-1 break-words text-[10px]" style={{ color: 'var(--status-warning)' }}>
+                      包含未授权权限声明，请联系插件开发者或检查 manifest.json
+                    </p>
+                  )}
+                  {loadState?.error && <p className="mt-1 break-words text-[10px]" style={{ color: 'var(--danger)' }}>加载错误: {loadState.error}</p>}
                 </div>
               );
             })}
           </div>
-        </>
-        </div>
-      )}
-      </div>
+        )}
+      </SettingsSection>
+
+      {showSandbox && <SandboxInfoPanel onClose={() => setShowSandbox(false)} />}
+
       {readmePlugin && (
         <PluginReadmeDialog
           basePath={readmePlugin.manifest.id}

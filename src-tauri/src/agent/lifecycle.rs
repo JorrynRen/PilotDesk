@@ -295,7 +295,9 @@ impl LifecycleSpec {
     pub fn supported(&self) -> Result<(), String> {
         match self.kind {
             LifecycleKind::Npm | LifecycleKind::Shell => Ok(()),
-            LifecycleKind::Uvx => Err("uvx 分发当前不支持，请按该 Agent 官方文档手工安装".to_string()),
+            LifecycleKind::Uvx => {
+                Err("uvx 分发当前不支持，请按该 Agent 官方文档手工安装".to_string())
+            }
             LifecycleKind::Binary => match self.current_artifact() {
                 Some(_) => Ok(()),
                 None => Err(self.binary_block_reason()),
@@ -326,13 +328,17 @@ impl LifecycleSpec {
     pub fn binary_block_reason(&self) -> String {
         let key = current_platform_key();
         let Some(artifact) = self.artifacts.iter().find(|a| a.platform == key) else {
-            return format!("该条目未提供当前系统（{}）的安装包，请按官方文档手工安装", key);
+            return format!(
+                "该条目未提供当前系统（{}）的安装包，请按官方文档手工安装",
+                key
+            );
         };
         if !artifact.archive.to_lowercase().ends_with(".zip") {
             return "当前仅支持 .zip 安装包，请按官方文档手工安装".to_string();
         }
         if artifact.cmd.to_lowercase().ends_with(".cmd") {
-            return "该安装包的启动器是 .cmd 脚本，当前不支持自动安装，请按官方文档手工安装".to_string();
+            return "该安装包的启动器是 .cmd 脚本，当前不支持自动安装，请按官方文档手工安装"
+                .to_string();
         }
         "该安装包暂不支持自动安装，请按官方文档手工安装".to_string()
     }
@@ -351,10 +357,7 @@ impl LifecycleSpec {
                     return Err("生命周期规格缺少 npm 包名".to_string());
                 }
                 let join = |cmd: &dyn Fn(&str) -> String| -> String {
-                    pkgs.iter()
-                        .map(|p| cmd(p))
-                        .collect::<Vec<_>>()
-                        .join(" && ")
+                    pkgs.iter().map(|p| cmd(p)).collect::<Vec<_>>().join(" && ")
                 };
                 Ok(LifecycleCommands {
                     install: Some(join(&|p| format!("npm install -g {}", p))),
@@ -573,7 +576,11 @@ mod tests {
         let spec = LifecycleSpec {
             kind: LifecycleKind::Npm,
             packages: vec![
-                npm_spec(PackageRole::Adapter, "@agentclientprotocol/codex-acp", &["--acp"]),
+                npm_spec(
+                    PackageRole::Adapter,
+                    "@agentclientprotocol/codex-acp",
+                    &["--acp"],
+                ),
                 npm_spec(PackageRole::Host, "@openai/codex", &[]),
             ],
             ..Default::default()
@@ -597,7 +604,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            spec("@agentclientprotocol/codex-acp@2.2.2").pinned_version().as_deref(),
+            spec("@agentclientprotocol/codex-acp@2.2.2")
+                .pinned_version()
+                .as_deref(),
             Some("2.2.2")
         );
         // 无版本后缀 / @latest 都不算钉死版本（预置条目不可比）
@@ -629,7 +638,10 @@ mod tests {
             package_without_version("@agentclientprotocol/claude-agent-acp@0.4.1"),
             "@agentclientprotocol/claude-agent-acp"
         );
-        assert_eq!(package_without_version("agoragentic-mcp@1.3.0"), "agoragentic-mcp");
+        assert_eq!(
+            package_without_version("agoragentic-mcp@1.3.0"),
+            "agoragentic-mcp"
+        );
         assert_eq!(package_without_version("@openai/codex"), "@openai/codex");
     }
 
@@ -717,8 +729,14 @@ mod tests {
 
     #[test]
     fn semver_extraction() {
-        assert_eq!(extract_semver("hermes 1.4.2 (build 3)").as_deref(), Some("1.4.2"));
-        assert_eq!(extract_semver("v0.16.0-beta.1").as_deref(), Some("0.16.0-beta.1"));
+        assert_eq!(
+            extract_semver("hermes 1.4.2 (build 3)").as_deref(),
+            Some("1.4.2")
+        );
+        assert_eq!(
+            extract_semver("v0.16.0-beta.1").as_deref(),
+            Some("0.16.0-beta.1")
+        );
         assert!(extract_semver("no version here").is_none());
     }
 

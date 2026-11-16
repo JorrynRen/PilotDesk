@@ -65,10 +65,7 @@ fn ensure_task_commentable(conn: &Connection, org_id: &str, task_id: &str) -> Re
         status.as_str(),
         tasks::STATUS_ARCHIVED | tasks::STATUS_CANCELLED
     ) {
-        return Err(format!(
-            "任务已{}，讨论只读",
-            tasks::status_label(&status)
-        ));
+        return Err(format!("任务已{}，讨论只读", tasks::status_label(&status)));
     }
     Ok(())
 }

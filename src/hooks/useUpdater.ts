@@ -9,10 +9,8 @@ import { useState } from 'react';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { check, type Update as UpdateHandle } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { APP_VERSION } from '../utils/appVersion';
 import { errorMessage } from '../utils/errorMessage';
-
-/** 版本号单一来源：由 vite.config.ts 从根 package.json 注入 */
-const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
 
 /** 手动下载入口（更新说明里的「GitHub Releases」与安装失败时的兜底按钮共用） */
 const RELEASES_URL = 'https://github.com/JorrynRen/PilotDesk/releases';

@@ -122,6 +122,8 @@ interface KnowledgeState {
   expandEpoch: number;
 
   loadBases: () => Promise<void>;
+  /** 用实际候选数量同步库列表与全局导航徽标，不重新拉库定义 */
+  syncPendingCounts: (counts: Record<string, number>) => void;
   /** 关掉当前打开的知识库、回到默认页（只清"打开了哪个"，库列表与库本身都不动） */
   closeBase: () => void;
   selectBase: (id: string) => Promise<void>;
@@ -269,6 +271,18 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     }
   },
 
+  syncPendingCounts: (counts) => {
+    const current = get().bases;
+    let changed = false;
+    const bases = current.map((base) => {
+      const pendingCount = counts[base.id];
+      if (pendingCount === undefined || pendingCount === base.pendingCount) return base;
+      changed = true;
+      return { ...base, pendingCount };
+    });
+    if (changed) set({ bases });
+  },
+
   /** 关掉当前打开的知识库：回到默认页（**只清"打开了哪个"**，库列表与库本身都不动） */
   closeBase: () =>
     set((s) => ({
@@ -331,6 +345,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
         relations: relations.map(toFileRelation),
         fileAttrs: Object.fromEntries(fileAttrs.map((a) => [a.sourceRef, a])),
       });
+      get().syncPendingCounts({ [id]: candidates.length });
     } catch (e) {
       showToast(`读取知识库内容失败: ${errorMessage(e)}`, 'error');
     } finally {

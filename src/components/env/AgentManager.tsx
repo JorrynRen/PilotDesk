@@ -434,7 +434,7 @@ export function AgentManager() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="settings-page-stack">
       <SettingsSection title="已注册 Agent">
         <div className="flex items-center justify-between mb-3">
           <div className="flex gap-2">
@@ -843,7 +843,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           />
           {(form.transport || 'subprocess') === 'acp' && (
             <div className="mt-2 space-y-2">
-              {/* 工作目录不在此配置：运行时 cwd 取「会话/项目工作目录」（为空回退全局工作区），
+              {/* 工作目录不在此配置：运行时 cwd 取项目主目录或全局工作空间，
                   见 lib.rs resolved_cwd。此处若再放一个 cwd 字段是无消费方的死配置。 */}
               {/* 预置与官方目录条目统一由「资源市集 › Agent 配置」下发，本页只保留自定义填写。 */}
               <FormField
@@ -859,7 +859,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
                 placeholder="如 acp"
               />
               <div className="text-[10px]" style={{ color: 'var(--text-tertiary, var(--text-secondary))' }}>
-                工作目录跟随「会话 / 项目工作目录」，无需在此配置。
+                工作目录跟随项目主目录或全局工作空间，无需在此配置。
               </div>
               <div className="text-[10px]" style={{ color: 'var(--text-tertiary, var(--text-secondary))' }}>
                 将保存为：{form.conn || '{}'}

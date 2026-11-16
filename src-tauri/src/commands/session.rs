@@ -44,9 +44,10 @@ pub(crate) fn normalize_message_content(content: &str) -> String {
 }
 
 /// 工具调用链 JSON（ThinkingChainStep[]）落库前的归一化：对其中的文本字段
-/// （content/result/fileDiff）逐项折叠空行。工具输出、文件 diff、推理文本可能含
-/// 连续空行，若不处理，前端 whitespace-pre-wrap 直出时会原样显示多空行。
-fn normalize_tool_calls(tool_calls: &str) -> String {
+/// （content/result/fileDiff）逐项折叠空行，并把内建文件工具的路径参数统一为
+/// 相对本次工作根的绝对路径。工具输出、文件 diff、推理文本可能含连续空行，
+/// 若不处理，前端 whitespace-pre-wrap 直出时会原样显示多空行。
+fn normalize_tool_calls(tool_calls: &str, work_root: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(tool_calls) {
         if let Some(items) = value.as_array_mut() {
             for item in items.iter_mut() {
@@ -61,7 +62,7 @@ fn normalize_tool_calls(tool_calls: &str) -> String {
             }
         }
         if let Ok(serialized) = serde_json::to_string(&value) {
-            return serialized;
+            return crate::utils::paths::normalize_tool_call_context_paths(&serialized, work_root);
         }
     }
     tool_calls.to_string()
@@ -72,7 +73,6 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
         id: row.get("id")?,
         agent_type: row.get("agent_type")?,
         title: row.get("title")?,
-        cwd: row.get("cwd")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         last_message_preview: row.get("last_message_preview")?,
@@ -84,6 +84,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
         origin: row.get("origin").ok(),
         temperature: row.get("temperature").ok(),
         max_tokens: row.get("max_tokens").ok(),
+        project_id: row.get("project_id").ok().flatten(),
     })
 }
 
@@ -189,7 +190,7 @@ pub fn list_sessions(state: State<'_, DbState>) -> Result<Vec<Session>, AppError
     let conn = state.get_conn()?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens
+        "SELECT id, agent_type, title, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens, project_id
          FROM sessions WHERE status = 'active' ORDER BY updated_at DESC"
     )?;
 
@@ -205,7 +206,7 @@ pub fn list_archived_sessions(state: State<'_, DbState>) -> Result<Vec<Session>,
     let conn = state.get_conn()?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id
+        "SELECT id, agent_type, title, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens, project_id
          FROM sessions WHERE status = 'archived' ORDER BY updated_at DESC"
     )?;
 
@@ -220,19 +221,18 @@ pub fn list_archived_sessions(state: State<'_, DbState>) -> Result<Vec<Session>,
 pub fn create_session(
     state: State<'_, DbState>,
     agent_type: String,
-    cwd: Option<String>,
     title: Option<String>,
     api_provider: Option<String>,
     api_model: Option<String>,
     agent_session_id: Option<String>,
     temperature: Option<f64>,
     max_tokens: Option<u32>,
+    project_id: Option<String>,
 ) -> Result<Session, AppError> {
     let conn = state.get_conn()?;
     create_session_inner(
         &conn,
         agent_type,
-        cwd,
         title,
         api_provider,
         api_model,
@@ -240,6 +240,7 @@ pub fn create_session(
         temperature,
         max_tokens,
         None,
+        project_id,
     )
     // 会话创建失败会直接呈现给用户（新建会话/宿主导入都走这里）：
     // 落一条带 `[failure:` 前缀的日志，反馈弹窗才检索得到现场。
@@ -256,7 +257,6 @@ pub fn create_session(
 pub fn create_session_inner(
     conn: &Connection,
     agent_type: String,
-    cwd: Option<String>,
     title: Option<String>,
     api_provider: Option<String>,
     api_model: Option<String>,
@@ -264,22 +264,23 @@ pub fn create_session_inner(
     temperature: Option<f64>,
     max_tokens: Option<u32>,
     origin: Option<String>,
+    project_id: Option<String>,
 ) -> Result<Session, AppError> {
     let id = crate::utils::new_id();
     let now = crate::utils::now();
     let title = title.unwrap_or_default();
-    let cwd = cwd.unwrap_or_default();
+    let project_id =
+        crate::commands::projects::validate_project_membership(conn, project_id.as_deref())?;
 
     conn.execute(
-        "INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at, api_provider, api_model, agent_session_id, temperature, max_tokens, origin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![id, agent_type, title, cwd, now, now, api_provider, api_model, agent_session_id, temperature, max_tokens, origin],
+        "INSERT INTO sessions (id, agent_type, title, created_at, updated_at, api_provider, api_model, agent_session_id, temperature, max_tokens, origin, project_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![id, agent_type, title, now, now, api_provider, api_model, agent_session_id, temperature, max_tokens, origin, project_id],
     )?;
 
     Ok(Session {
         id,
         agent_type,
         title,
-        cwd,
         created_at: now,
         updated_at: now,
         last_message_preview: String::new(),
@@ -291,6 +292,7 @@ pub fn create_session_inner(
         origin,
         temperature,
         max_tokens,
+        project_id,
     })
 }
 
@@ -299,7 +301,7 @@ pub fn get_session(state: State<'_, DbState>, session_id: String) -> Result<Sess
     let conn = state.get_conn()?;
 
     let session = conn.query_row(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, temperature, max_tokens
+        "SELECT id, agent_type, title, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens, project_id
          FROM sessions WHERE id = ?1",
         params![session_id],
         row_to_session,
@@ -368,7 +370,25 @@ pub fn save_message_inner(
     let id = crate::utils::new_id();
     let now = crate::utils::now();
     let content = normalize_message_content(content);
-    let tool_calls = tool_calls.map(|s| normalize_tool_calls(&s));
+    let work_root = crate::commands::projects::resolve_workspace_context(
+        conn,
+        crate::commands::projects::WorkspaceOwner::session(session_id),
+    )
+    .map(|context| context.workspace.work_root)
+    .unwrap_or_default();
+    let tool_calls = tool_calls.map(|s| normalize_tool_calls(&s, &work_root));
+    let attachments = attachments.map(|items| {
+        items
+            .into_iter()
+            .map(|mut attachment| {
+                attachment.path =
+                    crate::utils::paths::normalize_absolute_path(&attachment.path, &work_root)
+                        .to_string_lossy()
+                        .to_string();
+                attachment
+            })
+            .collect::<Vec<_>>()
+    });
 
     let attachments_json = attachments
         .as_ref()
@@ -462,16 +482,17 @@ pub fn unarchive_session(state: State<'_, DbState>, session_id: String) -> Resul
 
 /// 删除会话前清理其附件落盘目录（尽力而为，失败不阻断删除）
 fn cleanup_session_attachments(conn: &Connection, session_id: &str) {
-    let cwd: Option<String> = conn
-        .query_row(
-            "SELECT cwd FROM sessions WHERE id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .ok()
-        .flatten();
-    let dir = crate::utils::paths::resolve_attachments_dir(conn, cwd.as_deref(), session_id);
+    let dir = match crate::commands::attachment::resolve_session_attachments_dir(conn, session_id) {
+        Ok(dir) => dir,
+        Err(error) => {
+            log::warn!(
+                "[session] 解析附件目录失败: session={}, error={}",
+                session_id,
+                error
+            );
+            return;
+        }
+    };
     if dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&dir) {
             log::warn!("[session] 清理附件目录失败: {:?}, error={}", dir, e);
@@ -509,7 +530,7 @@ pub fn delete_session(state: State<'_, DbState>, session_id: String) -> Result<(
 
 pub fn list_sessions_inner(conn: &Connection) -> Result<Vec<Session>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens
+        "SELECT id, agent_type, title, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens, project_id
          FROM sessions WHERE status = 'active' ORDER BY updated_at DESC"
     )?;
 
@@ -529,7 +550,7 @@ pub fn get_session_messages_inner(
 
 pub fn get_session_inner(conn: &Connection, session_id: &str) -> Result<Option<Session>, AppError> {
     // sessions 为 v1 终态列，直接查询含 agent_session_id / temperature / max_tokens。
-    let sql = "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens
+    let sql = "SELECT id, agent_type, title, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens, project_id
          FROM sessions WHERE id = ?1";
     match conn.prepare(sql) {
         Ok(mut stmt) => {
@@ -544,7 +565,7 @@ pub fn get_session_inner(conn: &Connection, session_id: &str) -> Result<Option<S
         Err(_) => {
             // agent_session_id 列不存在，回退到不含该列的查询
             let mut stmt = conn.prepare(
-                "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model
+                "SELECT id, agent_type, title, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model
                  FROM sessions WHERE id = ?1"
             )?;
             // 使用临时 row mapper（少了第 11 列 agent_session_id）
@@ -553,18 +574,18 @@ pub fn get_session_inner(conn: &Connection, session_id: &str) -> Result<Option<S
                     id: row.get(0)?,
                     agent_type: row.get(1)?,
                     title: row.get(2)?,
-                    cwd: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    last_message_preview: row.get(6)?,
-                    message_count: row.get(7)?,
-                    status: row.get(8)?,
-                    api_provider: row.get(9).ok(),
-                    api_model: row.get(10).ok(),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                    last_message_preview: row.get(5)?,
+                    message_count: row.get(6)?,
+                    status: row.get(7)?,
+                    api_provider: row.get(8).ok(),
+                    api_model: row.get(9).ok(),
                     agent_session_id: None,
                     origin: None,
                     temperature: None,
                     max_tokens: None,
+                    project_id: None,
                 })
             }
             let session = stmt
@@ -613,29 +634,21 @@ pub fn update_session_agent_id_inner(
     Ok(())
 }
 
-/// 更新会话的工作目录（项目根）：对后续消息生效（每次发消息动态读取 cwd）。
+/// 记录 ACP 宿主导入会话的恢复目录。
 ///
-/// **不更新 `updated_at`**：该列只表示"最后一次消息时间"（列表分组、排序、相对时间都据此），
-/// 改配置不属于会话活动——否则切一次目录会把老会话顶到列表最前、时间显示成"刚刚"。
-#[tauri::command]
-pub fn update_session_cwd(
-    state: State<'_, DbState>,
-    session_id: String,
-    cwd: String,
-) -> Result<(), AppError> {
-    let conn = state.get_conn()?;
-    update_session_cwd_inner(&conn, &session_id, &cwd)
-}
-
-/// `update_session_cwd` 的库层实现（独立出来便于单测，同 `list_sessions_inner`）。
-pub fn update_session_cwd_inner(
+/// 这是普通会话唯一允许持久化的工作目录，仅供宿主 `session/resume|load` 恢复上下文；
+/// 不向前端暴露编辑入口，也不参与普通会话的项目/全局工作根推导。
+pub fn update_host_resume_cwd_inner(
     conn: &Connection,
     session_id: &str,
-    cwd: &str,
+    host_resume_cwd: &str,
 ) -> Result<(), AppError> {
+    let host_resume_cwd = crate::utils::paths::normalize_absolute_path(host_resume_cwd, "")
+        .to_string_lossy()
+        .to_string();
     conn.execute(
-        "UPDATE sessions SET cwd = ?1 WHERE id = ?2",
-        params![cwd.trim(), session_id],
+        "UPDATE sessions SET host_resume_cwd = ?1 WHERE id = ?2",
+        params![host_resume_cwd, session_id],
     )?;
     Ok(())
 }
@@ -656,7 +669,7 @@ pub struct SessionModelSwitch {
 /// 比较后再写：`expected_*` 与库中当前值不一致时**不覆盖**，直接回传当前值——用户在别的窗口
 /// （工作流节点、群聊房间）也可能改过同一会话，静默覆盖会让对方的改动凭空消失。
 ///
-/// **不更新 `updated_at`**：理由同 `update_session_cwd`（时间只由消息驱动）。
+/// **不更新 `updated_at`**：时间只由消息驱动。
 #[tauri::command]
 pub fn update_session_model(
     state: State<'_, DbState>,
@@ -819,7 +832,7 @@ pub fn search_sessions(state: State<'_, DbState>, query: String) -> Result<Vec<S
 
     let pattern = format!("%{}%", query);
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin
+        "SELECT id, agent_type, title, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, origin, temperature, max_tokens, project_id
          FROM sessions WHERE status = 'active' AND title LIKE ?1 ORDER BY updated_at DESC LIMIT 50"
     )?;
 
@@ -1604,6 +1617,13 @@ pub fn session_promote_to_room(
     };
 
     let now = crate::utils::now();
+    let project_id = crate::commands::projects::validate_project_membership(
+        &conn,
+        input
+            .project_id
+            .as_deref()
+            .or(session.project_id.as_deref()),
+    )?;
     let room = crate::groupchat::models::Room {
         id: uuid::Uuid::new_v4().to_string(),
         title: input.title.clone(),
@@ -1619,7 +1639,7 @@ pub fn session_promote_to_room(
         updated_at: now,
         goal_notes: "[]".into(),
         allow_auto_cli: input.allow_auto_cli,
-        output_dir: input.output_dir.clone(),
+        project_id,
         // 派生字段：只有 list_rooms 会填
         current_round: None,
         task_total: None,
@@ -2346,41 +2366,20 @@ fn sanitize_generated_title(raw: &str) -> String {
 #[tauri::command]
 pub async fn session_extract_tasks(
     state: State<'_, DbState>,
+    agent_mgr: State<'_, tokio::sync::Mutex<crate::agent::AgentManager>>,
     session_id: String,
     target: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let target = ExtractTarget::from_opt(target.as_deref());
 
-    // 1) 同步段：读会话/提供商/素材（连接不跨 await）
-    let (endpoint, api_key, is_anthropic, model, prompt) = {
+    // 1) 同步段：读会话与素材，并确定本轮必须使用的模型来源。
+    //    API 会话只认自己的 provider/model；CLI/ACP 会话只认自己的 agent_type。
+    //    这里不做“找第一个可用 API”的跨会话回退，避免提炼结果与实际会话 Agent 脱节。
+    let (backend, prompt) = {
         let conn = state.get_conn()?;
         let session = get_session_inner(&conn, &session_id)?
             .ok_or_else(|| AppError::NotFound(format!("会话不存在: {}", session_id)))?;
-        let pid = session
-            .api_provider
-            .clone()
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| AppError::InvalidInput(
-                "这个会话不是 API 会话（没有配置提供商），无法让模型提炼任务；请在来源清单里手动勾选"
-                    .to_string(),
-            ))?;
-        let model = session
-            .api_model
-            .clone()
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| {
-                AppError::InvalidInput(
-                    "这个会话没有配置模型，无法让模型提炼任务；请在来源清单里手动勾选".to_string(),
-                )
-            })?;
-        let p = crate::commands::api_provider::get_api_provider(&conn, &pid)?
-            .ok_or_else(|| AppError::NotFound(format!("提供商不存在: {}", pid)))?;
-        let raw = crate::commands::api_provider::get_api_key(&conn, &pid)?.unwrap_or_default();
-        let key = if raw.is_empty() {
-            String::new()
-        } else {
-            crate::utils::crypto::decrypt(&raw).unwrap_or(raw)
-        };
+        let source = extract_model_source(&session)?;
 
         let summary =
             crate::eventlog::latest_session_summary(&conn, &session_id)?.unwrap_or_default();
@@ -2413,38 +2412,297 @@ pub async fn session_extract_tasks(
                 goal, lines
             )
         };
-        let prompt = build_extract_prompt(&goal, &lines, target);
-        let is_anthropic = p.api_format.eq_ignore_ascii_case("anthropic");
-        (p.api_endpoint.clone(), key, is_anthropic, model, prompt)
+        let mut prompt = build_extract_prompt(&goal, &lines, target);
+        let backend = match source {
+            ExtractModelSource::Api { provider_id, model } => {
+                let provider =
+                    crate::commands::api_provider::get_api_provider(&conn, &provider_id)?
+                        .ok_or_else(|| {
+                            AppError::NotFound(format!("提供商不存在: {}", provider_id))
+                        })?;
+                let raw = crate::commands::api_provider::get_api_key(&conn, &provider_id)?
+                    .unwrap_or_default();
+                let api_key = if raw.is_empty() {
+                    String::new()
+                } else {
+                    crate::utils::crypto::decrypt(&raw).unwrap_or(raw)
+                };
+                ExtractBackend::Api {
+                    endpoint: provider.api_endpoint,
+                    api_key,
+                    is_anthropic: provider.api_format.eq_ignore_ascii_case("anthropic"),
+                    model,
+                }
+            }
+            ExtractModelSource::Agent { agent_type } => {
+                let config = crate::commands::agents::get_agent_inner(&conn, &agent_type)?
+                    .ok_or_else(|| {
+                        AppError::InvalidInput(format!(
+                            "当前会话使用的 Agent「{}」未找到配置，无法让模型提炼任务；请检查 Agent 配置，或在来源清单里手动勾选",
+                            agent_type
+                        ))
+                    })?;
+                let descriptor = crate::agent::descriptor::AgentDescriptor::from_agents_row(
+                    &conn,
+                    &agent_type,
+                )
+                .map_err(AppError::Db)?
+                .ok_or_else(|| {
+                    AppError::InvalidInput(format!(
+                        "当前会话使用的 Agent「{}」未找到接入配置，无法让模型提炼任务；请检查 Agent 配置，或在来源清单里手动勾选",
+                        agent_type
+                    ))
+                })?;
+                if !descriptor.is_automatable()
+                    || matches!(
+                        descriptor.transport,
+                        crate::agent::transport::TransportKind::InProcess
+                            | crate::agent::transport::TransportKind::Mcp
+                            | crate::agent::transport::TransportKind::Webview
+                    )
+                {
+                    return Err(AppError::InvalidInput(format!(
+                        "当前会话使用的 Agent「{}」不支持后台一次性调用，无法让模型提炼任务；请在来源清单里手动勾选",
+                        descriptor.name
+                    ))
+                    .into());
+                }
+                // 与会话执行共用同一套动态工作根解析，不读取任何持久化目录快照。
+                let context = crate::commands::projects::resolve_workspace_context(
+                    &conn,
+                    crate::commands::projects::WorkspaceOwner::session(&session.id),
+                )?;
+                let workspace = context.workspace;
+                let cwd = workspace.work_root.clone();
+                let workspace_roots = workspace.runtime_roots([]);
+                let workspace_context =
+                    crate::commands::projects::workspace_context_prompt(&workspace, None);
+                if !workspace_context.is_empty() {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&workspace_context);
+                }
+                ExtractBackend::Agent {
+                    config: Some(config),
+                    descriptor,
+                    cwd,
+                    workspace_roots,
+                }
+            }
+        };
+        (backend, prompt)
     };
 
-    // 2) 一次专用调用（温度低、非流式、要求纯 JSON）
-    let client = if is_anthropic {
-        crate::api_agent::client::ApiClient::new(
+    // 2) 一次专用调用（非流式、要求纯 JSON）
+    let content = match backend {
+        ExtractBackend::Api {
             endpoint,
             api_key,
-            crate::api_agent::types::ApiFormat::Anthropic,
-        )
-    } else {
-        crate::api_agent::client::ApiClient::new_openai(endpoint, api_key)
+            is_anthropic,
+            model,
+        } => {
+            let client = if is_anthropic {
+                crate::api_agent::client::ApiClient::new(
+                    endpoint,
+                    api_key,
+                    crate::api_agent::types::ApiFormat::Anthropic,
+                )
+            } else {
+                crate::api_agent::client::ApiClient::new_openai(endpoint, api_key)
+            };
+            let request = crate::api_agent::types::ChatRequest {
+                model,
+                messages: vec![crate::api_agent::types::ChatMessage::user(&prompt)],
+                tools: None,
+                tool_choice: None,
+                stream: false,
+                temperature: Some(0.2),
+                max_tokens: Some(1600),
+                response_format: None,
+            };
+            let resp = if is_anthropic {
+                client.chat_anthropic(&request).await?
+            } else {
+                client.chat(&request).await?
+            };
+            resp.content
+        }
+        ExtractBackend::Agent {
+            config,
+            descriptor,
+            cwd,
+            workspace_roots,
+        } => {
+            run_agent_extract_once(
+                agent_mgr.inner(),
+                &session_id,
+                config,
+                descriptor,
+                cwd,
+                workspace_roots,
+                &prompt,
+            )
+            .await?
+        }
     };
-    let request = crate::api_agent::types::ChatRequest {
-        model,
-        messages: vec![crate::api_agent::types::ChatMessage::user(&prompt)],
-        tools: None,
-        tool_choice: None,
-        stream: false,
-        temperature: Some(0.2),
-        max_tokens: Some(1600),
-        response_format: None,
-    };
-    let resp = if is_anthropic {
-        client.chat_anthropic(&request).await?
-    } else {
-        client.chat(&request).await?
-    };
-    let tasks = parse_extracted_tasks(&resp.content, target)?;
+    let tasks = parse_extracted_tasks(&content, target)?;
     Ok(serde_json::json!({ "tasks": tasks }))
+}
+
+/// 模型提炼的模型来源。必须严格跟随当前会话，不再从提供商列表里挑“第一个可用项”。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExtractModelSource {
+    Api { provider_id: String, model: String },
+    Agent { agent_type: String },
+}
+
+fn extract_model_source(session: &Session) -> Result<ExtractModelSource, AppError> {
+    if session.agent_type == "api" {
+        let provider_id = session
+            .api_provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let model = session
+            .api_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        return match (provider_id, model) {
+            (Some(provider_id), Some(model)) => {
+                Ok(ExtractModelSource::Api { provider_id, model })
+            }
+            _ => Err(AppError::InvalidInput(
+                "当前 API 会话未配置完整的提供商和模型，无法让模型提炼任务；请先在会话中补齐配置，或在来源清单里手动勾选"
+                    .to_string(),
+            )),
+        };
+    }
+
+    let agent_type = session.agent_type.trim();
+    if agent_type.is_empty() {
+        return Err(AppError::InvalidInput(
+            "当前会话未配置 Agent，无法让模型提炼任务；请检查会话配置，或在来源清单里手动勾选"
+                .to_string(),
+        ));
+    }
+    Ok(ExtractModelSource::Agent {
+        agent_type: agent_type.to_string(),
+    })
+}
+
+enum ExtractBackend {
+    Api {
+        endpoint: String,
+        api_key: String,
+        is_anthropic: bool,
+        model: String,
+    },
+    Agent {
+        config: Option<crate::agent::config::AgentConfig>,
+        descriptor: crate::agent::descriptor::AgentDescriptor,
+        cwd: String,
+        workspace_roots: Vec<String>,
+    },
+}
+
+/// 用会话自身的 Agent 跑一次不进入会话历史的提炼调用。
+///
+/// - 本地 CLI：沿用 `AgentManager::execute_once`，与会话执行共用配置、输出解析与错误映射；
+/// - ACP/HTTP：沿用统一传输层，不另造 Agent 调用链。
+async fn run_agent_extract_once(
+    agent_mgr: &tokio::sync::Mutex<crate::agent::AgentManager>,
+    source_session_id: &str,
+    config: Option<crate::agent::config::AgentConfig>,
+    descriptor: crate::agent::descriptor::AgentDescriptor,
+    cwd: String,
+    workspace_roots: Vec<String>,
+    prompt: &str,
+) -> Result<String, AppError> {
+    let temp_session_id = format!("session-extract:{}", source_session_id);
+    if descriptor.transport == crate::agent::transport::TransportKind::Subprocess {
+        let config = config.ok_or_else(|| {
+            AppError::Config(format!(
+                "Agent「{}」缺少本地 CLI 配置，无法让模型提炼任务",
+                descriptor.name
+            ))
+        })?;
+        let once = agent_mgr
+            .lock()
+            .await
+            .execute_once(
+                &config,
+                prompt,
+                &serde_json::Value::Null,
+                &cwd,
+                &temp_session_id,
+                |_| {},
+                None,
+            )
+            .await?;
+        return Ok(once.text);
+    }
+
+    use crate::agent::transport::{AgentConn, AgentError, PromptInput, UnifiedAgentEvent};
+
+    let Some(mut session) = crate::agent::transport::build_session(descriptor.transport, None)
+    else {
+        return Err(AppError::InvalidInput(format!(
+            "Agent「{}」的接入方式暂不支持一次性调用",
+            descriptor.name
+        )));
+    };
+    let abort = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let conn = AgentConn {
+        session_id: temp_session_id,
+        agent_id: descriptor.agent_id.clone(),
+        transport: descriptor.transport,
+        workspace_roots,
+        cwd,
+        conn: descriptor.conn.clone(),
+        secret: None,
+        resume_id: None,
+        abort,
+        on_pid: None,
+        approvals: None,
+        acp_mode: None,
+        security_mode: None,
+        enforce_security_matrix: false,
+    };
+    let sink: crate::agent::transport::EventSink = std::sync::Arc::new(|ev| {
+        if let UnifiedAgentEvent::Error { error, .. } = ev {
+            log::warn!("[session_extract_tasks] Agent 事件错误: {}", error);
+        }
+    });
+    let handle = session.connect(&conn, sink).await.map_err(|e| {
+        AppError::External(format!(
+            "Agent「{}」建立提炼会话失败：{}",
+            descriptor.name, e
+        ))
+    })?;
+    let result = session
+        .prompt(
+            &handle,
+            PromptInput {
+                text: prompt.to_string(),
+                images: Vec::new(),
+            },
+        )
+        .await;
+    let _ = session.close(&handle).await;
+
+    match result {
+        Ok(out) => Ok(out.text),
+        Err(AgentError::ProcessExited { exit_code, stderr }) => Err(AppError::External(
+            crate::agent::friendly_agent_error(&descriptor.agent_id, exit_code, &stderr),
+        )),
+        Err(AgentError::Cancelled) => Err(AppError::External("模型提炼已取消".to_string())),
+        Err(e) => Err(AppError::External(format!(
+            "Agent「{}」提炼任务失败：{}",
+            descriptor.name, e
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -2460,7 +2718,6 @@ mod model_switch_tests {
                 id TEXT PRIMARY KEY,
                 agent_type TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
-                cwd TEXT DEFAULT '',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 last_message_preview TEXT DEFAULT '',
@@ -2471,7 +2728,8 @@ mod model_switch_tests {
                 agent_session_id TEXT,
                 origin TEXT,
                 temperature REAL,
-                max_tokens INTEGER);
+                max_tokens INTEGER,
+                project_id TEXT);
              CREATE TABLE agents (
                 agent_type TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL DEFAULT '',
@@ -2510,6 +2768,47 @@ mod model_switch_tests {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap()
+    }
+
+    /// CLI 会话提炼必须跟随会话自身的 Agent，不能因为库里另有 API 提供商就改用它。
+    #[test]
+    fn extract_source_keeps_current_cli_agent() {
+        let conn = mem_conn();
+        let session = get_session_inner(&conn, "s-cli").unwrap().unwrap();
+        assert_eq!(
+            extract_model_source(&session).unwrap(),
+            ExtractModelSource::Agent {
+                agent_type: "claude-code".to_string()
+            }
+        );
+    }
+
+    /// API 会话只使用该会话记录里的 provider/model，不读取列表中的第一个可用项。
+    #[test]
+    fn extract_source_uses_api_session_own_model() {
+        let conn = mem_conn();
+        let session = get_session_inner(&conn, "s-api").unwrap().unwrap();
+        assert_eq!(
+            extract_model_source(&session).unwrap(),
+            ExtractModelSource::Api {
+                provider_id: "p1".to_string(),
+                model: "m-a".to_string()
+            }
+        );
+    }
+
+    /// 会话记录不完整时直接给出明确错误，不得偷偷回退到其它 API 提供商。
+    #[test]
+    fn extract_source_does_not_fallback_for_incomplete_api_session() {
+        let conn = mem_conn();
+        conn.execute(
+            "UPDATE sessions SET api_model = NULL WHERE id = 's-api'",
+            [],
+        )
+        .unwrap();
+        let session = get_session_inner(&conn, "s-api").unwrap().unwrap();
+        let err = extract_model_source(&session).unwrap_err();
+        assert!(err.message().contains("未配置完整的提供商和模型"));
     }
 
     /// 切换成功后 `updated_at` 必须保持原值：该列只表示"最后消息时间"，
@@ -2559,23 +2858,6 @@ mod model_switch_tests {
             session_row(&conn, "s-api"),
             ("p1".to_string(), "m-a".to_string(), 100)
         );
-    }
-
-    /// 切目录同样不该动 `updated_at`（同一条口径：时间只由消息驱动）。
-    #[test]
-    fn update_session_cwd_keeps_updated_at() {
-        let conn = mem_conn();
-        update_session_cwd_inner(&conn, "s-api", "E:\\ws").unwrap();
-        let cwd: String = conn
-            .query_row(
-                "SELECT COALESCE(cwd, '') FROM sessions WHERE id = 's-api'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(cwd, "E:\\ws");
-        let (_, _, ts) = session_row(&conn, "s-api");
-        assert_eq!(ts, 100);
     }
 
     /// 只有限流/额度类失败值得延迟重试；认证、模型不存在等重试没意义。

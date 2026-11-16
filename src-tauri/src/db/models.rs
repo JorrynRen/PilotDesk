@@ -6,7 +6,6 @@ pub struct Session {
     pub id: String,
     pub agent_type: String,
     pub title: String,
-    pub cwd: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_message_preview: String,
@@ -29,6 +28,9 @@ pub struct Session {
     /// 最大生成 token 数
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// 工作归属项目；None 表示未归入项目。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

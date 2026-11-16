@@ -255,19 +255,20 @@ impl PermissionRules {
     /// `workspace_hit`：路径位于工作区/已授权缓存内（运行时安全路径，由 AgentLoop 判定传入）。
     pub fn decide_path(&self, path: &str, workspace_hit: bool) -> Action {
         let level = self.security_mode.path_level();
-        if workspace_hit {
-            return path_action(level, PathCategory::Safe);
-        }
         let norm = path.replace('\\', "/").to_lowercase();
         if norm.is_empty() {
             return path_action(level, PathCategory::Unknown);
         }
-        // 风险路径：glob 匹配
+        // 风险路径优先于安全路径：即使路径位于项目安全根或已授权目录内，
+        // 显式风险规则仍不能被安全根绕过。
         for d in &self.deny_paths {
             let p = d.trim().replace('\\', "/").to_lowercase();
             if !p.is_empty() && glob_match(&p, &norm) {
                 return path_action(level, PathCategory::HighRisk);
             }
+        }
+        if workspace_hit {
+            return path_action(level, PathCategory::Safe);
         }
         // 安全路径：glob 匹配
         for a in &self.allow_paths {
@@ -664,7 +665,7 @@ impl Default for AskUserBehavior {
 pub struct AgentLoopConfig {
     /// 最大迭代次数（软上限，达到后请求用户确认）
     pub max_iterations: usize,
-    /// 系统提示词（含 MEMORY.md + USER.md + 技能列表）
+    /// 系统提示词（含 AGENTS.md + USER.md + 技能列表）
     pub system_prompt: String,
     /// 可用工具列表
     pub tools: Vec<ToolDefinition>,
@@ -779,8 +780,10 @@ pub struct AgentLoop {
     approved_commands: std::sync::Mutex<std::collections::HashSet<String>>,
     /// 持久化权限规则（allow/deny 列表）
     permission_rules: PermissionRules,
-    /// 工作区目录（会话 cwd / 群聊房间 cwd）：工作区内路径免审批（授权边界）
+    /// 工作区基准目录（会话 cwd / 群聊房间 cwd）：相对路径与授权缓存均基于它解析。
     workspace: Option<String>,
+    /// 运行时安全根：会话 cwd / 房间产物目录 + 所属项目主目录与关联目录。
+    workspace_roots: Vec<String>,
     /// API 格式（OpenAI / Anthropic）
     api_format: ApiFormat,
     /// 流式增量回调（逐 chunk 透出，供群聊框架 token_stream 使用）
@@ -821,6 +824,7 @@ impl AgentLoop {
             approved_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
             permission_rules: PermissionRules::default(),
             workspace: None,
+            workspace_roots: Vec::new(),
             api_format: ApiFormat::default(),
             on_delta: None,
             progress_cb: None,
@@ -829,23 +833,53 @@ impl AgentLoop {
         }
     }
 
-    /// 设置工作区目录（工作区内路径免审批；会话传 session.cwd，群聊传房间 cwd）。
+    fn add_workspace_root(&mut self, root: &str) {
+        let root = root.trim();
+        if root.is_empty() {
+            return;
+        }
+        let key = crate::utils::paths::path_key(std::path::Path::new(root));
+        if self
+            .workspace_roots
+            .iter()
+            .any(|existing| crate::utils::paths::path_key(std::path::Path::new(existing)) == key)
+        {
+            return;
+        }
+        self.workspace_roots.push(root.to_string());
+    }
+
+    /// 设置工作区基准目录（相对路径 / 审批缓存基准），并确保它始终是运行时安全根。
     pub fn with_workspace(mut self, workspace: Option<String>) -> Self {
+        if let Some(root) = workspace.as_deref() {
+            self.add_workspace_root(root);
+        }
         self.workspace = workspace;
         self
     }
 
-    /// 判断路径是否位于工作区目录内（授权边界判定；相对路径基于工作区解析）。
-    fn is_in_workspace(&self, raw_path: &str) -> bool {
-        let Some(ws) = &self.workspace else {
-            return false;
-        };
-        if ws.trim().is_empty() {
-            return false;
+    /// 设置全部运行时安全根（主目录、关联目录、当前 cwd / 产物目录）。
+    ///
+    /// 无论调用顺序如何，当前 workspace（cwd）都会被保留为安全根。
+    pub fn with_workspace_roots(mut self, roots: Vec<String>) -> Self {
+        self.workspace_roots.clear();
+        for root in roots {
+            self.add_workspace_root(&root);
         }
-        let norm = normalize_path(raw_path, ws);
-        let ws_norm = normalize_path(ws, "");
-        norm.starts_with(&ws_norm)
+        if let Some(workspace) = self.workspace.clone() {
+            self.add_workspace_root(&workspace);
+        }
+        self
+    }
+
+    /// 判断路径是否位于任一运行时安全根内（相对路径按给定基准解析）。
+    fn is_in_workspace_from(&self, raw_path: &str, base: &str) -> bool {
+        path_is_in_workspace_roots(
+            raw_path,
+            base,
+            self.workspace.as_deref().unwrap_or(""),
+            &self.workspace_roots,
+        )
     }
 
     /// 预缓存：用户消息中显式给出的绝对路径 → 写入本会话授权缓存（读写免审批）。
@@ -1588,18 +1622,64 @@ impl AgentLoop {
                     });
                 }
 
-                // 路径类工具的路径子策略动作（Allow=免审批，Deny=拦截，Approve=审批）
-                let mut path_allow = false;
-                // 查找工具的风险等级：execute_command 由命令子策略驱动，
-                // 路径类工具（write_file/edit_file/read_file）由路径子策略驱动，
-                // 其余工具使用注册时等级
-                let risk = if tc.function.name == "execute_command" {
-                    let args: serde_json::Value =
-                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                // 内建工具与动态工具（MCP）的本地路径参数统一进入路径子策略矩阵。
+                // 多路径工具取最严格结果：任一 Deny 即拦截，任一 Approve 即审批。
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                let path_arguments = match self
+                    .tool_registry
+                    .get_local_path_arguments(&tc.function.name, &args)
+                {
+                    Ok(mut dynamic_paths) => {
+                        dynamic_paths.extend(local_tool_paths(&tc.function.name, &args));
+                        dynamic_paths
+                    }
+                    Err(error) => {
+                        let msg = format!("安全规则拦截：{}", error);
+                        self.emit_to_frontend(AgentLoopEvent::ToolResult {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            result: msg.clone(),
+                            success: false,
+                        });
+                        messages.push(ChatMessage::tool_result(&tc.id, &msg));
+                        continue;
+                    }
+                };
+                let path_actions = path_arguments.iter().map(|argument| {
+                    let base = argument
+                        .base
+                        .as_deref()
+                        .or(self.workspace.as_deref())
+                        .unwrap_or("");
+                    let workspace_hit = self.is_in_workspace_from(&argument.path, base)
+                        || is_path_approved(
+                            &self.approved_files,
+                            &self.approved_dirs,
+                            &argument.path,
+                            base,
+                        );
+                    self.permission_rules
+                        .decide_path(&argument.path, workspace_hit)
+                });
+                let path_action = combine_path_actions(path_actions);
+                if path_action == Some(Action::Deny) {
+                    let msg = "安全规则拦截：该操作命中风险路径，已被阻止。".to_string();
+                    self.emit_to_frontend(AgentLoopEvent::ToolResult {
+                        id: tc.id.clone(),
+                        name: tc.function.name.clone(),
+                        result: msg.clone(),
+                        success: false,
+                    });
+                    messages.push(ChatMessage::tool_result(&tc.id, &msg));
+                    continue;
+                }
+
+                // 命令先生成基础风险；路径动作只会收紧，不会让非文件工具绕过自身风险。
+                let mut risk = if tc.function.name == "execute_command" {
                     let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
                     match self.permission_rules.decide_command(cmd) {
                         Action::Deny => {
-                            // 禁止：直接拦截，无需走审批流程
                             let msg =
                                 format!("安全拦截：命令命中禁止规则，已被阻止。命令: {}", cmd);
                             self.emit_to_frontend(AgentLoopEvent::ToolResult {
@@ -1614,59 +1694,37 @@ impl AgentLoop {
                         Action::Approve => RiskLevel::Medium,
                         Action::Allow => RiskLevel::Low,
                     }
-                } else if matches!(
-                    tc.function.name.as_str(),
-                    "write_file" | "edit_file" | "read_file" | "read_image"
-                ) {
-                    let args: serde_json::Value =
-                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                    let action = args.get("path").and_then(|v| v.as_str()).map(|p| {
-                        // 工作区 / 已授权缓存（用户显式预缓存、审批通过缓存）内的路径 = 运行时安全路径
-                        let workspace_hit = self.is_in_workspace(p)
-                            || (tc.function.name == "write_file"
-                                && is_write_path_approved(
-                                    &self.approved_files,
-                                    &self.approved_dirs,
-                                    &tc.function.arguments,
-                                    self.workspace.as_deref().unwrap_or(""),
-                                ));
-                        self.permission_rules.decide_path(p, workspace_hit)
-                    });
-                    match action {
-                        Some(Action::Deny) => {
-                            let msg = "安全规则拦截：该操作命中风险路径，已被阻止。".to_string();
-                            self.emit_to_frontend(AgentLoopEvent::ToolResult {
-                                id: tc.id.clone(),
-                                name: tc.function.name.clone(),
-                                result: msg.clone(),
-                                success: false,
-                            });
-                            messages.push(ChatMessage::tool_result(&tc.id, &msg));
-                            continue;
-                        }
-                        Some(Action::Approve) => RiskLevel::Medium,
-                        Some(Action::Allow) => {
-                            path_allow = true;
-                            RiskLevel::Low
-                        }
-                        None => RiskLevel::Low,
-                    }
                 } else {
                     self.tool_registry
                         .get_risk_level(&tc.function.name)
                         .unwrap_or(RiskLevel::Medium)
                 };
 
+                let mut path_allow = false;
+                match path_action {
+                    Some(Action::Approve) => risk = std::cmp::max(risk, RiskLevel::Medium),
+                    Some(Action::Allow) if is_path_primary_tool(&tc.function.name) => {
+                        path_allow = true;
+                        risk = RiskLevel::Low;
+                    }
+                    _ => {}
+                }
+
                 // 风险审批（路径 Allow 动作豁免，其余按风险等级）
                 if self.needs_approval(&risk) && !path_allow {
                     // ── 路径授权缓存：同一文件/目录不重复弹窗 ──
                     let path_cached = if tc.function.name == "write_file" {
-                        is_write_path_approved(
-                            &self.approved_files,
-                            &self.approved_dirs,
-                            &tc.function.arguments,
-                            self.workspace.as_deref().unwrap_or(""),
-                        )
+                        args.get("path")
+                            .and_then(|value| value.as_str())
+                            .map(|path| {
+                                is_path_approved(
+                                    &self.approved_files,
+                                    &self.approved_dirs,
+                                    path,
+                                    self.workspace.as_deref().unwrap_or(""),
+                                )
+                            })
+                            .unwrap_or(false)
                     } else {
                         false
                     };
@@ -1732,12 +1790,14 @@ impl AgentLoop {
 
                     // 授权通过后缓存路径（下次同一文件免审批）
                     if tc.function.name == "write_file" {
-                        cache_approved_path(
-                            &self.approved_files,
-                            &self.approved_dirs,
-                            &tc.function.arguments,
-                            self.workspace.as_deref().unwrap_or(""),
-                        );
+                        if let Some(path) = args.get("path").and_then(|value| value.as_str()) {
+                            cache_approved_path(
+                                &self.approved_files,
+                                &self.approved_dirs,
+                                path,
+                                self.workspace.as_deref().unwrap_or(""),
+                            );
+                        }
                     }
                     // 授权通过后缓存命令（下次同一命令免审批，与 cmd_cached 读侧配套）
                     if tc.function.name == "execute_command" && risk == RiskLevel::Medium {
@@ -2079,42 +2139,215 @@ fn extract_tool_calls(messages: &[ChatMessage]) -> Vec<ThinkingChainStep> {
     steps
 }
 
-/// 检查 write_file 的路径是否已在授权缓存中（命中文件精确项或父目录前缀项）
-fn is_write_path_approved(
+/// 内建工具路径参数与动态工具共用同一结构，确保两条路径走完全一致的授权矩阵。
+type ToolPathArgument = crate::tools::LocalPathArgument;
+
+/// 提取内建工具中所有本地路径参数。
+///
+/// 远程 URL / data URI 不进入本地路径矩阵；相对路径保留原值，由 `base` 指定解析基准。
+fn local_tool_paths(tool_name: &str, args: &serde_json::Value) -> Vec<ToolPathArgument> {
+    let mut paths = Vec::new();
+    let string_arg = |key: &str| {
+        args.get(key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+
+    let mut push = |value: Option<&str>, base: Option<&str>| {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        if is_remote_path_source(value) {
+            return;
+        }
+        paths.push(ToolPathArgument {
+            path: value.to_string(),
+            base: base
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        });
+    };
+
+    match tool_name {
+        "write_file" | "edit_file" | "read_file" | "read_image" => {
+            push(string_arg("path"), None);
+        }
+        "list_files" | "glob" | "grep" => {
+            push(Some(string_arg("path").unwrap_or(".")), None);
+        }
+        "parse_document" => push(string_arg("file"), None),
+        "create_document" => {
+            push(string_arg("file"), None);
+            if let Some(content) = string_arg("content") {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+                    collect_document_image_paths(&value, None, &mut paths);
+                }
+            }
+        }
+        "edit_image" => {
+            push(string_arg("image"), None);
+            push(string_arg("mask"), None);
+        }
+        "generate_image" => {
+            for image in args
+                .get("image")
+                .and_then(|value| value.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str())
+            {
+                push(Some(image), None);
+            }
+        }
+        "generate_video" | "stt" => push(string_arg("image").or_else(|| string_arg("file")), None),
+        "execute_command" => push(string_arg("cwd"), None),
+        "execute_python" => {
+            let cwd = string_arg("cwd").filter(|value| !is_remote_path_source(value));
+            push(cwd, None);
+            push(string_arg("file"), cwd);
+        }
+        "browser" => {
+            push(string_arg("path"), None);
+            if string_arg("path").is_none() && string_arg("action") == Some("screenshot") {
+                push(Some("pilotdesk_screenshot.png"), None);
+            }
+            for file in args
+                .get("files")
+                .and_then(|value| value.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str())
+            {
+                push(Some(file), None);
+            }
+        }
+        _ => {}
+    }
+    paths
+}
+
+fn collect_document_image_paths(
+    value: &serde_json::Value,
+    base: Option<&str>,
+    paths: &mut Vec<ToolPathArgument>,
+) {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_document_image_paths(item, base, paths);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            if object.get("type").and_then(|value| value.as_str()) == Some("image") {
+                if let Some(path) = object
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty() && !is_remote_path_source(value))
+                {
+                    paths.push(ToolPathArgument {
+                        path: path.to_string(),
+                        base: base.map(str::to_string),
+                    });
+                }
+            }
+            for child in object.values() {
+                collect_document_image_paths(child, base, paths);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_remote_path_source(value: &str) -> bool {
+    let lower = value.trim().to_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("data:")
+        || lower.starts_with("blob:")
+        || lower.starts_with("base64:")
+}
+
+fn combine_path_actions(actions: impl IntoIterator<Item = Action>) -> Option<Action> {
+    let mut combined = None;
+    for action in actions {
+        match action {
+            Action::Deny => return Some(Action::Deny),
+            Action::Approve => combined = Some(Action::Approve),
+            Action::Allow if combined.is_none() => combined = Some(Action::Allow),
+            Action::Allow => {}
+        }
+    }
+    combined
+}
+
+fn is_path_primary_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "write_file"
+            | "edit_file"
+            | "read_file"
+            | "read_image"
+            | "list_files"
+            | "glob"
+            | "grep"
+            | "parse_document"
+            | "create_document"
+    )
+}
+
+/// 路径组件边界判断：`C:\foo` 命中 `C:\foo\bar`，但不命中 `C:\foo2`。
+fn path_is_within_root(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let path_key = crate::utils::paths::path_key(path);
+    let root_key = crate::utils::paths::path_key(root);
+    if root_key.is_empty() {
+        return path_key.is_empty() || path_key.starts_with('/');
+    }
+    path_key == root_key
+        || path_key
+            .strip_prefix(&root_key)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn path_is_in_workspace_roots(
+    raw_path: &str,
+    base: &str,
+    workspace: &str,
+    workspace_roots: &[String],
+) -> bool {
+    let candidate = normalize_path(raw_path, base);
+    workspace_roots
+        .iter()
+        .map(String::as_str)
+        .chain((workspace_roots.is_empty() && !workspace.is_empty()).then_some(workspace))
+        .any(|root| path_is_within_root(&candidate, &normalize_path(root, workspace)))
+}
+
+/// 检查路径是否已在授权缓存中（命中文件精确项或父目录边界项）
+fn is_path_approved(
     approved_files: &std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
     approved_dirs: &std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
-    arguments: &str,
+    raw_path: &str,
     cwd: &str,
 ) -> bool {
-    let args: serde_json::Value = match serde_json::from_str(arguments) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let raw_path = match args["path"].as_str() {
-        Some(p) => p,
-        None => return false,
-    };
     let check = normalize_path(raw_path, cwd);
     let files = approved_files.lock().unwrap();
     let dirs = approved_dirs.lock().unwrap();
-    files.contains(&check) || dirs.iter().any(|d| check.starts_with(d))
+    files.contains(&check)
+        || dirs
+            .iter()
+            .any(|directory| path_is_within_root(&check, directory))
 }
 
 /// 将 write_file 的路径加入授权缓存（文件本身 + 父目录）
 fn cache_approved_path(
     approved_files: &std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
     approved_dirs: &std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
-    arguments: &str,
+    raw_path: &str,
     cwd: &str,
 ) {
-    let args: serde_json::Value = match serde_json::from_str(arguments) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let raw_path = match args["path"].as_str() {
-        Some(p) => p,
-        None => return,
-    };
     let canonical = normalize_path(raw_path, cwd);
 
     // 缓存文件路径
@@ -2145,10 +2378,34 @@ fn normalize_path(raw: &str, cwd: &str) -> std::path::PathBuf {
         std::path::Path::new(cwd).join(pb)
     };
     let lexical = lexical_normalize(&abs);
-    match lexical.canonicalize() {
-        Ok(c) => c,
-        Err(_) => lexical,
+    canonicalize_existing_prefix(&lexical)
+}
+
+/// 对存在的路径做 canonicalize；创建新文件时则解析最近的存在祖先，再拼回缺失尾部。
+/// 这样符号链接目录下的新文件也能与安全根按真实路径比较。
+fn canonicalize_existing_prefix(path: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
     }
+
+    let mut probe = path.to_path_buf();
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(mut canonical) = probe.canonicalize() {
+            for component in missing.iter().rev() {
+                canonical.push(component);
+            }
+            return canonical;
+        }
+        let Some(name) = probe.file_name().map(|name| name.to_os_string()) else {
+            break;
+        };
+        missing.push(name);
+        if !probe.pop() {
+            break;
+        }
+    }
+    path.to_path_buf()
 }
 
 /// 词法规范化：移除 `.` 组件、弹出 `..` 组件（不要求路径存在）。
@@ -2282,5 +2539,279 @@ mod tests {
         assert!(needs(SecurityMode::Relaxed, RiskLevel::High));
 
         assert!(!needs(SecurityMode::Unrestricted, RiskLevel::High));
+    }
+
+    #[test]
+    fn workspace_boundary_uses_path_components() {
+        let root = std::path::Path::new(r"C:\foo");
+        assert!(path_is_within_root(
+            std::path::Path::new(r"C:\foo\bar.txt"),
+            root
+        ));
+        assert!(path_is_within_root(
+            std::path::Path::new(r"c:\FOO\bar.txt"),
+            root
+        ));
+        assert!(!path_is_within_root(
+            std::path::Path::new(r"C:\foo2\bar.txt"),
+            root
+        ));
+    }
+
+    #[test]
+    fn main_and_linked_directories_share_safe_path_boundary() {
+        let roots = vec![r"C:\Project".to_string(), r"C:\Linked".to_string()];
+        assert!(path_is_in_workspace_roots(
+            r"src\main.rs",
+            r"C:\Project",
+            r"C:\Project",
+            &roots,
+        ));
+        assert!(path_is_in_workspace_roots(
+            r"C:\Linked\docs\guide.md",
+            r"C:\Project",
+            r"C:\Project",
+            &roots,
+        ));
+        assert!(!path_is_in_workspace_roots(
+            r"C:\External\secret.txt",
+            r"C:\Project",
+            r"C:\Project",
+            &roots,
+        ));
+
+        let rules = PermissionRules::default();
+        assert_eq!(
+            rules.decide_path(r"C:\Linked\docs\guide.md", true),
+            Action::Allow
+        );
+        assert_eq!(
+            rules.decide_path(r"C:\External\secret.txt", false),
+            Action::Approve
+        );
+
+        let protected = PermissionRules {
+            deny_paths: vec![r"C:\Linked\private\**".to_string()],
+            ..PermissionRules::default()
+        };
+        assert_eq!(
+            protected.decide_path(r"C:\Linked\private\token.txt", true),
+            Action::Deny
+        );
+    }
+
+    #[test]
+    fn local_tool_paths_cover_file_based_builtin_tools() {
+        let cases = [
+            ("list_files", serde_json::json!({}), "."),
+            ("glob", serde_json::json!({"pattern": "**/*.rs"}), "."),
+            ("grep", serde_json::json!({"pattern": "TODO"}), "."),
+            (
+                "parse_document",
+                serde_json::json!({"file": r"D:\Docs\a.docx"}),
+                r"D:\Docs\a.docx",
+            ),
+            (
+                "create_document",
+                serde_json::json!({"file": r"D:\Docs\out.docx"}),
+                r"D:\Docs\out.docx",
+            ),
+        ];
+
+        for (tool, args, expected) in cases {
+            let paths = local_tool_paths(tool, &args);
+            assert!(
+                paths.iter().any(|path| path.path == expected),
+                "{tool} did not classify {expected}"
+            );
+        }
+
+        let document = serde_json::json!({
+            "file": "out.docx",
+            "content": r#"[{"type":"image","path":"D:\\Docs\\cover.png"}]"#
+        });
+        let document_paths = local_tool_paths("create_document", &document);
+        assert!(document_paths
+            .iter()
+            .any(|path| path.path == r"D:\Docs\cover.png"));
+    }
+
+    #[test]
+    fn local_tool_paths_cover_remaining_path_bearing_builtins() {
+        let cases = [
+            (
+                "write_file",
+                serde_json::json!({"path": r"D:\Docs\out.txt"}),
+                r"D:\Docs\out.txt",
+            ),
+            (
+                "edit_file",
+                serde_json::json!({"path": r"D:\Docs\edit.txt"}),
+                r"D:\Docs\edit.txt",
+            ),
+            (
+                "read_file",
+                serde_json::json!({"path": r"D:\Docs\read.txt"}),
+                r"D:\Docs\read.txt",
+            ),
+            (
+                "read_image",
+                serde_json::json!({"path": r"D:\Docs\image.png"}),
+                r"D:\Docs\image.png",
+            ),
+            (
+                "generate_video",
+                serde_json::json!({"image": r"D:\Images\frame.png"}),
+                r"D:\Images\frame.png",
+            ),
+            (
+                "stt",
+                serde_json::json!({"file": r"D:\Audio\voice.wav"}),
+                r"D:\Audio\voice.wav",
+            ),
+            (
+                "execute_command",
+                serde_json::json!({"cwd": r"D:\Project\subdir"}),
+                r"D:\Project\subdir",
+            ),
+            (
+                "browser",
+                serde_json::json!({
+                    "action": "upload_files",
+                    "files": [r"D:\Uploads\report.pdf"]
+                }),
+                r"D:\Uploads\report.pdf",
+            ),
+        ];
+
+        for (tool, args, expected) in cases {
+            let paths = local_tool_paths(tool, &args);
+            assert!(
+                paths.iter().any(|path| path.path == expected),
+                "{tool} did not classify {expected}"
+            );
+        }
+
+        let edit_image = serde_json::json!({
+            "image": r"D:\Images\source.png",
+            "mask": r"D:\Images\mask.png"
+        });
+        let edit_image_paths = local_tool_paths("edit_image", &edit_image);
+        assert_eq!(edit_image_paths.len(), 2);
+
+        let screenshot = local_tool_paths("browser", &serde_json::json!({"action": "screenshot"}));
+        assert!(screenshot
+            .iter()
+            .any(|path| path.path == "pilotdesk_screenshot.png"));
+    }
+
+    #[test]
+    fn local_tool_paths_skip_remote_sources_and_keep_python_cwd_base() {
+        let image = serde_json::json!({
+            "image": ["https://example.com/a.png", "D:\\Images\\b.png"]
+        });
+        let image_paths = local_tool_paths("generate_image", &image);
+        assert_eq!(image_paths.len(), 1);
+        assert_eq!(image_paths[0].path, r"D:\Images\b.png");
+
+        let python = serde_json::json!({
+            "file": "scripts\\job.py",
+            "cwd": "D:\\Project"
+        });
+        let python_paths = local_tool_paths("execute_python", &python);
+        assert!(python_paths
+            .iter()
+            .any(|path| path.path == "D:\\Project" && path.base.is_none()));
+        assert!(python_paths
+            .iter()
+            .any(|path| path.path == "scripts\\job.py"
+                && path.base.as_deref() == Some("D:\\Project")));
+    }
+
+    #[test]
+    fn path_policy_keeps_standard_safe_allow_and_unknown_approve() {
+        let rules = PermissionRules {
+            security_mode: SecurityMode::Standard,
+            ..PermissionRules::default()
+        };
+        assert_eq!(
+            rules.decide_path(r"C:\Project\src\main.rs", true),
+            Action::Allow
+        );
+        assert_eq!(
+            rules.decide_path(r"C:\Unknown\secret.txt", false),
+            Action::Approve
+        );
+
+        let strict = PermissionRules {
+            security_mode: SecurityMode::Strict,
+            ..PermissionRules::default()
+        };
+        assert_eq!(
+            strict.decide_path(r"C:\Project\src\main.rs", true),
+            Action::Approve
+        );
+    }
+
+    #[test]
+    fn deny_paths_override_safe_workspace() {
+        let rules = PermissionRules {
+            deny_paths: vec![r"C:\Project\secrets\**".to_string()],
+            security_mode: SecurityMode::Standard,
+            ..PermissionRules::default()
+        };
+
+        assert_eq!(
+            rules.decide_path(r"C:\Project\secrets\token.txt", true),
+            Action::Deny
+        );
+        assert_eq!(
+            rules.decide_path(r"C:\Project\src\main.rs", true),
+            Action::Allow
+        );
+    }
+
+    #[test]
+    fn multiple_path_actions_use_strictest_result() {
+        assert_eq!(
+            combine_path_actions([Action::Allow, Action::Approve, Action::Allow]),
+            Some(Action::Approve)
+        );
+        assert_eq!(
+            combine_path_actions([Action::Allow, Action::Deny, Action::Approve]),
+            Some(Action::Deny)
+        );
+    }
+
+    #[test]
+    fn safe_paths_only_short_circuit_path_only_tools() {
+        for tool in [
+            "write_file",
+            "edit_file",
+            "read_file",
+            "read_image",
+            "list_files",
+            "glob",
+            "grep",
+            "parse_document",
+            "create_document",
+        ] {
+            assert!(is_path_primary_tool(tool), "{tool} should be path-primary");
+        }
+
+        for tool in [
+            "generate_image",
+            "generate_video",
+            "edit_image",
+            "stt",
+            "execute_command",
+            "execute_python",
+            "browser",
+        ] {
+            assert!(
+                !is_path_primary_tool(tool),
+                "{tool} still carries non-path risk"
+            );
+        }
     }
 }

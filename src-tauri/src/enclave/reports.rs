@@ -310,7 +310,15 @@ pub fn submit_report(
     materials: &[String],
     deliverables: &[String],
 ) -> Result<ReportView, String> {
-    let draft = save_draft(conn, org_id, actor, task_id, content, materials, deliverables)?;
+    let draft = save_draft(
+        conn,
+        org_id,
+        actor,
+        task_id,
+        content,
+        materials,
+        deliverables,
+    )?;
     // 任务必须已开始（in_progress → submitted 才能通过状态机）
     tasks::set_status(conn, org_id, actor, task_id, tasks::STATUS_SUBMITTED)?;
     let now = chrono::Utc::now().timestamp();
@@ -495,10 +503,7 @@ pub struct FeedbackView {
 }
 
 /// 汇报留言（确认 / 退回记录 + 人工补充）。
-pub fn list_feedback(
-    conn: &Connection,
-    report_id: &str,
-) -> Result<Vec<FeedbackView>, String> {
+pub fn list_feedback(conn: &Connection, report_id: &str) -> Result<Vec<FeedbackView>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, report_id, author_id, action, content, created_at

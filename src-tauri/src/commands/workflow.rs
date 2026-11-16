@@ -21,6 +21,7 @@ pub fn create_workflow(
     state: tauri::State<'_, crate::DbState>,
     name: String,
     description: Option<String>,
+    project_id: Option<String>,
 ) -> Result<workflow::WorkflowDefinition, String> {
     let conn = state
         .get_conn()
@@ -55,6 +56,7 @@ pub fn create_workflow(
         created_at: ts,
         updated_at: ts,
         enabled: true,
+        project_id,
     };
     workflow::create_definition(&conn, &def)
         .map_err(|e| AppError::Db(format!("创建失败: {}", e)))?;
@@ -210,10 +212,7 @@ pub fn restore_workflow(
 
 /// 回收站：彻底删除一个工作流（真删，连同版本记录级联清理）。
 #[tauri::command]
-pub fn purge_workflow(
-    state: tauri::State<'_, crate::DbState>,
-    id: String,
-) -> Result<(), String> {
+pub fn purge_workflow(state: tauri::State<'_, crate::DbState>, id: String) -> Result<(), String> {
     let conn = state
         .get_conn()
         .map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
@@ -343,15 +342,15 @@ pub fn save_workflow_dag(
 /// **刻意没有 `version` 参数**：历史版本走「恢复版本」再启动（`restore_workflow_version`），
 /// 而不是"按指定版本运行一次"。后者会让实例长期与当前定义不一致（编辑、触发器、
 /// 后续节点解析都以当前定义为准），语义上是个陷阱；而且前端从来没有传过它。
-#[tauri::command]
-pub async fn start_workflow(
-    state: tauri::State<'_, crate::DbState>,
-    executor: tauri::State<'_, Arc<NodeExecutor>>,
+pub(crate) async fn start_workflow_inner(
+    state: &crate::DbState,
+    executor: Arc<NodeExecutor>,
     app_handle: tauri::AppHandle,
     workflow_id: String,
     input_data: Option<Value>,
     // 前端预生成的实例 ID（解决快速工作流的竞态条件）
     instance_id: Option<String>,
+    trigger: &str,
 ) -> Result<workflow::WorkflowInstance, String> {
     let conn = state
         .get_conn()
@@ -362,8 +361,9 @@ pub async fn start_workflow(
     let def = match workflow::get_definition(&conn, &workflow_id)
         .map_err(|e| AppError::Db(format!("查询失败: {}", e)))?
     {
-        Some(def) if !workflow::is_definition_deleted(&conn, &workflow_id)
-            .map_err(|e| AppError::Db(format!("查询失败: {}", e)))? =>
+        Some(def)
+            if !workflow::is_definition_deleted(&conn, &workflow_id)
+                .map_err(|e| AppError::Db(format!("查询失败: {}", e)))? =>
         {
             def
         }
@@ -387,7 +387,7 @@ pub async fn start_workflow(
         definition_name: def.name.clone(),
         status: workflow::WorkflowInstanceStatus::Running,
         context: serde_json::json!({}),
-        trigger: "manual".to_string(),
+        trigger: trigger.to_string(),
         trigger_detail: None,
         started_at: Some(now_ts),
         completed_at: None,
@@ -418,7 +418,7 @@ pub async fn start_workflow(
 
     let def_clone = def.clone();
     let instance_id_clone = instance_id.clone();
-    let executor = executor.inner().clone();
+    let executor = executor;
     let app_handle_clone = app_handle.clone();
     tokio::spawn(async move {
         log::info!(
@@ -651,6 +651,30 @@ pub async fn start_workflow(
         }
     });
     Ok(instance)
+}
+
+/// 启动工作流执行。
+///
+/// 远程发起复用 [`start_workflow_inner`]，只改变实例的触发来源，不复制执行逻辑。
+#[tauri::command]
+pub async fn start_workflow(
+    state: tauri::State<'_, crate::DbState>,
+    executor: tauri::State<'_, Arc<NodeExecutor>>,
+    app_handle: tauri::AppHandle,
+    workflow_id: String,
+    input_data: Option<Value>,
+    instance_id: Option<String>,
+) -> Result<workflow::WorkflowInstance, String> {
+    start_workflow_inner(
+        state.inner(),
+        executor.inner().clone(),
+        app_handle,
+        workflow_id,
+        input_data,
+        instance_id,
+        "manual",
+    )
+    .await
 }
 
 /// 中止工作流执行
@@ -1372,22 +1396,20 @@ impl ExportWorkflowDefinition {
                 let nodes: Vec<workflow::WorkflowNode> = stage
                     .nodes
                     .into_iter()
-                    .map(|en| {
-                        workflow::WorkflowNode {
-                            id: String::new(),
-                            node_type: en.node_type,
-                            label: en.label,
-                            plugin_id: None,
-                            command_id: None,
-                            params: en.params,
-                            delay_ms: en.delay_ms,
-                            timeout_ms: en.timeout_ms,
-                            input_schema: None,
-                            output_schema: None,
-                            input_mapping: en.input_mapping,
-                            output_mapping: en.output_mapping,
-                            position: en.position,
-                        }
+                    .map(|en| workflow::WorkflowNode {
+                        id: String::new(),
+                        node_type: en.node_type,
+                        label: en.label,
+                        plugin_id: None,
+                        command_id: None,
+                        params: en.params,
+                        delay_ms: en.delay_ms,
+                        timeout_ms: en.timeout_ms,
+                        input_schema: None,
+                        output_schema: None,
+                        input_mapping: en.input_mapping,
+                        output_mapping: en.output_mapping,
+                        position: en.position,
                     })
                     .collect();
 
@@ -1559,6 +1581,7 @@ impl ExportWorkflowDefinition {
             created_at: now_ts,
             updated_at: now_ts,
             enabled: self.enabled,
+            project_id: None,
         }
     }
 
@@ -1998,10 +2021,7 @@ fn locate_package_manifest(file_path: &std::path::Path) -> Option<std::path::Pat
 /// 解析包内成员的相对路径：必须是相对包根的**安全相对路径**。
 ///
 /// 拒绝绝对路径、`..`、根前缀等一切可能越出包外的路径段（防目录穿越）。
-fn resolve_package_member(
-    root: &std::path::Path,
-    rel: &str,
-) -> Result<std::path::PathBuf, String> {
+fn resolve_package_member(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, String> {
     use std::path::Component;
     let rel_path = std::path::Path::new(rel);
     let safe = !rel.is_empty()
@@ -2272,8 +2292,7 @@ fn parse_shared_workflow_payload(payload: &str) -> Result<SharedWorkflowPayload,
             "无法解析共享工作流：缺少 format 标识或格式不受支持".to_string(),
         ));
     }
-    serde_json::from_value(value)
-        .map_err(|e| AppError::Json(format!("共享工作流解析失败: {}", e)))
+    serde_json::from_value(value).map_err(|e| AppError::Json(format!("共享工作流解析失败: {}", e)))
 }
 
 /// 导入共享 payload：逐个工作流以**稳定 ID** 就地更新 / 新建（复用该 id，不新建副本）。
@@ -3198,6 +3217,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             enabled: true,
+            project_id: None,
         }
     }
 
@@ -3291,7 +3311,10 @@ mod tests {
             "主流程"
         );
         assert_eq!(
-            workflow::get_definition(&conn, &sub_id).unwrap().unwrap().name,
+            workflow::get_definition(&conn, &sub_id)
+                .unwrap()
+                .unwrap()
+                .name,
             "子流程A"
         );
     }
@@ -3346,7 +3369,11 @@ mod tests {
         // file 一律是相对包根的相对路径；不再输出 isMain（入口只由 mainId 表达）
         for m in members {
             let file = m["file"].as_str().unwrap();
-            assert!(file.starts_with("workflows/"), "file 应为相对路径: {}", file);
+            assert!(
+                file.starts_with("workflows/"),
+                "file 应为相对路径: {}",
+                file
+            );
             assert!(m.get("isMain").is_none(), "不应再输出 isMain 字段");
         }
         let main_member = members
@@ -3551,10 +3578,7 @@ mod tests {
         let root = temp_workflow_dir();
         let def = workflow::get_definition(&src, &main_id).unwrap().unwrap();
         write_workflow_export(&src, def, root.to_str().unwrap()).unwrap();
-        let main_file = root
-            .join("主流程")
-            .join("workflows")
-            .join("主流程.json");
+        let main_file = root.join("主流程").join("workflows").join("主流程.json");
 
         let conn = test_conn();
         import_workflow_from_file_with_conn(&conn, main_file.to_str().unwrap()).unwrap();
@@ -3571,7 +3595,11 @@ mod tests {
         assert_eq!(main_m.action, ImportMemberAction::Updated);
         assert_eq!(main_m.name, "主流程（新版）", "覆盖后应取导入内容的名");
         let sub_m = outcome.members.iter().find(|m| m.id == sub_id).unwrap();
-        assert_eq!(sub_m.action, ImportMemberAction::Skipped, "未变的子流应跳过");
+        assert_eq!(
+            sub_m.action,
+            ImportMemberAction::Skipped,
+            "未变的子流应跳过"
+        );
 
         // 覆盖前备份本地旧主流程（origin=import）；子流跳过不建快照
         let vs = workflow::list_workflow_versions(&conn, &main_id).unwrap();
@@ -3639,11 +3667,9 @@ mod tests {
         )
         .unwrap();
 
-        let err = import_workflow_from_file_with_conn(
-            &conn,
-            pkg.join("manifest.json").to_str().unwrap(),
-        )
-        .unwrap_err();
+        let err =
+            import_workflow_from_file_with_conn(&conn, pkg.join("manifest.json").to_str().unwrap())
+                .unwrap_err();
         assert!(
             err.contains("主工作流") && err.contains("mainId"),
             "mainId 未命中应给出明确中文错误: {}",
@@ -3677,12 +3703,20 @@ mod tests {
             first.members
         );
         assert_eq!(
-            first.members.iter().find(|m| m.id == sub_id).unwrap().referencing_count,
+            first
+                .members
+                .iter()
+                .find(|m| m.id == sub_id)
+                .unwrap()
+                .referencing_count,
             1,
             "子流被主流程引用"
         );
         assert!(
-            first.members.iter().all(|m| m.action != ImportMemberAction::Skipped),
+            first
+                .members
+                .iter()
+                .all(|m| m.action != ImportMemberAction::Skipped),
             "首次导入不应有「跳过」"
         );
 
@@ -3699,11 +3733,21 @@ mod tests {
             .count();
         assert_eq!(skipped_count, 1);
         assert_eq!(
-            second.members.iter().find(|m| m.id == sub_id).unwrap().action,
+            second
+                .members
+                .iter()
+                .find(|m| m.id == sub_id)
+                .unwrap()
+                .action,
             ImportMemberAction::Updated
         );
         assert_eq!(
-            second.members.iter().find(|m| m.id == main_id).unwrap().action,
+            second
+                .members
+                .iter()
+                .find(|m| m.id == main_id)
+                .unwrap()
+                .action,
             ImportMemberAction::Skipped
         );
     }
@@ -3791,17 +3835,23 @@ mod tests {
         // 成员 file 一律是相对包根的相对路径（workflows/xxx.json）
         for m in manifest["workflows"].as_array().unwrap() {
             let file = m["file"].as_str().unwrap();
-            assert!(file.starts_with("workflows/"), "file 应为相对路径: {}", file);
-            assert!(pkg.join(file).is_file(), "清单声明的成员文件应存在: {}", file);
+            assert!(
+                file.starts_with("workflows/"),
+                "file 应为相对路径: {}",
+                file
+            );
+            assert!(
+                pkg.join(file).is_file(),
+                "清单声明的成员文件应存在: {}",
+                file
+            );
         }
 
         let conn = test_conn();
         // 直接选中包根清单导入整包
-        let outcome = import_workflow_from_file_with_conn(
-            &conn,
-            pkg.join("manifest.json").to_str().unwrap(),
-        )
-        .unwrap();
+        let outcome =
+            import_workflow_from_file_with_conn(&conn, pkg.join("manifest.json").to_str().unwrap())
+                .unwrap();
 
         assert_eq!(
             outcome.definition.id, main_id,
@@ -3881,7 +3931,10 @@ mod tests {
             wf_dir.join("子流程A.json").to_str().unwrap(),
         )
         .unwrap();
-        assert_eq!(outcome.definition.id, main_id, "应识别为整包并取 mainId 作主流程");
+        assert_eq!(
+            outcome.definition.id, main_id,
+            "应识别为整包并取 mainId 作主流程"
+        );
         assert_eq!(outcome.subflow_count, 1);
         assert!(workflow::get_definition(&conn, &sub_id).unwrap().is_some());
 
@@ -3891,7 +3944,11 @@ mod tests {
     /// 工作流包安全：成员的 `file` 越界（`..` / 绝对路径）一律被拒绝。
     #[test]
     fn package_import_rejects_unsafe_member_path() {
-        for bad in ["../evil.json", "workflows/../../evil.json", "/abs/evil.json"] {
+        for bad in [
+            "../evil.json",
+            "workflows/../../evil.json",
+            "/abs/evil.json",
+        ] {
             let conn = test_conn();
             let root = temp_workflow_dir();
             let pkg = root.join("坏包");
@@ -3918,7 +3975,12 @@ mod tests {
                 Ok(_) => panic!("越界路径应被拒绝: {}", bad),
                 Err(e) => e,
             };
-            assert!(err.contains("非法"), "越界路径错误提示应含「非法」: {} ({})", err, bad);
+            assert!(
+                err.contains("非法"),
+                "越界路径错误提示应含「非法」: {} ({})",
+                err,
+                bad
+            );
 
             std::fs::remove_dir_all(&root).ok();
         }

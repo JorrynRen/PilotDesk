@@ -61,7 +61,7 @@ function RuleEditor({
   rows?: number;
 }) {
   return (
-    <div>
+    <div className="pd-settings-field-group">
       <div className="flex items-center gap-1.5 mb-1">
         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
           {title}
@@ -76,12 +76,7 @@ function RuleEditor({
         placeholder={placeholder}
         rows={rows}
         spellCheck={false}
-        className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-y font-mono"
-        style={{
-          backgroundColor: 'var(--bg-field)',
-          color: 'var(--text-primary)',
-          border: '1px solid var(--border)',
-        }}
+        className="pd-settings-input w-full resize-y font-mono"
       />
     </div>
   );
@@ -149,7 +144,7 @@ export function PermissionSettings() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="settings-page-stack">
       <SettingsSection
         title="权限清单"
         description="清单只对命令/路径分类（高风险 / 风险 / 安全），不直接决定行为。实际拦截/审批/放行由会话窗口与圆桌窗口选择的「会话安全模式」（严格 / 标准 / 宽松 / 无限制）按子策略矩阵决定。"
@@ -188,7 +183,7 @@ export function PermissionSettings() {
           />
           <RuleEditor
             title="安全路径"
-            description="命中这些路径的读写操作按会话安全模式处理（严格下审批，其余放行）。工作区目录与用户显式提供的路径默认归入安全路径；常用目录（桌面/文档/下载等）已默认包含，留空表示不额外添加。"
+            description="命中这些路径的读写操作按会话安全模式处理（严格下审批，其余放行）。工作区、项目主目录、关联目录及当前工作的产物目录会自动进入安全路径；常用目录（桌面/文档/下载等）已默认包含，留空表示不额外添加。"
             placeholder={'例如：\nD:\\Data\\**'}
             value={rulesToString(rules.allowPaths)}
             onChange={(v) => setField('allowPaths', v)}

@@ -6,13 +6,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { BarChart3, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Download, Loader2 } from 'lucide-react';
-import { TitleBar, StatusBar } from '../components/layout';
-import { useTerminal, type ViewMode } from '../TerminalManager';
+import { WorkbenchAssetPage } from '../components/layout';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { useAccountStore } from '../stores/accountStore';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
@@ -155,8 +153,6 @@ function TablePager({
 }
 
 export function EnclaveReportPage() {
-  const { viewMode, setMode } = useTerminal();
-  const navigate = useNavigate();
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const detail = useEnclaveOrgStore((s) => s.detail);
   const accountKey = useAccountStore((s) => s.account?.email ?? '');
@@ -173,14 +169,19 @@ export function EnclaveReportPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rootOpen, setRootOpen] = useState(false);
-  const [memberPage, setMemberPage] = useState(0);
-  const [donePage, setDonePage] = useState(0);
+  const pageScope = `${activeOrgId}\u0000${kind}\u0000${offset}\u0000${fromDate}\u0000${toDate}`;
+  const [memberPageState, setMemberPageState] = useState({ scope: '', page: 0 });
+  const [donePageState, setDonePageState] = useState({ scope: '', page: 0 });
+  const memberPage = memberPageState.scope === pageScope ? memberPageState.page : 0;
+  const donePage = donePageState.scope === pageScope ? donePageState.page : 0;
+  const setMemberPage = (page: number) => setMemberPageState({ scope: pageScope, page });
+  const setDonePage = (page: number) => setDonePageState({ scope: pageScope, page });
 
   const range = useMemo(
     () => (kind === 'custom' ? customRange(fromDate, toDate) : periodRange(kind, offset)),
     [kind, offset, fromDate, toDate],
   );
-  const members = detail?.members ?? [];
+  const members = useMemo(() => detail?.members ?? [], [detail?.members]);
   const memberName = useCallback(
     (id: string) => {
       const m = members.find((x) => x.userId === id);
@@ -188,12 +189,6 @@ export function EnclaveReportPage() {
     },
     [members],
   );
-
-  // 组织 / 周期变化后回到第一页
-  useEffect(() => {
-    setMemberPage(0);
-    setDonePage(0);
-  }, [activeOrgId, range.from, range.to]);
 
   const memberPages = Math.max(1, Math.ceil((stats?.members.length ?? 0) / PAGE_SIZE));
   const curMemberPage = Math.min(memberPage, memberPages - 1);
@@ -212,16 +207,15 @@ export function EnclaveReportPage() {
     let cancelled = false;
     void (async () => {
       const st = useEnclaveOrgStore.getState();
-      if (!(await st.ensureIdentity()) || cancelled) return;
-      await st.loadOrgs();
+      if (cancelled || !(await st.ensureOrgs())) return;
     })();
     return () => {
       cancelled = true;
     };
   }, [accountKey]);
 
-  const load = useCallback(async () => {
-    if (!activeOrgId) return;
+  const loadStats = useCallback(async (orgId: string) => {
+    if (!orgId) return;
     if (!range.valid) {
       setStats(null);
       setError(range.label);
@@ -231,7 +225,7 @@ export function EnclaveReportPage() {
     setError(null);
     try {
       const data = await invoke<TeamStats>('enclave_team_stats', {
-        orgId: activeOrgId,
+        orgId,
         from: range.from,
         to: range.to,
       });
@@ -242,10 +236,19 @@ export function EnclaveReportPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeOrgId, range.from, range.to, range.valid, range.label]);
+  }, [range.from, range.to, range.valid, range.label]);
+
+  const load = useCallback(async () => {
+    if (activeOrgId) await loadStats(activeOrgId);
+  }, [activeOrgId, loadStats]);
+
+  const refreshReport = async () => {
+    const orgId = await useEnclaveOrgStore.getState().ensureOrgs(true);
+    if (orgId) await loadStats(orgId);
+  };
 
   useEffect(() => {
-    void load();
+    queueMicrotask(() => void load());
   }, [load]);
 
   // 团队数据变化（任务 / 知识）后自动重拉，1s 节流
@@ -271,14 +274,6 @@ export function EnclaveReportPage() {
       unlisten?.();
     };
   }, [activeOrgId, load]);
-
-  const handleModeChange = useCallback(
-    (mode: ViewMode) => {
-      setMode(mode);
-      navigate('/');
-    },
-    [setMode, navigate],
-  );
 
   const copyMarkdown = () => {
     if (!stats) return;
@@ -373,28 +368,16 @@ export function EnclaveReportPage() {
     : [];
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <TitleBar
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        rightPanelOpen={false}
-        showBackButton={false}
-        enclaveOpen
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')}
-      />
-
-      <div className="flex-1 min-h-0 px-2 flex flex-col overflow-hidden">
+    <WorkbenchAssetPage contextLabel="飞地 · 团队报告" activeAsset="enclave" frameless>
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <div
-          className="shrink-0 rounded-lg overflow-hidden"
+          className="enclave-surface shrink-0 overflow-hidden"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
           <EnclaveNavBar
             active="report"
-            onRefresh={load}
+            onRefresh={refreshReport}
             refreshing={loading}
             right={
               <EnclaveToolbarActions
@@ -526,7 +509,7 @@ export function EnclaveReportPage() {
         <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-2 pb-2">
           {!activeOrgId && (
             <div
-              className="rounded-lg p-6 text-center text-xs"
+              className="enclave-surface p-6 text-center text-xs"
               style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
             >
               先选择组织
@@ -535,7 +518,7 @@ export function EnclaveReportPage() {
 
           {error && (
             <div
-              className="rounded-lg px-3 py-2 text-xs"
+              className="enclave-surface px-3 py-2 text-xs"
               style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)', color: 'var(--status-danger)' }}
             >
               {error}
@@ -549,7 +532,7 @@ export function EnclaveReportPage() {
                 {cards.map((c) => (
                   <div
                     key={c.label}
-                    className="rounded-lg px-3 py-2.5"
+                    className="enclave-surface px-3 py-2.5"
                     style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
                     title={c.hint}
                   >
@@ -565,7 +548,7 @@ export function EnclaveReportPage() {
 
               {/* 成员绩效数据 */}
               <div
-                className="rounded-lg overflow-hidden"
+                className="enclave-surface overflow-hidden"
                 style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
               >
                 <div
@@ -634,7 +617,7 @@ export function EnclaveReportPage() {
 
               {/* 周期内完成明细：周报正文的素材 */}
               <div
-                className="rounded-lg overflow-hidden"
+                className="enclave-surface overflow-hidden"
                 style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
               >
                 <div
@@ -704,10 +687,7 @@ export function EnclaveReportPage() {
         </div>
       </div>
 
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
     </div>
+    </WorkbenchAssetPage>
   );
 }

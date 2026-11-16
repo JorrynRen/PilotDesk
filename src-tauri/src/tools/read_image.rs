@@ -11,12 +11,10 @@
 
 use crate::api_agent::client::ApiClient;
 use crate::api_agent::types::{ApiFormat, ChatMessage, ChatRequest};
-use crate::tools::deps::expand_user_path;
 use crate::tools::image_common;
 use crate::tools::{ProviderModelInfo, RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
 use base64::Engine;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// 送入视觉模型前的最长边上限（像素）。超过则等比缩小，避免超大截图被服务商拒绝。
@@ -224,14 +222,8 @@ impl ReadImageTool {
 }
 
 /// 相对路径按工作目录解析；`~/`、`%USERPROFILE%` 前缀先展开。
-fn resolve_local_path(cwd: &str, raw: &str) -> PathBuf {
-    let expanded = expand_user_path(raw);
-    let p = Path::new(&expanded);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        Path::new(cwd).join(&expanded)
-    }
+fn resolve_local_path(cwd: &str, raw: &str) -> std::path::PathBuf {
+    crate::utils::paths::normalize_absolute_path(raw, cwd)
 }
 
 /// 计算等比缩小后的尺寸；未超过上限时返回 None（表示无需缩放）。
@@ -400,7 +392,7 @@ image 参数用于图生图/图像编辑）。默认使用当前会话模型；�
             let display = abs.canonicalize().unwrap_or_else(|_| abs.clone());
             (
                 abs.to_string_lossy().into_owned(),
-                display.to_string_lossy().into_owned(),
+                crate::utils::paths::path_display(&display),
             )
         };
 

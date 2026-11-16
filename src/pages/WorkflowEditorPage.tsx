@@ -3,17 +3,16 @@
  *
  * 独立路由页面，从 URL query 读取 definitionId。
  * 无 ID 时自动创建新工作流并跳转。
- * 使用统一 TitleBar + StatusBar 布局。
+ * 使用统一工作台壳层。
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { TitleBar, StatusBar } from '../components/layout';
+import { WorkbenchAssetPage } from '../components/layout';
 import type { StatusHint } from '../components/layout';
 import { WorkflowEditor } from '../components/workflow/WorkflowEditor';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
-import { useTerminal, type ViewMode } from '../TerminalManager';
 import { errorMessage } from '../utils/errorMessage';
 
 export function WorkflowEditorPage() {
@@ -151,62 +150,22 @@ export function WorkflowEditorPage() {
     })();
   }, [definitionId, loadDefinitions, updateStatusHint]);
 
-  // 组合开关：切换模式并回到主布局（编辑器入口不再提供返回按钮，与设置页口径一致）
-  const { viewMode, setMode } = useTerminal();
-  const handleModeChange = useCallback((mode: ViewMode) => {
-    if (statusTimerRef.current) {
-      clearTimeout(statusTimerRef.current);
-      statusTimerRef.current = null;
-    }
-    setMode(mode);
-    navigate('/');
-  }, [setMode, navigate]);
-
   // 加载中
   if (creating) {
     return (
-      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-        <TitleBar
-        showBackButton={false}
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        titleText="工作流任务编辑器"
-        statusHint={statusHint}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')} />
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
-        <div className="flex-1 flex items-center justify-center">
+      <WorkbenchAssetPage contextLabel="工作流编辑器" activeAsset="workflow" statusHint={statusHint}>
+        <div className="h-full flex items-center justify-center">
           <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>正在创建工作流...</span>
         </div>
-        </div>
-      </div>
-        <StatusBar onOpenSettings={() => navigate('/settings')} onOpenEnvSettings={() => navigate('/settings?tab=environment')} />
-      </div>
+      </WorkbenchAssetPage>
     );
   }
 
   // 创建失败
   if (error) {
     return (
-      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-        <TitleBar
-        showBackButton={false}
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        titleText="工作流任务编辑器"
-        statusHint={statusHint}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')} />
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
-        <div className="flex flex-col items-center justify-center flex-1 gap-3">
+      <WorkbenchAssetPage contextLabel="工作流编辑器" activeAsset="workflow" statusHint={statusHint}>
+        <div className="flex h-full flex-col items-center justify-center gap-3">
           <span className="text-xs" style={{ color: 'var(--status-danger)' }}>创建工作流失败: {error}</span>
           <button
             onClick={() => navigate('/workflow')}
@@ -216,53 +175,28 @@ export function WorkflowEditorPage() {
             返回工作流列表
           </button>
         </div>
-        </div>
-      </div>
-        <StatusBar onOpenSettings={() => navigate('/settings')} onOpenEnvSettings={() => navigate('/settings?tab=environment')} />
-      </div>
+      </WorkbenchAssetPage>
     );
   }
 
   if (!readyId) return null;
 
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <TitleBar
-        showBackButton={false}
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        titleText="工作流任务编辑器"
-        statusHint={statusHint}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')}
+    <WorkbenchAssetPage contextLabel="工作流编辑器" activeAsset="workflow" statusHint={statusHint}>
+      <WorkflowEditor
+        definitionId={readyId}
+        onNameChange={handleNameChange}
+        onSaveResult={(success) => {
+          updateStatusHint({
+            state: success ? 'saved' : 'save-error',
+            autoDismiss: 5000,
+          });
+        }}
+        onImported={(newId) => {
+          navigate(`/workflow/editor?id=${newId}`, { replace: true });
+          setReadyId(newId);
+        }}
       />
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
-      <div className="flex-1 overflow-hidden">
-        <WorkflowEditor
-          definitionId={readyId}
-          onNameChange={handleNameChange}
-          onSaveResult={(success) => {
-            updateStatusHint({
-              state: success ? 'saved' : 'save-error',
-              autoDismiss: 5000,
-            });
-          }}
-          onImported={(newId) => {
-            navigate(`/workflow/editor?id=${newId}`, { replace: true });
-            setReadyId(newId);
-          }}
-        />
-      </div>
-        </div>
-      </div>
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
-    </div>
+    </WorkbenchAssetPage>
   );
 }

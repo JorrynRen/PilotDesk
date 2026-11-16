@@ -92,29 +92,21 @@ export function HostModeSelector({
 
       {open && (
         <div
-          className={`absolute left-0 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 overflow-y-auto`}
+          role="menu"
+          className={`pd-menu absolute left-0 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 overflow-y-auto`}
           style={{
-            padding: 4,
-            borderRadius: 'var(--radius-lg)',
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            boxShadow: '0 10px 28px rgba(0,0,0,0.22)',
             minWidth: 288,
             maxHeight: 280,
           }}
         >
           {/* 跟随宿主：不写回模式，完全沿用宿主侧当前档位 */}
           <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={!pinned}
             onClick={() => choose(null)}
-            className="w-full text-left flex flex-col gap-0.5 outline-none transition-colors hover:bg-[var(--bg-tertiary)]"
-            style={{
-              padding: '6px 8px',
-              borderRadius: 7,
-              backgroundColor: pinned ? 'transparent' : 'var(--bg-tertiary)',
-              width: '100%',
-              textAlign: 'left',
-              alignItems: 'stretch',
-            }}
+            className="pd-menu-item pd-menu-item-rich"
+            data-active={!pinned ? 'true' : undefined}
           >
             <span className="flex items-center gap-1.5">
               <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
@@ -135,16 +127,12 @@ export function HostModeSelector({
             return (
               <button
                 key={m.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
                 onClick={() => choose(m)}
-                className="w-full text-left flex flex-col gap-0.5 outline-none transition-colors hover:bg-[var(--bg-tertiary)]"
-                style={{
-                  padding: '6px 8px',
-                  borderRadius: 7,
-                  backgroundColor: active ? 'var(--bg-tertiary)' : 'transparent',
-                  width: '100%',
-                  textAlign: 'left',
-                  alignItems: 'stretch',
-                }}
+                className="pd-menu-item pd-menu-item-rich"
+                data-active={active ? 'true' : undefined}
               >
                 <span className="flex items-center gap-1.5">
                   <span
@@ -171,10 +159,7 @@ export function HostModeSelector({
             );
           })}
 
-          <div
-            className="px-2 pt-2 pb-1 text-[10px]"
-            style={{ color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}
-          >
+          <div className="pd-menu-footer">
             模式由宿主提供 · 切换后从下一条消息生效
           </div>
         </div>

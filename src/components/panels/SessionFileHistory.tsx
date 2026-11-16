@@ -13,6 +13,7 @@ import { FileText, Loader2, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useSessionWorkspaceInfo } from '../../hooks/useSessionWorkspaceInfo';
 import { RepoStatusBar } from './RepoStatusBar';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -45,10 +46,9 @@ function formatTime(secs: number): string {
 
 export function SessionFileHistory() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  // 仓库状态条看的是会话项目根（cwd）；会话没选目录时后端回退到全局工作区
-  const currentCwd = useSessionStore(
-    (s) => s.sessions.find((x) => x.id === s.currentSessionId)?.cwd ?? null,
-  );
+  // 仓库状态看后端本次实际采用的工作根：项目主目录、全局空间或 ACP 宿主恢复目录。
+  const { info: workspaceInfo } = useSessionWorkspaceInfo(currentSessionId);
+  const currentCwd = workspaceInfo?.workRoot ?? null;
 
   const [items, setItems] = useState<FileHistoryEntry[]>([]);
   const [total, setTotal] = useState(0);

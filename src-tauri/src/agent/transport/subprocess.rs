@@ -117,10 +117,11 @@ impl AgentSession for SubprocessSession {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let mut console = TokioConsole::new();
-        let (pid, mut stdout_rx, mut stderr_rx) = console
-            .spawn(&exe, &arg_refs, &self.cwd)
-            .await
-            .map_err(|e| AgentError::Connect(format!("启动进程失败: {}", e)))?;
+        let (pid, mut stdout_rx, mut stderr_rx) =
+            console
+                .spawn(&exe, &arg_refs, &self.cwd)
+                .await
+                .map_err(|e| AgentError::Connect(format!("启动进程失败: {}", e)))?;
 
         // 把 pid 交回调用方登记（保留"按 pid 终止进程树"的既有能力）
         if let Some(cb) = &self.on_pid {
@@ -143,7 +144,10 @@ impl AgentSession for SubprocessSession {
         loop {
             // 取消检查（调用方与实现共享同一令牌）
             if self.abort.load(Ordering::Relaxed) {
-                log::info!("[transport/subprocess] abort requested, killing pid={}", pid);
+                log::info!(
+                    "[transport/subprocess] abort requested, killing pid={}",
+                    pid
+                );
                 let _ = console.kill().await;
                 return Err(AgentError::Cancelled);
             }
@@ -186,7 +190,10 @@ impl AgentSession for SubprocessSession {
             }
 
             let recv_timeout = if elapsed
-                >= self.timeout.max_wait.saturating_sub(self.timeout.check_interval)
+                >= self
+                    .timeout
+                    .max_wait
+                    .saturating_sub(self.timeout.check_interval)
             {
                 self.timeout.max_wait.saturating_sub(elapsed)
             } else {

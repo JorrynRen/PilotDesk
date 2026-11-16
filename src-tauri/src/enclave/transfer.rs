@@ -26,8 +26,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::enclave::authz::{self, Role};
 
@@ -180,7 +180,15 @@ fn insert_record(
         "INSERT INTO host_transfer
             (id, org_id, direction, phase, peer_device_id, package_hash, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-        params![id, org_id, direction, phase, peer_device_id, package_hash, now],
+        params![
+            id,
+            org_id,
+            direction,
+            phase,
+            peer_device_id,
+            package_hash,
+            now
+        ],
     )
     .map_err(|e| format!("写入转移记录失败：{}", e))?;
     Ok(id)
@@ -303,7 +311,13 @@ pub fn default_export_dir() -> PathBuf {
 
 fn sanitize_component(raw: &str) -> String {
     raw.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -381,8 +395,11 @@ pub(crate) fn build_package(
 
     let result = (|| -> Result<BuiltPackage, String> {
         // 一致性快照（WAL 模式下是事务快照）
-        conn.execute("VACUUM INTO ?1", params![tmp_db.to_string_lossy().to_string()])
-            .map_err(|e| format!("生成数据库快照失败：{}", e))?;
+        conn.execute(
+            "VACUUM INTO ?1",
+            params![tmp_db.to_string_lossy().to_string()],
+        )
+        .map_err(|e| format!("生成数据库快照失败：{}", e))?;
 
         // 只保留本组织数据：治理快照 / 本机身份 / 本机设置不随包走
         prune_snapshot_to_org(&tmp_db, org_id)?;
@@ -417,11 +434,18 @@ pub(crate) fn build_package(
             }
             let abs = root.join(&m.path);
             let bytes = std::fs::read(&abs).map_err(|e| {
-                format!("读取团队文件失败（{}）：{}。请确认团队文件根可访问。", abs.display(), e)
+                format!(
+                    "读取团队文件失败（{}）：{}。请确认团队文件根可访问。",
+                    abs.display(),
+                    e
+                )
             })?;
             let sha = hex_sha256(&bytes);
             if !m.sha256.is_empty() && m.sha256 != sha {
-                return Err(format!("团队文件校验失败（{}）：记录哈希与实物不一致", m.path));
+                return Err(format!(
+                    "团队文件校验失败（{}）：记录哈希与实物不一致",
+                    m.path
+                ));
             }
             files_out.push(ManifestFile {
                 path: m.path,
@@ -467,11 +491,7 @@ pub(crate) fn build_package(
 
 fn resolve_export_path(out: Option<&str>, org_id: &str) -> PathBuf {
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let default_name = format!(
-        "enclave-{}-{}.pdesk",
-        sanitize_component(org_id),
-        stamp
-    );
+    let default_name = format!("enclave-{}-{}.pdesk", sanitize_component(org_id), stamp);
     match out.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => {
             let p = PathBuf::from(raw);
@@ -957,11 +977,15 @@ pub fn import_package(
     }
 
     // 合并数据库：ATTACH 后在事务内 INSERT OR REPLACE（同版本 schema，列集一致）
-    let tmp_db = std::env::temp_dir().join(format!("pilotdesk-import-{}.db", crate::utils::new_id()));
+    let tmp_db =
+        std::env::temp_dir().join(format!("pilotdesk-import-{}.db", crate::utils::new_id()));
     std::fs::write(&tmp_db, &db_bytes).map_err(|e| format!("写入临时数据库失败：{}", e))?;
     let copy_result = (|| -> Result<(), String> {
-        conn.execute("ATTACH DATABASE ?1 AS src", params![tmp_db.to_string_lossy().to_string()])
-            .map_err(|e| format!("挂载迁移数据库失败：{}", e))?;
+        conn.execute(
+            "ATTACH DATABASE ?1 AS src",
+            params![tmp_db.to_string_lossy().to_string()],
+        )
+        .map_err(|e| format!("挂载迁移数据库失败：{}", e))?;
         let result = (|| -> Result<(), String> {
             let tx = conn
                 .unchecked_transaction()
@@ -986,7 +1010,8 @@ pub fn import_package(
                 tx.execute(sql, params![org_id])
                     .map_err(|e| format!("合并迁移数据失败：{}", e))?;
             }
-            tx.commit().map_err(|e| format!("提交迁移数据失败：{}", e))?;
+            tx.commit()
+                .map_err(|e| format!("提交迁移数据失败：{}", e))?;
             Ok(())
         })();
         let _ = conn.execute_batch("DETACH DATABASE src");
@@ -1165,8 +1190,11 @@ pub fn destroy_org_data(conn: &Connection, org_id: &str, transfer_id: &str) -> R
         params![org_id, actor, now],
     )
     .map_err(|e| format!("关闭旧主机对外服务失败：{}", e))?;
-    conn.execute("DELETE FROM host_transfer WHERE org_id = ?1", params![org_id])
-        .map_err(|e| format!("清理转移记录失败：{}", e))?;
+    conn.execute(
+        "DELETE FROM host_transfer WHERE org_id = ?1",
+        params![org_id],
+    )
+    .map_err(|e| format!("清理转移记录失败：{}", e))?;
     for id in lan_ids {
         cleanup_lan_artifacts(conn, &id);
     }
@@ -1295,7 +1323,11 @@ mod tests {
     use std::sync::Arc;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("pilotdesk-transfer-test-{}-{}", tag, crate::utils::new_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "pilotdesk-transfer-test-{}-{}",
+            tag,
+            crate::utils::new_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1308,7 +1340,10 @@ mod tests {
                 c.execute(
                     "INSERT OR REPLACE INTO enclave_settings (key, value, updated_at)
                      VALUES (?1, ?2, 0)",
-                    params![files::TEAM_FILES_ROOT_KEY, dir.to_string_lossy().to_string()],
+                    params![
+                        files::TEAM_FILES_ROOT_KEY,
+                        dir.to_string_lossy().to_string()
+                    ],
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(())
@@ -1407,7 +1442,9 @@ mod tests {
 
         let out_path = host_dir.join("pkg.pdesk");
         let exp = host
-            .with_conn(|c| export_package(c, "org2", Some(out_path.to_str().unwrap()), "pass-123456"))
+            .with_conn(|c| {
+                export_package(c, "org2", Some(out_path.to_str().unwrap()), "pass-123456")
+            })
             .unwrap();
         let imp = recv
             .with_conn(|c| import_package(c, &exp.path, "pass-123456"))
@@ -1459,7 +1496,9 @@ mod tests {
 
         let out_path = host_dir.join("pkg.pdesk");
         let exp = host
-            .with_conn(|c| export_package(c, "org1", Some(out_path.to_str().unwrap()), "pass-123456"))
+            .with_conn(|c| {
+                export_package(c, "org1", Some(out_path.to_str().unwrap()), "pass-123456")
+            })
             .unwrap();
         assert_eq!(exp.file_count, 1);
         assert!(Path::new(&exp.path).exists());
@@ -1488,7 +1527,11 @@ mod tests {
         assert_eq!(imp.org_id, "org1");
         recv.with_conn(|c| {
             let tasks: i64 = c
-                .query_row("SELECT COUNT(*) FROM org_tasks WHERE org_id = 'org1'", [], |r| r.get(0))
+                .query_row(
+                    "SELECT COUNT(*) FROM org_tasks WHERE org_id = 'org1'",
+                    [],
+                    |r| r.get(0),
+                )
                 .unwrap();
             assert_eq!(tasks, 1);
             let rec = get(c, &imp.transfer_id).unwrap();
@@ -1541,18 +1584,9 @@ mod tests {
                 // 分块读取（每块 1KB），拼接后大小与包一致
                 let mut offset = 0u64;
                 let total = loop {
-                    let chunk = read_package_chunk(
-                        c,
-                        &offer.transfer_id,
-                        "org1",
-                        "2",
-                        offset,
-                        1024,
-                    )?;
-                    offset += BASE64
-                        .decode(chunk.data)
-                        .map_err(|e| e.to_string())?
-                        .len() as u64;
+                    let chunk =
+                        read_package_chunk(c, &offer.transfer_id, "org1", "2", offset, 1024)?;
+                    offset += BASE64.decode(chunk.data).map_err(|e| e.to_string())?.len() as u64;
                     if chunk.eof {
                         break chunk.total;
                     }
@@ -1579,7 +1613,9 @@ mod tests {
 
         let out_path = dir.join("pkg.pdesk");
         let exp = store
-            .with_conn(|c| export_package(c, "org1", Some(out_path.to_str().unwrap()), "pass-123456"))
+            .with_conn(|c| {
+                export_package(c, "org1", Some(out_path.to_str().unwrap()), "pass-123456")
+            })
             .unwrap();
 
         let err = store

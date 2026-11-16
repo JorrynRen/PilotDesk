@@ -6,7 +6,7 @@
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
-import { Activity, Clock, CheckCircle, XCircle, AlertCircle, Ban, AlertTriangle, Square, Eye, ChevronDown, ChevronRight, Play, Flag, Timer, Trash2, Search, X, Filter, RefreshCw } from 'lucide-react';
+import { Activity, Clock, CheckCircle, XCircle, AlertCircle, Ban, AlertTriangle, Square, Eye, ChevronDown, ChevronRight, Play, Flag, Timer, Trash2, Search, X, Filter, RefreshCw, MoreHorizontal, ListChecks } from 'lucide-react';
 import { Select } from '../common/Select';
 import { WorkflowOutputCard, CollapsibleSection, ValuePreview } from './WorkflowOutputCard';
 
@@ -68,6 +68,140 @@ const ALL_DEFINITION_ID = '__all__';
  *  未结束实例的执行记录一旦删掉，实例会从列表消失却仍在跑，且再也取消不掉。 */
 const TERMINAL_STATUSES = ['success', 'failed', 'cancelled', 'timeout'];
 const isDeletableStatus = (status: string) => TERMINAL_STATUSES.includes(status);
+
+type InstanceActionTone = 'neutral' | 'danger' | 'active';
+
+/** 执行实例右侧操作与工作流定义列表保持同一套轻量图标钮样式。 */
+function InstanceActionButton({
+  label,
+  title,
+  tone = 'neutral',
+  active = false,
+  disabled = false,
+  expanded,
+  onClick,
+  children,
+}: {
+  label: string;
+  title: string;
+  tone?: InstanceActionTone;
+  active?: boolean;
+  disabled?: boolean;
+  expanded?: boolean;
+  onClick: React.MouseEventHandler<HTMLButtonElement>;
+  children: React.ReactNode;
+}) {
+  const danger = tone === 'danger';
+  const highlighted = active || tone === 'active';
+
+  return (
+    <button
+      type="button"
+      className="pd-btn shrink-0 p-1.5 rounded hover:opacity-80"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick(event);
+      }}
+      disabled={disabled}
+      title={title}
+      aria-label={label}
+      aria-expanded={expanded}
+      style={{
+        backgroundColor: highlighted ? 'var(--accent-light)' : 'transparent',
+        color: highlighted
+          ? 'var(--accent)'
+          : danger
+            ? 'var(--status-danger)'
+            : 'var(--text-secondary)',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function InstanceMoreMenu({
+  deleteDisabled,
+  deleteTitle,
+  onViewDefinition,
+  onDelete,
+}: {
+  deleteDisabled: boolean;
+  deleteTitle: string;
+  onViewDefinition: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    const closeOnScroll = () => setOpen(false);
+    document.addEventListener('mousedown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('scroll', closeOnScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('scroll', closeOnScroll, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <InstanceActionButton
+        label="更多执行记录操作"
+        title="更多操作"
+        active={open}
+        expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <MoreHorizontal size={14} />
+      </InstanceActionButton>
+      {open && (
+        <div
+          role="menu"
+          className="pd-menu pd-row-action-menu"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="pd-menu-item"
+            onClick={() => {
+              setOpen(false);
+              onViewDefinition();
+            }}
+          >
+            <Eye size={13} />
+            <span className="flex-1">查看工作流定义</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="pd-menu-item disabled:opacity-40"
+            disabled={deleteDisabled}
+            title={deleteTitle}
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            style={{ color: deleteDisabled ? undefined : 'var(--status-danger)' }}
+          >
+            <Trash2 size={13} />
+            <span className="flex-1">删除执行记录</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * 运行上下文查看器：默认「预览」（按节点归一化展示产出），可切到「原始数据」看全量 JSON。
@@ -144,12 +278,29 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
   // ---- 批量删除 ----
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchMenuOpen, setBatchMenuOpen] = useState(false);
+  const batchMenuRef = useRef<HTMLDivElement>(null);
   // 轮询回调在挂载时注册一次，用 ref 读取最新批量态（批量时不静默刷新，避免列表在勾选中跳动）
   const batchModeRef = useRef(batchMode);
   useEffect(() => { batchModeRef.current = batchMode; }, [batchMode]);
 
+  useEffect(() => {
+    if (!batchMenuOpen) return;
+    const closeOnOutside = (event: MouseEvent) => {
+      if (!batchMenuRef.current?.contains(event.target as Node)) setBatchMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setBatchMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [batchMenuOpen]);
+
   // ---- 刷新 / 防抖状态 ----
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const loadingRef = useRef<boolean>(false); // 防止手动/定时器并发调用
   /** loadingRef 的渲染期镜像：渲染期不能读 ref（react-hooks/refs），并发去重仍走 ref */
@@ -161,7 +312,7 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
   const [filterTrigger, setFilterTrigger] = useState<string>('all');
   const [filterKeyword, setFilterKeyword] = useState<string>('');
 
-  // 安全刷新（并发去重 + 成功后写 lastUpdatedAt）
+  // 安全刷新（并发去重）
   const safeRefresh = async (silent: boolean) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
@@ -172,7 +323,6 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
     if (!silent) setRefreshing(true);
     try {
       await loadInstances(undefined, silent);
-      setLastUpdatedAt(Date.now());
     } finally {
       if (!silent) setRefreshing(false);
       loadingRef.current = false;
@@ -307,13 +457,6 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
     onDeleteExecutions([...selectedIds], summary);
   };
 
-  // 格式化"上次更新时间戳"
-  const formatLastUpdate = (ts: number) => {
-    const d = new Date(ts);
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  };
-
   return (
     <div>
       {loading && instances.length === 0 ? (
@@ -329,23 +472,12 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
       ) : (
         <div>
           {/* ── 筛选工具栏 ── */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-              padding: '10px 12px',
-              marginBottom: 12,
-              borderRadius: 6,
-              backgroundColor: 'var(--bg-secondary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            {/* 单行：结构化筛选控件 + 状态药丸标签（宽屏一行，窄屏自动 wrap） */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <Filter size={12} style={{ color: 'var(--text-tertiary)' }} />
-                <span className="text-[11px]" style={{ color: 'var(--text-tertiary)', fontWeight: 500 }}>筛选：</span>
+          <div className="pd-filter-shell">
+            {/* 筛选控件保持单行；空间不足时整行横向滚动，避免控件被挤成多行。 */}
+            <div className="pd-filter-row">
+              <div className="pd-filter-label">
+                <Filter size={12} />
+                <span>筛选</span>
               </div>
 
               {/* 工作流下拉 */}
@@ -358,8 +490,9 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                 ]}
                 size="sm"
                 className="shrink-0"
-                style={{ minWidth: 130, maxWidth: 220 }}
+                style={{ width: 180 }}
                 title="按工作流筛选"
+                ariaLabel="按工作流筛选"
               />
 
               {/* 触发方式下拉 */}
@@ -369,66 +502,27 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                 options={TRIGGER_OPTIONS.map(t => ({ value: t.key, label: t.label }))}
                 size="sm"
                 className="shrink-0"
-                style={{ minWidth: 88 }}
+                style={{ width: 96 }}
                 title="按触发方式筛选"
+                ariaLabel="按触发方式筛选"
               />
 
-              {/* 状态药丸标签（容器固定 28px，与同行 Select(size=sm) 等高） */}
-              <div
-                aria-label="执行状态筛选"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 3,
-                  flexWrap: 'nowrap',
-                  padding: '2px 4px',
-                  border: '1px solid var(--border)',
-                  backgroundColor: 'var(--bg-primary)',
-                  borderRadius: 4,
-                  height: 28,
-                  overflowX: 'auto',
-                  maxWidth: 430,
-                  scrollbarWidth: 'thin',
-                }}
-              >
-                {STATUS_OPTIONS.map(opt => {
-                  const active = filterStatus === opt.key;
-                  return (
-                    <button
-                      key={opt.key}
-                      onClick={() => setFilterStatus(opt.key)}
-                      className="text-[10px] px-2 py-0.5 rounded-full transition-colors whitespace-nowrap"
-                      style={{
-                        border: active ? '1px solid ' + (opt.key === 'all' ? 'var(--accent)' : opt.color) : '1px solid transparent',
-                        backgroundColor: active ? (opt.key === 'all' ? 'rgba(var(--accent-rgb, var(--accent)), 0.12)' : opt.bg) : 'transparent',
-                        color: active ? (opt.key === 'all' ? 'var(--accent)' : opt.color) : 'var(--text-tertiary)',
-                        fontWeight: active ? 500 : 400,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
+              <Select
+                value={filterStatus}
+                onChange={setFilterStatus}
+                options={STATUS_OPTIONS.map(opt => ({
+                  value: opt.key,
+                  label: opt.key === 'all' ? '全部状态' : opt.label,
+                }))}
+                size="sm"
+                className="shrink-0"
+                style={{ width: 112 }}
+                title="按执行状态筛选"
+                ariaLabel="按执行状态筛选"
+              />
 
               {/* 关键字搜索（高度对齐同行 Select(size=sm) 的 28px，不再靠内容撑高） */}
-              <div
-                className="pd-field"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  border: '1px solid var(--border)',
-                  backgroundColor: 'var(--bg-primary)',
-                  borderRadius: 4,
-                  height: 28,
-                  padding: '0 6px',
-                  flex: '1 1 180px',
-                  minWidth: 160,
-                  maxWidth: 300,
-                }}
-              >
+              <div className="pd-field pd-filter-search">
                 <Search size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                 <input
                   value={filterKeyword}
@@ -453,38 +547,13 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
               <button
                 onClick={clearFilters}
                 disabled={!hasFilter}
-                className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors whitespace-nowrap inline-flex items-center"
-                style={{
-                  border: '1px solid var(--border)',
-                  background: hasFilter ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
-                  color: hasFilter ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                  cursor: hasFilter ? 'pointer' : 'not-allowed',
-                  opacity: hasFilter ? 1 : 0.5,
-                }}
+                className="pd-filter-clear pd-btn"
               >
                 清除筛选
               </button>
 
-              {/* 手动刷新 + 时间戳（与清除筛选右对齐） */}
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  marginLeft: 'auto',
-                  flexShrink: 0,
-                }}
-              >
-                {lastUpdatedAt && (
-                  <span
-                    className="text-[10px] flex items-center gap-1"
-                    style={{ color: 'var(--text-tertiary)' }}
-                    title={`最后更新：${new Date(lastUpdatedAt).toLocaleString()}`}
-                  >
-                    <Clock size={10} />
-                    {formatLastUpdate(lastUpdatedAt)}
-                  </span>
-                )}
+              {/* 批量与刷新操作（与清除筛选右对齐） */}
+              <div className="pd-filter-actions">
                 <button
                   onClick={() => { setBatchMode(v => !v); setSelectedIds(new Set()); }}
                   className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors inline-flex items-center gap-1"
@@ -501,7 +570,7 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                 <button
                   onClick={() => void safeRefresh(false)}
                   disabled={refreshing || inFlight}
-                  className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors inline-flex items-center gap-1"
+                  className="pd-btn w-7 h-7 p-0 rounded transition-colors inline-flex items-center justify-center"
                   style={{
                     border: '1px solid var(--border)',
                     background: 'var(--bg-secondary)',
@@ -509,85 +578,113 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                     opacity: (refreshing || inFlight) ? 0.6 : 1,
                   }}
                   title="立即刷新实例列表"
+                  aria-label="刷新执行实例"
                 >
-                  <RefreshCw size={11} style={{ animation: (refreshing || inFlight) ? 'spin 0.8s linear infinite' : undefined }} />
-                  刷新
+                  <RefreshCw
+                    size={13}
+                    className={(refreshing || inFlight) ? 'pd-animate-spin' : undefined}
+                  />
                 </button>
               </div>
             </div>
 
             {/* ── 批量操作条（勾选口径：全选只覆盖已结束的实例） ── */}
             {batchMode && (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  flexWrap: 'wrap',
-                  paddingTop: 8,
-                  borderTop: '1px solid var(--border)',
-                }}
-              >
-                <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+              <div className="pd-batch-bar is-filter-bar">
+                <span className="pd-batch-count">
                   已选 <b style={{ color: 'var(--accent)' }}>{selectedIds.size}</b> 条
                 </span>
-                <button
-                  onClick={selectPage}
-                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
-                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                  title="选中本页所有已结束的实例"
-                >
-                  全选本页 ({paged.filter(i => isDeletableStatus(i.status)).length})
-                </button>
-                <button
-                  onClick={selectAllFiltered}
-                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
-                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                  title="选中当前筛选结果中所有已结束的实例（跨页）"
-                >
-                  全选筛选结果 ({filtered.filter(i => isDeletableStatus(i.status)).length})
-                </button>
-                <button
-                  onClick={() => setSelectedIds(new Set())}
-                  disabled={selectedIds.size === 0}
-                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
-                  style={{
-                    border: '1px solid var(--border)',
-                    background: 'var(--bg-primary)',
-                    color: 'var(--text-secondary)',
-                    opacity: selectedIds.size === 0 ? 0.5 : 1,
-                  }}
-                >
-                  清空
-                </button>
+                <div ref={batchMenuRef} className="relative shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setBatchMenuOpen((value) => !value)}
+                    className="pd-btn pd-batch-icon-btn"
+                    title="批量选择范围"
+                    aria-label="批量选择范围"
+                    aria-expanded={batchMenuOpen}
+                  >
+                    <ListChecks size={13} />
+                  </button>
+                  {batchMenuOpen && (
+                    <div role="menu" className="pd-menu pd-batch-menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="pd-menu-item"
+                        onClick={() => {
+                          setBatchMenuOpen(false);
+                          selectPage();
+                        }}
+                      >
+                        <span className="flex-1">全选本页</span>
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          {paged.filter(i => isDeletableStatus(i.status)).length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="pd-menu-item"
+                        onClick={() => {
+                          setBatchMenuOpen(false);
+                          selectAllFiltered();
+                        }}
+                      >
+                        <span className="flex-1">全选筛选结果</span>
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          {filtered.filter(i => isDeletableStatus(i.status)).length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="pd-menu-item disabled:opacity-40"
+                        disabled={selectedIds.size === 0}
+                        onClick={() => {
+                          setBatchMenuOpen(false);
+                          setSelectedIds(new Set());
+                        }}
+                      >
+                        <X size={13} />
+                        <span className="flex-1">清空选择</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {undeletableCount > 0 && (
                   <span
-                    className="text-[10px]"
+                    className="pd-batch-hint"
                     style={{ color: 'var(--text-tertiary)' }}
                     title="未结束的实例不能删除：删掉它们的执行记录会让实例从列表消失却仍在跑，而且再也取消不掉。请先停止或等待结束。"
                   >
-                    已跳过未结束 {undeletableCount} 条
+                    <AlertTriangle size={11} />
+                    跳过 {undeletableCount}
                   </span>
                 )}
-                <div style={{ flex: 1 }} />
+                <div className="pd-batch-spacer" />
                 <button
                   onClick={handleBatchDelete}
                   disabled={selectedIds.size === 0}
-                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
+                  className="pd-btn pd-batch-text-btn"
                   style={{
-                    border: '1px solid var(--border)',
                     background: selectedIds.size === 0 ? 'var(--bg-tertiary)' : '#ef4444',
                     color: selectedIds.size === 0 ? 'var(--text-tertiary)' : '#fff',
                   }}
                 >
-                  删除 ({selectedIds.size})
+                  <Trash2 size={12} />
+                  删除 {selectedIds.size}
                 </button>
                 <button
-                  onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }}
-                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
-                  style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                  onClick={() => {
+                    setBatchMode(false);
+                    setBatchMenuOpen(false);
+                    setSelectedIds(new Set());
+                  }}
+                  className="pd-btn pd-batch-icon-btn"
+                  title="退出批量"
+                  aria-label="退出批量"
                 >
-                  退出
+                  <X size={13} />
                 </button>
               </div>
             )}
@@ -668,45 +765,36 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
 
                       {/* Actions（批量模式下收起：避免与勾选语义混淆、误触） */}
                       {!batchMode && (
-                      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                      <div
+                        role="group"
+                        aria-label="执行记录操作"
+                        style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}
+                      >
                         {(instance.status === 'running' || instance.status === 'paused') && (
-                          <button
-                            onClick={() => cancelWorkflow(instance.id)}
-                            className="text-[10px] px-2 py-0.5 rounded transition-colors"
-                            style={{ border: '1px solid var(--border)', background: 'transparent', color: '#EF4444' }}
+                          <InstanceActionButton
+                            label={instance.status === 'paused' ? '结束暂停的执行' : '停止执行'}
                             title={instance.status === 'paused' ? '结束这次已暂停的执行' : '停止'}
+                            tone="danger"
+                            onClick={() => cancelWorkflow(instance.id)}
                           >
-                            <Square size={10} />
-                          </button>
+                            <Square size={14} />
+                          </InstanceActionButton>
                         )}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteExecutions([instance.id], `${cfg.label} 1`);
-                          }}
-                          className="text-[10px] px-2 py-0.5 rounded transition-colors"
-                          style={{ border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)' }}
-                          title={selectable ? '删除执行记录' : '未结束的实例不能删除：请先停止'}
-                          disabled={!selectable}
-                        >
-                          <Trash2 size={10} />
-                        </button>
-                        <button
-                          onClick={() => onViewDefinition(instance.definitionId)}
-                          className="text-[10px] px-2 py-0.5 rounded transition-colors"
-                          style={{ border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)' }}
-                          title="查看定义"
-                        >
-                          <Eye size={10} />
-                        </button>
-                        <button
-                          onClick={() => setExpandedInstance(isExpanded ? null : instance.id)}
-                          className="text-[10px] px-2 py-0.5 rounded transition-colors"
-                          style={{ border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)' }}
+                        <InstanceActionButton
+                          label="展开或收起输出上下文"
                           title="输出上下文"
+                          active={isExpanded}
+                          expanded={isExpanded}
+                          onClick={() => setExpandedInstance(isExpanded ? null : instance.id)}
                         >
-                          {isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                        </button>
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </InstanceActionButton>
+                        <InstanceMoreMenu
+                          deleteDisabled={!selectable}
+                          deleteTitle={selectable ? '删除执行记录' : '未结束的实例不能删除：请先停止'}
+                          onViewDefinition={() => onViewDefinition(instance.definitionId)}
+                          onDelete={() => onDeleteExecutions([instance.id], `${cfg.label} 1`)}
+                        />
                       </div>
                       )}
                     </div>

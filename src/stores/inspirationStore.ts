@@ -51,6 +51,7 @@ interface InspirationState {
   setActiveTag: (tag: string | null) => void;
   setFavoriteOnly: (v: boolean) => void;
   setSearchQuery: (q: string) => void;
+  clearFilters: () => Promise<void>;
 }
 
 export const useInspirationStore = create<InspirationState>((set, get) => ({
@@ -149,5 +150,10 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
 
   setSearchQuery: (q) => {
     set({ searchQuery: q });
+  },
+
+  clearFilters: async () => {
+    set({ activeTag: null, favoriteOnly: false, searchQuery: '' });
+    await get().fetchInspirations();
   },
 }));

@@ -131,6 +131,8 @@ export function KnowledgeIngest({
   const capability = useKnowledgeStore((s) => s.ingestCapability);
   const pending = useKnowledgeStore((s) => s.ingestQueue);
   const modelBlocked = capability !== null && capability.canProcess === 'none';
+  const capabilityCanProcess = capability?.canProcess;
+  const capabilityPending = capability?.pending ?? 0;
   const autoRanRef = useRef(false);
 
   useEffect(() => {
@@ -142,16 +144,18 @@ export function KnowledgeIngest({
   // 进入页面时若已有可用的模型和积压，顺手清一轮（失败/不可用会被后端直接返回 stopped）
   useEffect(() => {
     if (autoRanRef.current) return;
-    if (!capability || capability.canProcess === 'none' || capability.pending === 0) return;
+    if (!capabilityCanProcess || capabilityCanProcess === 'none' || capabilityPending === 0) return;
     autoRanRef.current = true;
     void useKnowledgeStore.getState().runIngestQueue();
-  }, [capability?.canProcess, capability?.pending]);
+  }, [capabilityCanProcess, capabilityPending]);
 
   // 模型一消失就把这两个"需要加工"的开关复位：否则会提交一个必然被拒的组合
   useEffect(() => {
     if (modelBlocked) {
-      setAsMarkdown(false);
-      setRename(false);
+      queueMicrotask(() => {
+        setAsMarkdown(false);
+        setRename(false);
+      });
     }
   }, [modelBlocked]);
 
@@ -360,13 +364,13 @@ export function KnowledgeIngest({
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div className="knowledge-ingest-layout flex-1 flex overflow-hidden">
       {/* 左：投喂（也是拖入文件的投放区） */}
       <div
-        className="w-[400px] shrink-0 flex flex-col overflow-hidden p-4 gap-3"
+        className="knowledge-ingest-compose shrink-0 flex flex-col overflow-hidden p-4 gap-3"
         style={{ backgroundColor: 'var(--bg-side)' }}
       >
-        <div className="flex items-center gap-1 p-0.5 rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}>
+        <div className="knowledge-ingest-tabs flex items-center gap-1 p-0.5 rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}>
           {(Object.keys(MODE_META) as Mode[]).map((m) => {
             const M = MODE_META[m];
             const active = mode === m;
@@ -377,7 +381,7 @@ export function KnowledgeIngest({
                 onClick={() => setMode(m)}
                 disabled={blocked}
                 title={blocked ? 'AI 生成需要可用模型（本地或云端）' : undefined}
-                className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[11px] transition-colors"
+                className="flex-1 flex items-center justify-center gap-1 whitespace-nowrap px-1.5 py-1 rounded-md text-[11px] transition-colors"
                 style={{
                   backgroundColor: active ? 'var(--bg-primary)' : 'transparent',
                   color: active ? 'var(--accent)' : 'var(--text-secondary)',
@@ -468,7 +472,7 @@ export function KnowledgeIngest({
         {mode === 'snippet' && (
           <>
             <div className="text-[10px] leading-relaxed shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-              粘贴一段草稿（结论 / 摘录 / 规则）。会先由 AI 整理成规范知识再进「待确认」，采纳时写入库。
+              粘贴草稿，整理后直接入库。
             </div>
             <input
               value={title}
@@ -831,14 +835,18 @@ export function KnowledgeIngest({
           「知识来源」说明已移到知识库**默认页** —— 那是新用户的第一屏，"内容能怎么进来"讲在那里
           才会被看见；放在这里只有已经点进某个库、又切到投喂 tab 的人才能看到。
           每种模式自己的说明仍留在左侧各自的面板里（那些是"这一步在做什么"，不是来源总览）。 */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="knowledge-ingest-candidates flex-1 flex flex-col overflow-hidden">
         <div className="shrink-0 px-4 py-2.5 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>待确认</span>
           <span className="px-1.5 py-0.5 rounded-full text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
             {candidates.length}
           </span>
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-            自动沉淀的候选先落这里，采纳后才写入库；左侧投喂是明确意图，整理后直接入库
+          <span
+            className="min-w-0 flex-1 truncate whitespace-nowrap text-[10px]"
+            style={{ color: 'var(--text-tertiary)' }}
+            title="自动沉淀的候选先落这里，采纳后才写入库；左侧投喂是明确意图，整理后直接入库"
+          >
+            自动沉淀候选 · 采纳后入库
           </span>
         </div>
 

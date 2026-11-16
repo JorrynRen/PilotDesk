@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useCallback, useState, memo, type CSSProperties } from 'react';
 import {
   Users, Plus, Bot, User, Sparkles, Send, Pause, Play, Square,
-  Radio, Paperclip, Scale, ListTodo, CheckCircle, XCircle, AlertCircle, Download, Copy, Trash2, Folder,
+  Radio, Paperclip, Scale, ListTodo, CheckCircle, XCircle, AlertCircle, Download, Copy, Trash2, Folder, FolderKanban,
   ImagePlus, FileText, X, Flag, Save, Undo2, Loader2, History, ChevronDown,
-  SkipForward, GitBranch, CheckSquare, Maximize2,
+  SkipForward, GitBranch, CheckSquare, Maximize2, Eye, Code2,
 } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -14,6 +14,10 @@ import { useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { useGroupChatStore } from '../stores/groupChatStore';
 import { confirmDialog } from '../stores/confirmStore';
+import {
+  subscribeProjectCreation,
+  useProjectCreationStore,
+} from '../stores/projectCreationStore';
 import { useApiProviderStore } from '../stores/apiProviderStore';
 import { useAgentRegistry } from '../hooks/useAgentRegistry';
 import { useEnvInfo } from '../hooks/useEnvInfo';
@@ -26,7 +30,10 @@ import { collapseBlankLines, tightenListGaps } from '../components/message/markd
 import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
 import { TaskDependencyGraph } from '../components/groupchat/TaskDependencyGraph';
 import { TaskGraphViewport } from '../components/groupchat/TaskGraphViewport';
-import { StageNotice, StanceBadge, deriveStage, parseStance, parseStageExtra } from '../components/groupchat/StageNotice';
+import { WorkflowConversionPreview } from '../components/groupchat/WorkflowConversionPreview';
+import { StageNotice, StanceBadge } from '../components/groupchat/StageNotice';
+import { deriveStage, parseStance, parseStageExtra } from '../components/groupchat/stageParsing';
+import { CreateRoomModal as SharedCreateRoomModal } from '../components/groupchat/CreateRoomModal';
 import { PageToolbar, type ToolbarAction } from '../components/common/PageToolbar';
 import { ScrollToBottomButton } from '../components/common/ScrollToBottomButton';
 import {
@@ -49,21 +56,33 @@ import { SaveToKnowledgeDialog, type KbDigestInput } from '../components/knowled
 import { SecurityModeSelector, type SecurityModeValue } from '../components/security/SecurityModeSelector';
 import { VoiceInputButton } from '../components/input/VoiceInputButton';
 import { Select } from '../components/common/Select';
+import { ConversionDialogShell } from '../components/common/ConversionDialogShell';
+import { useProjectStore } from '../stores/projectStore';
+import {
+  PROJECT_FILTER_ALL,
+  PROJECT_FILTER_UNASSIGNED,
+  PROJECT_BADGE_LIST_CLASS,
+  ProjectBadge,
+  ProjectFilter,
+  ProjectMembershipDialog,
+} from '../components/project/ProjectPicker';
 import type { ThinkingChainStep } from '../components/layout/MainPanel';
+import { projectPrimaryDirectory } from '../utils/project';
+import { joinDisplayPath, normalizeDisplayPath } from '../utils/path';
 // 页头图标按钮尺寸与会话列表共用同一份，避免两处各写一套导致大小漂移
-import { HEADER_ICON_BTN_STYLE } from '../components/layout/SessionList';
+import { HEADER_ICON_BTN_STYLE } from '../components/layout/sessionListStyles';
 import type {
   GroupChatParticipant,
-  GroupChatParticipantInput,
   GroupChatMessage,
   GroupChatTask,
   GroupChatDepChangePreview,
-  CreateGroupChatRoomInput,
   GroupChatToolCall,
   GroupChatConfirmationResponseInput,
   RoomStatus,
 } from '../types/groupchat';
 import type { Attachment } from '../types';
+import type { ProjectCreateContext } from '../types/project';
+import type { WorkflowDefinition } from '../types/workflow';
 
 const STATUS_LABEL: Record<RoomStatus, string> = {
   idle: '待开始',
@@ -303,402 +322,6 @@ function ParticipantAvatar({ icon, color, small, agentType }: { icon: IconName; 
       {agentIcon
         ? <AgentIcon icon={agentIcon} size={small ? 12 : 16} accentColor={theme?.color} fallback={<FallbackIcon size={size} />} />
         : <FallbackIcon size={size} />}
-    </div>
-  );
-}
-
-interface DraftParticipant {
-  type: 'api' | 'cli';
-  displayName: string;
-  systemRole: string;
-  provider: string;
-  model: string;
-  agentType: string;
-}
-
-function CreateRoomModal({ onClose }: { onClose: () => void }) {
-  const createRoom = useGroupChatStore((s) => s.createRoom);
-  const loadRooms = useGroupChatStore((s) => s.loadRooms);
-  const selectRoom = useGroupChatStore((s) => s.selectRoom);
-  const { providers, fetchProviders } = useApiProviderStore();
-  const { agents, getTransport } = useAgentRegistry();
-  const { envInfo } = useEnvInfo();
-
-  const [title, setTitle] = useState('');
-  const [topic, setTopic] = useState('');
-  const [directorProvider, setDirectorProvider] = useState('');
-  const [directorModel, setDirectorModel] = useState('');
-  const [drafts, setDrafts] = useState<DraftParticipant[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // 允许主持人在自动补人时添加 CLI 参与者（默认开启；按任务差异化限制，例如某些任务不希望自动拉起本地 CLI 进程）。
-  const [allowAutoCli, setAllowAutoCli] = useState(true);
-  // 房间统一产物目录（绝对路径；空=运行时回退 <工作目录>/outputs/<房间标题>/）。
-  const [outputDir, setOutputDir] = useState('');
-  // 同层任务执行并行上限（1-4，缺省 2；仅影响执行阶段）。
-  const [maxParallel, setMaxParallel] = useState(2);
-
-  useEffect(() => {
-    fetchProviders();
-  }, [fetchProviders]);
-
-  // 可选 CLI Agent：除 api 外、已启用的，且环境检测未判定不可用。
-  // ACP 被判定不可用（适配器没装 / 宿主 Agent 未登录）时选进来也跑不起来，
-  // 圆桌要到运行时才报错，所以在这里先滤掉——原因可在「设置 › 环境检测」看到。
-  const cliAgents = useMemo(
-    () => agents.filter((a) => {
-      if (a.agentType === 'api' || !a.isEnabled) return false;
-      return getTransport(a.agentType) !== 'acp'
-        || envInfo?.agentHealth?.[a.agentType]?.available !== false;
-    }),
-    [agents, getTransport, envInfo],
-  );
-
-  const modelsOf = (providerId: string) =>
-    providers.find((p) => p.id === providerId)?.models ?? [];
-
-  function addDraft(type: 'api' | 'cli') {
-    // 新增参与者插入列表开头，避免用户滚动到底部去填写。
-    setDrafts((d) => [
-      { type, displayName: '', systemRole: '', provider: '', model: '', agentType: '' },
-      ...d,
-    ]);
-  }
-
-  function updateDraft(idx: number, patch: Partial<DraftParticipant>) {
-    setDrafts((d) => d.map((x, i) => (i === idx ? { ...x, ...patch } : x)));
-  }
-
-  function removeDraft(idx: number) {
-    setDrafts((d) => d.filter((_, i) => i !== idx));
-  }
-
-  async function submit() {
-    setError(null);
-    if (!title.trim()) {
-      setError('请填写圆桌标题');
-      return;
-    }
-    if (!directorProvider || !directorModel) {
-      setError('请选择 Director 的模型（提供商 + 模型）');
-      return;
-    }
-
-    const participants: GroupChatParticipantInput[] = [];
-    participants.push({
-      id: 'director',
-      participantType: 'director',
-      agentConfig: JSON.stringify({ provider: directorProvider, model: directorModel }),
-      displayName: '主持人',
-      systemRole: '协调/裁决',
-    });
-
-    for (const d of drafts) {
-      if (!d.displayName.trim()) {
-        setError('参与者显示名不能为空');
-        return;
-      }
-      if (d.type === 'api') {
-        if (!d.provider || !d.model) {
-          setError(`参与者「${d.displayName}」需选择提供商与模型`);
-          return;
-        }
-        participants.push({
-          id: genId('api'),
-          participantType: 'api',
-          agentConfig: JSON.stringify({ provider: d.provider, model: d.model }),
-          displayName: d.displayName.trim(),
-          systemRole: d.systemRole.trim() || '参与者',
-        });
-      } else {
-        if (!d.agentType) {
-          setError(`参与者「${d.displayName}」需选择 CLI Agent 类型`);
-          return;
-        }
-        participants.push({
-          id: genId('cli'),
-          participantType: 'cli',
-          agentConfig: JSON.stringify({ agent_type: d.agentType }),
-          displayName: d.displayName.trim(),
-          systemRole: d.systemRole.trim() || '参与者',
-        });
-      }
-    }
-
-    participants.push({
-      id: 'user',
-      participantType: 'user',
-      agentConfig: '{}',
-      displayName: '我',
-      systemRole: '用户',
-    });
-
-    const input: CreateGroupChatRoomInput = {
-      title: title.trim(),
-      topic: topic.trim(),
-      participants,
-      directorId: 'director',
-      allowAutoCli: allowAutoCli ? 1 : 0,
-      outputDir: outputDir.trim() || undefined,
-      maxParallel,
-    };
-
-    try {
-      setSubmitting(true);
-      const room = await createRoom(input);
-      await loadRooms();
-      await selectRoom(room.id);
-      onClose();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
-    >
-      <div
-        className="w-[620px] max-h-[80vh] rounded-xl flex flex-col overflow-hidden"
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-      >
-        <div className="flex items-center justify-between px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>新建圆桌</span>
-          <button className="pd-btn pd-btn-sm" onClick={onClose} style={{ color: 'var(--text-secondary)' }}>
-            <XCircle size={14} />
-          </button>
-        </div>
-
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4 pd-scroll-stable">
-        <label className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          圆桌标题
-          <input
-            className="px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="例如：PilotDesk 架构评审"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          讨论议题（可留空）
-          <textarea
-            className="px-3 py-2 rounded-lg text-xs outline-none resize-none"
-            rows={2}
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            placeholder="留空时以进入房间后的第一条指令作为目标"
-          />
-        </label>
-
-        <div className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          Director 模型（协调/裁决）
-          <div className="flex gap-2">
-            <Select
-              className="flex-1"
-              value={directorProvider}
-              onChange={(v) => { setDirectorProvider(v); setDirectorModel(''); }}
-              placeholder="选择提供商"
-              options={[
-                { value: '', label: '选择提供商' },
-                ...providers.map((p) => ({ value: p.id, label: p.name })),
-              ]}
-            />
-            <Select
-              className="flex-1"
-              value={directorModel}
-              onChange={setDirectorModel}
-              placeholder="选择模型"
-              disabled={!directorProvider}
-              options={[
-                { value: '', label: '选择模型' },
-                ...modelsOf(directorProvider).map((m) => ({ value: m, label: m })),
-              ]}
-            />
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>参与者（可添加 API / CLI Agent）</span>
-              <label
-                className="flex items-center gap-1 cursor-pointer"
-                title="关闭后，主持人在自动补人时不会添加 CLI Agent 参与者（CLI 手动添加不受影响）"
-              >
-                <input
-                  type="checkbox"
-                  checked={allowAutoCli}
-                  onChange={(e) => setAllowAutoCli(e.target.checked)}
-                  className="accent-[var(--accent)]"
-                />
-                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>可自动补充CLI Agent</span>
-              </label>
-            </div>
-            <div className="flex gap-1">
-              <button
-                className="pd-btn pd-btn-sm"
-                onClick={() => addDraft('api')}
-                style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-              >
-                <Plus size={11} /> API
-              </button>
-              <button
-                className="pd-btn pd-btn-sm"
-                onClick={() => addDraft('cli')}
-                style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-              >
-                <Plus size={11} /> CLI
-              </button>
-            </div>
-          </div>
-
-          {drafts.length === 0 && (
-            <div className="px-3 py-2 rounded-lg text-[11px]" style={{ color: 'var(--text-tertiary)', backgroundColor: 'var(--bg-tertiary)' }}>
-              尚未添加参与者。至少可保留 Director + 用户，也可添加多个 API/CLI 参与者。
-            </div>
-          )}
-
-          {drafts.map((d, i) => (
-            <div
-              key={i}
-              className="rounded-lg p-3 flex flex-col gap-2"
-              style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-primary)' }}
-            >
-              <div className="flex gap-2 items-center">
-                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}>
-                  {d.type === 'api' ? 'API' : 'CLI'}
-                </span>
-                <input
-                  className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                  placeholder="显示名（如 Hermes Agent）"
-                  value={d.displayName}
-                  onChange={(e) => updateDraft(i, { displayName: e.target.value })}
-                />
-                <button className="pd-btn pd-btn-sm" onClick={() => removeDraft(i)} style={{ color: 'var(--text-tertiary)' }}>
-                  <XCircle size={13} />
-                </button>
-              </div>
-              <input
-                className="px-3 py-2 rounded-lg text-xs outline-none"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                placeholder="角色（如 架构师 / 质疑者 / 执行者）"
-                value={d.systemRole}
-                onChange={(e) => updateDraft(i, { systemRole: e.target.value })}
-              />
-              {d.type === 'api' ? (
-                <div className="flex gap-2">
-                  <Select
-                    className="flex-1"
-                    value={d.provider}
-                    onChange={(v) => updateDraft(i, { provider: v, model: '' })}
-                    placeholder="选择提供商"
-                    options={[
-                      { value: '', label: '选择提供商' },
-                      ...providers.map((p) => ({ value: p.id, label: p.name })),
-                    ]}
-                  />
-                  <Select
-                    className="flex-1"
-                    value={d.model}
-                    onChange={(v) => updateDraft(i, { model: v })}
-                    placeholder="选择模型"
-                    disabled={!d.provider}
-                    options={[
-                      { value: '', label: '选择模型' },
-                      ...modelsOf(d.provider).map((m) => ({ value: m, label: m })),
-                    ]}
-                  />
-                </div>
-              ) : (
-                <Select
-                  value={d.agentType}
-                  onChange={(v) => updateDraft(i, { agentType: v })}
-                  placeholder="选择 CLI Agent 类型"
-                  options={[
-                    { value: '', label: '选择 CLI Agent 类型' },
-                    ...cliAgents.map((a) => ({ value: a.agentType, label: a.displayName || a.agentType })),
-                  ]}
-                />
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          <div className="flex items-center justify-between">
-            <span>并行任务数</span>
-            <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-primary)' }}>{maxParallel}</span>
-          </div>
-          <input
-            type="range"
-            min={1}
-            max={4}
-            step={1}
-            value={maxParallel}
-            onChange={(e) => setMaxParallel(Number(e.target.value))}
-            className="w-full"
-            style={{ accentColor: 'var(--accent)' }}
-          />
-          <div className="flex justify-between text-[9px] tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
-            <span>1</span>
-            <span>4</span>
-          </div>
-          <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
-            同层任务执行并行，讨论仍按顺序进行
-          </span>
-        </div>
-
-        {error && (
-          <div className="px-3 py-2 rounded-lg text-[11px]" style={{ color: 'var(--status-danger)', backgroundColor: 'var(--status-danger-bg, rgba(239,68,68,0.1))' }}>
-            {error}
-          </div>
-        )}
-        </div>
-
-        <div className="flex items-center gap-2 px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
-          <span className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>产物目录：</span>
-          <input
-            type="text"
-            value={outputDir}
-            onChange={(e) => setOutputDir(e.target.value)}
-            placeholder="留空=默认 <工作目录>/outputs/<圆桌标题>/"
-            className="flex-1 min-w-0 rounded-md px-2 py-1.5 text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
-          />
-          <button
-            type="button"
-            className="px-2 py-1.5 rounded-md text-xs shrink-0"
-            style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-            onClick={async () => {
-              const sel = await openDialog({ directory: true, multiple: false, title: '选择产物目录' });
-              if (typeof sel === 'string') setOutputDir(sel);
-            }}
-          >
-            选择
-          </button>
-          <button
-            className="pd-btn px-3 py-1.5 text-xs rounded shrink-0 whitespace-nowrap"
-            onClick={onClose}
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-          >取消</button>
-          <button
-            className="pd-btn pd-btn-primary px-3 py-1.5 text-xs rounded shrink-0 whitespace-nowrap"
-            /* 主按钮补 1px 边框：否则 auto 高度下会比「取消」矮 2px */
-            style={{ border: '1px solid var(--accent)' }}
-            onClick={submit}
-            disabled={submitting}
-          >
-            {submitting ? '创建中…' : '创建并进入'}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -989,61 +612,87 @@ interface GroupChatMessageItemProps {
   onToggleSelect?: (id: string) => void;
 }
 
-/** 群聊默认页介绍：未选中会话实例时展示功能能力与使用方法。 */
-function GroupChatIntro() {
+/** 群聊默认页：顶部固定、内容精简，详细说明默认收起。 */
+function GroupChatIntro({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className="h-full flex items-center justify-center overflow-y-auto px-6 py-8">
-      <div className="max-w-3xl w-full flex flex-col gap-5">
-        <div className="flex flex-col gap-1.5">
+    <div className="groupchat-intro h-full overflow-y-auto px-5 pb-6 pt-4">
+      <div className="w-full flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            <Users size={15} style={{ color: 'var(--accent)' }} />
+            <span
+              className="flex h-7 w-7 items-center justify-center rounded-lg"
+              style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+            >
+              <Users size={16} />
+            </span>
             多 Agent 圆桌协作
           </div>
-          <div className="text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            由主持人（Director）统一调度多名 AI 参与者与本地 CLI Agent 组成的圆桌，围绕目标分工协作、讨论决策、产出文件。适合方案对比、头脑风暴、多角色内容生产等场景。
+          <div className="max-w-2xl text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+            主持人负责拆解目标、编排任务并协调多位参与者；适合需要多视角讨论、评审与协作产出的复杂任务。
           </div>
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>快速开始</div>
-          <ol className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>1. 点击左上角圆桌列表顶部的「+」，填写圆桌标题与目标，选择主持人模型与参与者（可留空由主持人自动组建）；</li>
-            <li>2. 主持人理解目标后自动编排任务与议程，有歧义时会向你发起确认（确认项可多选、可选填补充内容）；</li>
-            <li>3. 讨论进行中可直接发送消息插话/调整方向，主持人/其他参与者的推理与工具调用可在「实时活动」与思维链中查看；</li>
-            <li>4. 产物统一写入右侧面板指定的产物目录；任务结束后可导出为工作流复用。</li>
-          </ol>
+        <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+          <span className="inline-flex items-center gap-1.5">
+            <Users size={12} style={{ color: 'var(--accent)' }} />
+            1 位主持人 + 多名参与者
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <ListTodo size={12} style={{ color: 'var(--accent)' }} />
+            任务、立场与文件集中查看
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <GitBranch size={12} style={{ color: 'var(--accent)' }} />
+            产物可转为工作流
+          </span>
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>要点提示</div>
-          <ul className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>· 想点名某位参与者时，在输入框输入 @角色名 即可；不点名则由主持人自动调度；</li>
-            <li>· 需要调整方向时，直接输入消息即可被主持人重新编排；手动「结束」后发送新消息可重启该会话；</li>
-            <li>· 参与者包括云端模型与本地 CLI Agent（CLI Agent 使用自身能力执行，不占用内置工具）。</li>
-          </ul>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onCreate}
+            className="pd-btn pd-btn-primary inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs"
+          >
+            <Plus size={13} />
+            新建圆桌
+          </button>
+          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            也可以从左侧列表选择已有圆桌
+          </span>
         </div>
 
-        {/* 模式选择醒目提示：帮助用户在进入群聊前按目标特性选择合适的执行模式（纯文案，无交互）。 */}
-        <div
-          className="rounded-lg px-3 py-2.5"
-          style={{ backgroundColor: 'var(--accent-light)', border: '1px solid var(--accent)' }}
-        >
-          <div className="flex items-center gap-1.5 mb-1">
-            <Sparkles size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-            <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>
-              如何选择：普通会话 还是 圆桌协作？
-            </span>
+        <details className="group groupchat-intro-details w-full border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+          <summary
+            className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            <Sparkles size={12} style={{ color: 'var(--accent)' }} />
+            使用说明与模式建议
+            <ChevronDown
+              size={12}
+              className="ml-auto transition-transform group-open:rotate-180"
+              style={{ color: 'var(--text-tertiary)' }}
+            />
+          </summary>
+          <div className="groupchat-intro-details-grid mt-3 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+            <div className="flex flex-col gap-1.5">
+              <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>快速开始</div>
+              <ol className="flex list-decimal flex-col gap-1 pl-4">
+                <li>新建圆桌并填写目标；主持人和参与者可指定，也可留空自动组建。</li>
+                <li>主持人拆解任务并安排议程；遇到歧义时会向你发起确认。</li>
+                <li>讨论中直接发言或用 @角色名 调整方向，产物在右侧面板查看。</li>
+              </ol>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>模式建议</div>
+              <ul className="flex list-disc flex-col gap-1 pl-4">
+                <li>简单明确的任务优先使用普通会话，速度更快、消耗更低。</li>
+                <li>需要多视角讨论、方案取舍或多角色协作时再使用圆桌。</li>
+                <li>本地 CLI 参与者使用自身能力执行，不占用内置工具。</li>
+              </ul>
+            </div>
           </div>
-          <ul className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>
-              · 简单明确的目标（修 bug、写函数、生成文档、查资料等）建议直接用<b>普通会话</b>：更快、更省；
-            </li>
-            <li>
-              · 需要多方视角 / 评审 / 复杂澄清的目标（方案取舍、设计评审、多角色复盘等）适合用<b>圆桌</b>：角色独立、立场可见、由主持人协调收敛；
-            </li>
-            <li>· 圆桌通常比普通会话更慢、token 消耗更高，请按目标特性自行选择模式。</li>
-          </ul>
-        </div>
+        </details>
       </div>
     </div>
   );
@@ -1548,23 +1197,27 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     messagesLoading, loadingEarlier, totalMessages, loadEarlierMessages,
     loadRooms, selectRoom, sendMessage, deleteRoom, removeParticipant,
     respondConfirmation, pause, resume, abort, exportWorkflow,
-    setRoomOutputDir, setRoomMaxParallel, actorAlive, roomsActorAlive,
+    setRoomMaxParallel, actorAlive, roomsActorAlive,
     skipTask, addTask, updateTaskDeps, previewTaskDeps, promoteWorkflow,
   } = useGroupChatStore();
 
   const navigate = useNavigate();
+  const projects = useProjectStore((state) => state.projects);
   const { getTheme } = useAgentRegistry();
   const [input, setInput] = useState('');
+  const [projectCreateSeed, setProjectCreateSeed] = useState<ProjectCreateContext | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  // 房间统一产物目录编辑草稿（随当前房间同步；保存后写入房间配置并广播）。
-  const [outputDirDraft, setOutputDirDraft] = useState('');
+  const [roomProjectFilter, setRoomProjectFilter] = useState(PROJECT_FILTER_ALL);
+  const [membershipRoom, setMembershipRoom] = useState<(typeof rooms)[number] | null>(null);
   // 执行并行上限编辑草稿（随当前房间同步；松手后保存，当前波次不受影响）。
   const [parallelDraft, setParallelDraft] = useState(2);
   const [showAdd, setShowAdd] = useState(false);
   const [exporting, setExporting] = useState(false);
   /** 「转为可运行工作流」进行中（落库 + 跳转编辑器前禁止重复点击）。 */
   const [promoting, setPromoting] = useState(false);
-  const [exportJson, setExportJson] = useState<string | null>(null);
+  const [workflowPreview, setWorkflowPreview] = useState<WorkflowDefinition | null>(null);
+  const [exportPreviewError, setExportPreviewError] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState<'visual' | 'json'>('visual');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [draggingFiles, setDraggingFiles] = useState<{ name: string; kind: 'image' | 'file' }[]>([]);
@@ -1573,6 +1226,43 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const attachmentsRef = useRef<Attachment[]>([]);
   // ── 会话安全模式（本波次有效；默认标准，随发送传参，不持久化）──
   const [securityMode, setSecurityMode] = useState<SecurityModeValue>('standard');
+  const exportJson = useMemo(
+    () => workflowPreview
+      ? JSON.stringify(workflowPreview, null, 2)
+      : exportPreviewError
+        ? JSON.stringify({ error: exportPreviewError }, null, 2)
+        : null,
+    [workflowPreview, exportPreviewError],
+  );
+  const exportPreviewOpen = workflowPreview !== null || exportPreviewError !== null;
+
+  useEffect(() => {
+    if (!exportPreviewOpen || promoting) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setWorkflowPreview(null);
+      setExportPreviewError(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [exportPreviewOpen, promoting]);
+
+  const openCreateRoom = useCallback(() => {
+    useProjectCreationStore.getState().clear();
+    setProjectCreateSeed(null);
+    setShowCreate(true);
+  }, []);
+
+  const closeCreateRoom = useCallback(() => {
+    useProjectCreationStore.getState().clear();
+    setShowCreate(false);
+    setProjectCreateSeed(null);
+  }, []);
+
+  useEffect(() => subscribeProjectCreation('groupchat', (context) => {
+    setProjectCreateSeed(context);
+    setShowCreate(true);
+  }), []);
 
   // ── 群聊文件历史（撤销入口）：当前房间 write_file/edit_file 的修改快照 ──
   interface RoomHistoryEntry {
@@ -1608,6 +1298,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [depsTask, setDepsTask] = useState<GroupChatTask | null>(null);
   /** 群聊文件历史开关（持久化于 tool_overrides.groupchat）。 */
   const [fileHistoryEnabled, setFileHistoryEnabled] = useState(true);
+  /** 未归属项目的圆桌使用全局工作空间；读取后端最终解析值，避免前端猜路径。 */
+  const [globalWorkRoot, setGlobalWorkRoot] = useState('');
 
   const toggleStance = useCallback((participantId: string) => {
     setExpandedStances((prev) => {
@@ -1769,10 +1461,43 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   }, [loadRooms]);
 
   useEffect(() => {
+    let cancelled = false;
+    void invoke<string>('resolve_default_workspace')
+      .then((resolved) => {
+        if (!cancelled) setGlobalWorkRoot(normalizeDisplayPath(resolved));
+      })
+      .catch(() => {
+        if (!cancelled) setGlobalWorkRoot('');
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
 
   const currentRoom = rooms.find((r) => r.id === currentRoomId) ?? null;
+  const currentRoomProject = currentRoom?.projectId
+    ? projects.find((project) => project.id === currentRoom.projectId) ?? null
+    : null;
+  const currentRoomProjectRoot = normalizeDisplayPath(projectPrimaryDirectory(currentRoomProject));
+  const currentRoomWorkRoot = currentRoomProjectRoot || normalizeDisplayPath(globalWorkRoot);
+  const currentRoomArtifactRoot = currentRoomWorkRoot
+    ? joinDisplayPath(currentRoomWorkRoot, 'outputs')
+    : '';
+  const currentRoomArtifactRootLabel = currentRoomProjectRoot
+    ? '产物目录（由 项目主目录 派生）'
+    : '产物目录（由 全局工作空间 派生）';
+  const filteredRooms = useMemo(() => rooms.filter((room) => {
+    if (roomProjectFilter === PROJECT_FILTER_ALL) return true;
+    if (roomProjectFilter === PROJECT_FILTER_UNASSIGNED) return !room.projectId;
+    return room.projectId === roomProjectFilter;
+  }), [roomProjectFilter, rooms]);
+
+  const handleRoomProjectChanged = useCallback(async () => {
+    await loadRooms();
+    await useProjectStore.getState().loadProjects();
+  }, [loadRooms]);
 
   // ── 子任务面板：派生展示态 / 目标锚点 / 依赖拓扑 ──
   const taskStats = useMemo(() => taskPhaseStats(tasks), [tasks]);
@@ -1785,7 +1510,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     } catch {
       return [];
     }
-  }, [currentRoom?.goalNotes]);
+  }, [currentRoom]);
 
   /** 拓扑选中的合成节点（起点=总目标 / 终点=最终结论）；null 表示当前选中的是任务节点。 */
   const graphEndpoint = useMemo<'start' | 'end' | null>(() => {
@@ -1841,17 +1566,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   /** 待沉淀的消息（非空时弹出入库弹窗） */
   const [kbMessages, setKbMessages] = useState<KbDigestInput[] | null>(null);
 
-  // 同步产物目录编辑草稿到当前房间配置。
-  //
-  // 用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮级联渲染
-  // （`react-hooks/set-state-in-effect`），而这里本来就是"外部值变了就把草稿重置成它"，
-  // 属于 React 推荐的 adjust-during-render 场景。用「房间 + 目标值」做判据，
-  // 用户自己编辑草稿不会被覆盖。
-  const [dirDraftSyncKey, setDirDraftSyncKey] = useState<string | null>(null);
-  const dirDraftKey = `${currentRoomId ?? ''}|${currentRoom?.outputDir ?? ''}`;
-  if (dirDraftSyncKey !== dirDraftKey) {
-    setDirDraftSyncKey(dirDraftKey);
-    setOutputDirDraft(currentRoom?.outputDir ?? '');
+  const [parallelDraftSyncKey, setParallelDraftSyncKey] = useState<string | null>(null);
+  const parallelDraftKey = `${currentRoomId ?? ''}|${currentRoom?.maxParallel ?? 2}`;
+  if (parallelDraftSyncKey !== parallelDraftKey) {
+    setParallelDraftSyncKey(parallelDraftKey);
     setParallelDraft(currentRoom?.maxParallel ?? 2);
   }
 
@@ -2312,21 +2030,6 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     }
   }
 
-  const handlePickRoomDir = useCallback(async () => {
-    if (!currentRoomId) {
-      showToast('请先选择或创建一个圆桌', 'info');
-      return;
-    }
-    try {
-      const sel = await openDialog({ directory: true, multiple: false, title: '选择项目目录（产物/工作空间根）' });
-      if (!sel || typeof sel !== 'string') return;
-      await setRoomOutputDir(sel);
-      showToast('项目目录已切换（后续消息以该目录为工作空间根）', 'info');
-    } catch (e) {
-      showToast(`切换项目目录失败: ${errorMessage(e)}`, 'error');
-    }
-  }, [currentRoomId, setRoomOutputDir]);
-
   const saveAttachments = useCallback(async (items: PendingAttachment[]): Promise<Attachment[]> => {
     if (!currentRoomId) {
       showToast('请先选择或创建一个圆桌', 'info');
@@ -2549,10 +2252,15 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     if (!currentRoomId) return;
     try {
       setExporting(true);
+      setWorkflowPreview(null);
+      setExportPreviewError(null);
+      setPreviewMode('visual');
       const result = await exportWorkflow();
-      setExportJson(JSON.stringify(result, null, 2));
+      setWorkflowPreview(result);
     } catch (err) {
-      setExportJson(JSON.stringify({ error: errorMessage(err) }, null, 2));
+      setWorkflowPreview(null);
+      setExportPreviewError(errorMessage(err));
+      setPreviewMode('json');
     } finally {
       setExporting(false);
     }
@@ -2584,7 +2292,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     setPromoting(true);
     try {
       const def = await promoteWorkflow();
-      setExportJson(null);
+      setWorkflowPreview(null);
+      setExportPreviewError(null);
       showToast(`已创建可运行工作流「${def.name}」`, 'success');
       navigate(`/workflow/editor?id=${def.id}`);
     } catch (err) {
@@ -2597,10 +2306,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   return (
     // 壳层风格：本页自带左/中/右三栏，故本层就是"底"（透明，露出壳层的 canvas），
     // 三栏各自圆角、彼此留 8px 缝；上下的缝由壳层统一不给（与其它模式一致）。
-    <div className="flex-1 flex overflow-hidden gap-2">
-      {/* ── 左：房间列表（宽度与会话页左侧会话列表 w-[260px] 保持一致） ── */}
+    <div className="workbench-groupchat-shell flex-1 flex gap-2">
+      {/* ── 左：房间列表（与会话页共用同一宽度令牌） ── */}
       <aside
-        className="w-[260px] shrink-0 flex flex-col overflow-hidden rounded-lg"
+        className="pd-groupchat-room-list shrink-0 flex flex-col overflow-hidden rounded-lg"
         style={{ backgroundColor: 'var(--bg-side)' }}
       >
         <div className="flex items-center px-3 h-10" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -2610,45 +2319,44 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             className="pd-btn pd-btn-sm pd-btn-primary"
             title="新建圆桌"
             style={HEADER_ICON_BTN_STYLE}
-            onClick={() => setShowCreate(true)}
+            onClick={openCreateRoom}
           >
             <Plus size={13} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
-          {rooms.length === 0 && (
+        <div className="px-2 pt-2">
+          <ProjectFilter
+            value={roomProjectFilter}
+            onChange={setRoomProjectFilter}
+            className="w-full"
+            width="100%"
+          />
+        </div>
+        <div className="flex-1 flex flex-col overflow-y-auto py-2 pd-scroll-stable">
+          {filteredRooms.length === 0 && (
             <div className="px-3 py-4 text-[11px] text-center" style={{ color: 'var(--text-tertiary)' }}>
-              暂无圆桌，点击右上角「+」创建。
+              {rooms.length === 0 ? '暂无圆桌，点击右上角「+」创建。' : '没有符合项目筛选的圆桌。'}
             </div>
           )}
-          {rooms.map((r) => {
+          {filteredRooms.map((r) => {
             // 仅当 Actor 存活（真运行）才点亮绿点脉冲；DB 残留 running 但无 Actor 的房间显示"待恢复"。
             const actorOn = !!roomsActorAlive[r.id];
             const staleRun = r.status === 'running' && !actorOn;
             const statusLabel = staleRun ? '待恢复' : STATUS_LABEL[r.status];
             const statusColor = staleRun ? 'var(--status-warning, #f59e0b)' : STATUS_COLOR[r.status];
             return (
-            <div key={r.id} className="relative group">
+            <div key={r.id} className="pd-groupchat-room-row relative group">
               <button
                 onClick={() => selectRoom(r.id)}
-                className="relative w-full text-left px-3 py-2 rounded-lg transition-colors flex flex-col"
-                style={{
-                  // 选中态**统一按会话列表（`SessionListItem`）的口径**：选中 = `var(--border)` 底、
-                  // 未选中 = 透明（卡片描边另给）。
-                  backgroundColor: currentRoomId === r.id ? 'var(--border)' : 'transparent',
-                  border: '1px solid var(--border)',
-                  alignItems: 'stretch',
-                  // 选中标识：左边框加粗成主题色（与知识库列表同一做法），
-                  // 颜色随圆角走并在拐角处汇入描边，只延伸到约 45°。
-                  ...(currentRoomId === r.id ? { borderLeft: '3px solid var(--accent)', paddingLeft: 10 } : {}),
-                }}
+                className={`pd-groupchat-room-item relative w-full text-left transition-colors flex flex-col ${currentRoomId === r.id ? 'is-active' : ''}`}
               >
-                <div className="flex items-center gap-1.5 text-xs pr-4" style={{ color: 'var(--text-primary)' }}>
+                <div className="flex items-center gap-1.5 text-xs pr-12" style={{ color: 'var(--text-primary)' }}>
                   <Users size={11} className="shrink-0" />
                   <span className="truncate">{r.title}</span>
                 </div>
-                <div className="flex items-center justify-between gap-1.5 mt-1 text-[10px] whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
-                  <span className="truncate">{r.topic}</span>
+                <div className="flex items-center gap-2 mt-1.5 text-[10px] min-w-0" style={{ color: 'var(--text-tertiary)' }}>
+                  <ProjectBadge projectId={r.projectId} className={PROJECT_BADGE_LIST_CLASS} />
+                  <span className="truncate flex-1 min-w-0">{r.topic}</span>
                   <span className="px-1 rounded shrink-0 flex items-center gap-1" style={{ color: statusColor }}>
                     {r.status === 'running' && actorOn && (
                       <span
@@ -2659,6 +2367,14 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                     {statusLabel}
                   </span>
                 </div>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setMembershipRoom(r); }}
+                className="absolute top-1.5 right-6 p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ color: 'var(--text-tertiary)' }}
+                title="更改项目归属"
+              >
+                <FolderKanban size={12} />
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDeleteRoom(r.id); }}
@@ -2675,7 +2391,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       </aside>
 
       {/* ── 中：消息流 ── */}
-      <main className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
+      <main className="workbench-center-surface flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
         <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
             {currentRoom?.title || '选择或创建一个圆桌'}
@@ -2799,7 +2515,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
 
         <div className="relative flex-1 overflow-hidden">
           {!currentRoomId ? (
-            <GroupChatIntro />
+            <GroupChatIntro onCreate={openCreateRoom} />
           ) : messagesLoading ? (
             <div className="h-full flex flex-col items-center justify-center gap-3 text-xs" style={{ color: 'var(--text-tertiary)' }}>
               <div
@@ -2853,7 +2569,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
 
         <div className="shrink-0" ref={inputBarRef}>
           {/* 输入区：容器化输入区（边界、聚焦态、拖拽态挂在容器上，见 .pd-composer）。
-              工具栏（安全模式 / 附件 / 项目根）已并入容器内、与发送键同一行，与会话页 InputBar 同一套方案。
+              工具栏（安全模式 / 附件 / 语音）已并入容器内、与发送键同一行，与会话页 InputBar 同一套方案。
               顶部 pt-3 是与消息列表/实时活动面板之间的安全距离（原先靠一条 border-top 分隔，已去掉）；
               底部只留 4px：与其下方的用量行（自身 py-1）合成 8px 视觉间隙 */}
           <div className="px-4 pt-3 pb-1">
@@ -2865,18 +2581,19 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               <div className="pd-composer-body">
               {mentionOpen && mentionCandidates.length > 0 && (
                 <div
-                  className="absolute bottom-full left-0 right-0 mb-1 p-1 rounded-lg shadow-lg z-20 max-h-48 overflow-y-auto"
-                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  role="listbox"
+                  aria-label="选择要提及的参与者"
+                  className="pd-menu absolute bottom-full left-0 right-0 mb-1 z-20 max-h-48 overflow-y-auto"
                 >
                   {mentionCandidates.map((p) => (
                     <button
                       key={p.id}
+                      type="button"
+                      role="option"
+                      aria-selected="false"
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => handleMentionSelect(p)}
-                      className="w-full text-left px-2 py-1.5 rounded text-xs flex items-center gap-2"
-                      style={{ color: 'var(--text-primary)' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--bg-tertiary)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'; }}
+                      className="pd-menu-item"
                     >
                       <span className="truncate">{p.displayName}</span>
                       <span className="text-[10px] ml-auto shrink-0" style={{ color: 'var(--text-tertiary)' }}>
@@ -2968,25 +2685,6 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                     <Paperclip size={12} />
                     附件
                   </button>
-                  <button
-                    onClick={handlePickRoomDir}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
-                    style={{
-                      color: currentRoom?.outputDir ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                      backgroundColor: 'transparent',
-                      // 与会话页「工作目录」同一套宽度规则：flex 1 1 0（预估宽度只有 minWidth，不挤换行）
-                      // + maxWidth max-content（最多长到内容宽，不拉伸）+ minWidth（收缩下限，truncate 兜底）
-                      flex: '1 1 0',
-                      minWidth: 96,
-                      maxWidth: 'max-content',
-                    }}
-                    title={currentRoom?.outputDir
-                      ? `项目/工作空间根：${currentRoom.outputDir}\n点击可切换（后续消息生效）`
-                      : '未设置项目目录（运行时默认 <工作目录>/outputs/ 下），点击选择'}
-                  >
-                    <Folder size={12} style={{ flexShrink: 0 }} />
-                    <span className="truncate">{currentRoom?.outputDir ? currentRoom.outputDir.split(/[\\/]/).pop() || currentRoom.outputDir : '默认项目'}</span>
-                  </button>
                   {/* 语音输入：工具栏最后一项（发送键之前）。群聊没有"当前会话模型"这回事，
                       转写只认 设置 › 语音识别 指定的专用转写模型 */}
                   <VoiceInputButton
@@ -3028,43 +2726,42 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       {/* ── 右：讨论（产物目录 + 参与者）/ 立场 / 任务 / 文件，tab 切换；显隐由外层折叠按钮控制 ── */}
       {rightPanelOpen && (
         <aside
-          className="w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg"
+          className="pd-right-panel flex flex-col shrink-0 overflow-hidden rounded-lg"
           // 配色对齐会话页右栏（RightPanel）：整栏就是一个 --bg-side 底，面板级标题行只画 1px 下边框、
           // 不填色；栏内分组标题条用 --bg-tertiary（同 InspirationPanel 的分段标题），分组正文保持透明。
           // 这样右栏整块与会话页右栏一致，也不会因为正文填 --bg-primary 而看着像"露底"。
           style={{ backgroundColor: 'var(--bg-side)' }}
         >
-        {/* Tab 切换栏：讨论 / 立场 / 任务 / 文件（h-10 与消息窗口顶部栏、左栏列表头部等高） */}
+        {/* Tab 切换栏：讨论 / 立场 / 任务 / 文件，与会话、终端右栏共用同一视觉样式 */}
         <div
-          className="flex h-10 shrink-0"
-          // 面板级标题行：与右栏同底色（不填色），只靠 1px 下边框分隔 —— 对齐会话页右栏的 header
-          style={{ borderBottom: '1px solid var(--border)' }}
+          className="pd-right-panel-tabs pd-right-panel-tabs--equal"
+          role="tablist"
+          aria-label="圆桌右侧面板"
         >
           <button
             onClick={() => setRightTab('overview')}
-            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
-            style={{
-              color: rightTab === 'overview' ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: rightTab === 'overview' ? '2px solid var(--accent)' : '2px solid transparent',
-            }}
+            className="pd-right-panel-tab"
+            data-active={rightTab === 'overview'}
+            role="tab"
+            aria-selected={rightTab === 'overview'}
             title="产物目录 / 参与者"
           >
+            <Users size={12} aria-hidden />
             讨论
           </button>
           <button
             onClick={() => setRightTab('tasks')}
-            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
-            style={{
-              color: rightTab === 'tasks' ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: rightTab === 'tasks' ? '2px solid var(--accent)' : '2px solid transparent',
-            }}
+            className="pd-right-panel-tab"
+            data-active={rightTab === 'tasks'}
+            role="tab"
+            aria-selected={rightTab === 'tasks'}
             title="总目标 / 子任务与依赖拓扑"
           >
+            <ListTodo size={12} aria-hidden />
             任务
             {tasks.length > taskStats.finished && (
               <span
-                className="px-1 rounded-full text-[9px] leading-[14px]"
-                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                className="pd-right-panel-tab-badge"
               >
                 {tasks.length - taskStats.finished}
               </span>
@@ -3072,18 +2769,17 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           </button>
           <button
             onClick={() => setRightTab('stances')}
-            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
-            style={{
-              color: rightTab === 'stances' ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: rightTab === 'stances' ? '2px solid var(--accent)' : '2px solid transparent',
-            }}
+            className="pd-right-panel-tab"
+            data-active={rightTab === 'stances'}
+            role="tab"
+            aria-selected={rightTab === 'stances'}
             title="参与者立场快照"
           >
+            <Scale size={12} aria-hidden />
             立场
             {stances.length > 0 && (
               <span
-                className="px-1 rounded-full text-[9px] leading-[14px]"
-                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                className="pd-right-panel-tab-badge"
               >
                 {stances.length}
               </span>
@@ -3091,18 +2787,17 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           </button>
           <button
             onClick={() => setRightTab('files')}
-            className="flex-1 px-2 flex items-center justify-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap"
-            style={{
-              color: rightTab === 'files' ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: rightTab === 'files' ? '2px solid var(--accent)' : '2px solid transparent',
-            }}
+            className="pd-right-panel-tab"
+            data-active={rightTab === 'files'}
+            role="tab"
+            aria-selected={rightTab === 'files'}
             title="当前圆桌文件修改历史"
           >
+            <History size={12} aria-hidden />
             文件
             {!historyLoading && fileHistoryEnabled && roomHistory.length > 0 && (
               <span
-                className="px-1 rounded-full text-[9px] leading-[14px]"
-                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                className="pd-right-panel-tab-badge"
               >
                 {roomHistory.length}
               </span>
@@ -3169,44 +2864,25 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <Folder size={10} style={{ color: 'var(--accent)' }} />
               产物目录
+              <span className="ml-auto font-normal" style={{ color: 'var(--text-tertiary)' }}>自动派生</span>
             </div>
             {/* 正文不填色（右栏底色即为分组底），标题行与其余分组标题一致用 bg-tertiary */}
-            <div className="px-3 py-2 flex flex-col gap-1.5 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={outputDirDraft}
-                  onChange={(e) => setOutputDirDraft(e.target.value)}
-                  placeholder="产物统一落盘目录（绝对路径）"
-                  className="flex-1 min-w-0 rounded-md px-2 py-1 text-[10px] outline-none"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
-                />
-                <button
-                  type="button"
-                  className="px-2 py-1 rounded-md text-[10px] shrink-0"
-                  style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-                  onClick={async () => {
-                    const sel = await openDialog({ directory: true, multiple: false, title: '选择产物目录' });
-                    if (typeof sel === 'string') setOutputDirDraft(sel);
-                  }}
+            <div className="px-3 py-2 flex flex-col gap-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="flex flex-col gap-1 min-w-0">
+                <div className="flex items-center gap-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <Folder size={10} className="shrink-0" />
+                  {currentRoomArtifactRootLabel}
+                </div>
+                <div
+                  className="rounded-md px-2 py-1.5 font-mono text-[9px] truncate"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                  title={currentRoomArtifactRoot || undefined}
                 >
-                  选择
-                </button>
-                <button
-                  className="px-2 py-1 rounded-md text-[10px] shrink-0"
-                  style={{ color: 'var(--accent)', border: '1px solid var(--accent)', backgroundColor: 'var(--accent-light)' }}
-                  onClick={async () => {
-                    const v = outputDirDraft.trim();
-                    if (currentRoomId && v !== (currentRoom?.outputDir ?? '')) {
-                      await setRoomOutputDir(v);
-                    }
-                  }}
-                >
-                  保存
-                </button>
+                  {currentRoomArtifactRoot || '正在读取产物目录…'}
+                </div>
               </div>
               <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
-                当前：{currentRoom?.outputDir || '（目标理解阶段由主持人命名于 <工作目录>/outputs/ 下）'}；所有参与者产物统一写入该目录。
+                产物统一写入工作根下的 outputs 目录；切换项目归属后，后续运行自动改用新的工作根。
               </span>
             </div>
 
@@ -3689,7 +3365,6 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                             </div>
                           )}
                           <div className="space-y-0.5" style={{ color: 'var(--text-tertiary)' }}>
-                            <div className="break-words">输出目录：{currentRoom?.outputDir || '待确定'}</div>
                             <div>参与者：{participants.length} · 任务：{tasks.length}</div>
                             {currentRoom?.createdAt ? <div>创建于 {formatDateTime(currentRoom.createdAt)}</div> : null}
                           </div>
@@ -3721,7 +3396,6 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                             <div>
                               任务：完成 {graphTaskCounts.success} · 失败 {graphTaskCounts.failed} · 跳过 {graphTaskCounts.skipped} · 中止 {graphTaskCounts.aborted}
                             </div>
-                            <div className="break-words">输出目录：{currentRoom?.outputDir || '待确定'}</div>
                             {conclusionMessage && <div>生成于 {formatDateTime(conclusionMessage.timestamp)}</div>}
                           </div>
                         </>
@@ -3879,10 +3553,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 />
               </button>
             </div>
-            {/* 仓库状态（只读）：房间产物目录所在仓库的真实状态，与本房间的写入快照互补 */}
+            {/* 仓库状态（只读）：工作根所在仓库的真实状态；产物目录只影响落盘位置。 */}
             {currentRoomId && (
               <RepoStatusBar
-                cwd={currentRoom?.outputDir || null}
+                cwd={currentRoomWorkRoot || null}
                 refreshToken={roomHistory.length}
                 snapshotCount={roomHistory.length}
               />
@@ -3938,7 +3612,18 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         </aside>
       )}
 
-      {showCreate && <CreateRoomModal onClose={() => setShowCreate(false)} />}
+      {showCreate && <SharedCreateRoomModal projectSeed={projectCreateSeed} onClose={closeCreateRoom} />}
+
+      {membershipRoom && (
+        <ProjectMembershipDialog
+          workType="groupchat"
+          workId={membershipRoom.id}
+          workTitle={membershipRoom.title}
+          currentProjectId={membershipRoom.projectId}
+          onClose={() => setMembershipRoom(null)}
+          onChanged={handleRoomProjectChanged}
+        />
+      )}
 
       {showAdd && <AddParticipantModal onClose={() => setShowAdd(false)} />}
 
@@ -3973,61 +3658,115 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         </div>
       )}
 
-      {exportJson !== null && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
-          onClick={() => setExportJson(null)}
-        >
-          <div
-            className="w-[600px] max-h-[80vh] flex flex-col rounded-xl p-4 gap-3"
-            style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>工作流定义（转换预览）</span>
-              <button className="pd-btn pd-btn-sm" style={{ color: 'var(--text-secondary)' }} onClick={() => setExportJson(null)}>
-                <XCircle size={14} />
-              </button>
-            </div>
-            <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-              以下即「转为可运行工作流」将创建的定义原文：任务依赖按圆桌议程还原为 DAG，
-              节点提示词已带总目标与前置产出的取值引用（作废任务不进工作流）。
+      {exportPreviewOpen && (
+        <ConversionDialogShell
+          icon={<GitBranch size={17} />}
+          kicker="圆桌转化"
+          title="转换为工作流"
+          size="preview"
+          busy={promoting}
+          onClose={() => {
+            setWorkflowPreview(null);
+            setExportPreviewError(null);
+          }}
+          description="将圆桌任务还原为可运行 DAG，保留任务依赖与前置产出引用；作废任务不会进入工作流。"
+          headerAction={(
+            <span className="pd-conversion-status">
+              <span className="pd-conversion-status-dot" />
+              {workflowPreview ? '定义已生成' : '正在生成'}
             </span>
-            <pre
-              className="flex-1 overflow-auto rounded-lg p-3 text-[11px] leading-relaxed"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-            >
-              {exportJson}
-            </pre>
-            <div className="flex justify-end gap-2">
+          )}
+          footer={(
+            <>
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                {workflowPreview ? `${workflowPreview.stages.length} 个阶段 · DAG 预览` : '等待工作流定义'}
+              </span>
+              <span className="pd-conversion-footer-spacer flex-1" />
               <button
-                className="pd-btn pd-btn-sm"
-                style={{ color: 'var(--text-secondary)' }}
+                type="button"
+                className="pd-btn"
                 onClick={handleSaveExport}
+                disabled={!exportJson || promoting}
               >
-                <Save size={11} />
+                <Save size={12} />
                 保存
               </button>
               <button
-                className="pd-btn pd-btn-sm"
-                style={{ color: 'var(--text-secondary)' }}
-                onClick={() => navigator.clipboard?.writeText(exportJson)}
+                type="button"
+                className="pd-btn"
+                onClick={() => {
+                  if (exportJson) void copyToClipboard(exportJson, '已复制工作流定义');
+                }}
+                disabled={!exportJson || promoting}
               >
-                <Copy size={11} />
+                <Copy size={12} />
                 复制
               </button>
               <button
-                className="pd-btn pd-btn-sm pd-btn-primary"
-                disabled={promoting}
+                type="button"
+                className="pd-btn pd-btn-primary"
+                disabled={promoting || !workflowPreview}
                 onClick={handlePromote}
               >
-                <Sparkles size={11} />
+                <Sparkles size={12} />
                 {promoting ? '转换中…' : '转为可运行工作流'}
               </button>
+            </>
+          )}
+        >
+            <div className="pd-conversion-preview-toolbar">
+              <div className="pd-conversion-segment" role="tablist" aria-label="工作流预览视图">
+                <button
+                  role="tab"
+                  aria-selected={previewMode === 'visual'}
+                  data-active={previewMode === 'visual'}
+                  onClick={() => setPreviewMode('visual')}
+                >
+                  <Eye size={11} />
+                  可视化视图
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={previewMode === 'json'}
+                  data-active={previewMode === 'json'}
+                  onClick={() => setPreviewMode('json')}
+                >
+                  <Code2 size={11} />
+                  JSON 视图
+                </button>
+              </div>
+              {workflowPreview && (
+                <span className="pd-conversion-preview-meta">
+                  版本 {workflowPreview.version} · {workflowPreview.enabled ? '已启用' : '未启用'}
+                </span>
+              )}
             </div>
-          </div>
-        </div>
+
+            <div className="pd-conversion-preview-surface" role="tabpanel">
+              {previewMode === 'visual' ? (
+                <div className="h-full overflow-auto pr-1 pd-scroll-stable">
+                  {workflowPreview ? (
+                    <WorkflowConversionPreview definition={workflowPreview} />
+                  ) : (
+                    <div
+                      className="rounded-lg p-3 text-[11px] leading-relaxed"
+                      style={{
+                        color: 'var(--status-danger)',
+                        backgroundColor: 'var(--status-danger-bg)',
+                        border: '1px solid color-mix(in srgb, var(--status-danger) 35%, var(--border))',
+                      }}
+                    >
+                      {exportPreviewError || '工作流预览生成失败'}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <pre className="pd-conversion-preview-json">
+                  {exportJson}
+                </pre>
+              )}
+            </div>
+        </ConversionDialogShell>
       )}
     </div>
   );

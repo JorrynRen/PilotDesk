@@ -44,9 +44,18 @@ fn frame_ancestors_of(csp: &str) -> Option<&str> {
 /// （asset / dirindex 协议由本应用自身提供，恒可内嵌）。
 #[tauri::command]
 pub async fn probe_embed_allowed(url: String) -> EmbedProbe {
-    let ok = || EmbedProbe { status: "ok", reason: String::new() };
-    let unknown = || EmbedProbe { status: "unknown", reason: String::new() };
-    let blocked = |reason: &str| EmbedProbe { status: "blocked", reason: reason.to_string() };
+    let ok = || EmbedProbe {
+        status: "ok",
+        reason: String::new(),
+    };
+    let unknown = || EmbedProbe {
+        status: "unknown",
+        reason: String::new(),
+    };
+    let blocked = |reason: &str| EmbedProbe {
+        status: "blocked",
+        reason: reason.to_string(),
+    };
 
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return ok();

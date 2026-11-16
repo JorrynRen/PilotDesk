@@ -1,5 +1,5 @@
 /**
- * 设置 · 我的云同步：开关、同步范围、同步间隔、冲突与失败明细。
+ * 设置 · 个人云同步：开关、同步范围、同步间隔、冲突与失败明细。
  *
  * 从「账号」设置页拆出为独立一级 tab。状态**懒加载**：只有本组件挂载时才请求
  * `cloud_sync_status`（打开设置页但未进入本 tab 时不会请求）。
@@ -9,13 +9,32 @@
  */
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronDown, ChevronRight, Cloud, Loader2, RefreshCw } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Cloud,
+  Laptop,
+  Loader2,
+  RefreshCw,
+  Trash2,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 
-import { CAP_CLOUD_SYNC, hasCapability, useAccountStore } from '../../stores/accountStore';
+import {
+  CAP_CLOUD_SYNC,
+  CAP_WORKFLOW_REMOTE_RUN,
+  hasCapability,
+  useAccountStore,
+} from '../../stores/accountStore';
+import { UpgradePrompt } from '../common/UpgradePrompt';
 import { useCloudSyncStore, type CloudSyncResult } from '../../stores/cloudSyncStore';
+import { CLOUD_SYNC_UPGRADE, REMOTE_RUN_UPGRADE } from '../../utils/upgradeOffers';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
-import { SettingsButton, SettingsCard, SettingsSection } from './index';
+import { confirmDialog } from '../../stores/confirmStore';
+import { cloudSyncQuotaSummary } from '../../utils/planText';
+import { SettingsButton, SettingsCard, SettingsSection, SettingsToggle } from './index';
 
 /** 自动同步间隔设置键（分钟；与后端 `cloud_sync.rs::SYNC_INTERVAL_KEY` 一致） */
 const SYNC_INTERVAL_KEY = 'cloud_sync_interval_minutes';
@@ -50,7 +69,7 @@ function parseSyncKinds(raw: string | null): string[] {
 }
 
 
-/** 云同步结果摘要：有打包失败 / 冲突对象时带上数量与说明（不静默）。 */
+/** 个人云同步结果摘要：有打包失败 / 冲突对象时带上数量与说明（不静默）。 */
 function cloudSyncSummary(r: CloudSyncResult): string {
   let text = `拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}`;
   if (r.failed && r.failed > 0) {
@@ -68,13 +87,49 @@ function cloudSyncSummary(r: CloudSyncResult): string {
   return text;
 }
 
+interface RemoteDevice {
+  registered: boolean;
+  id: number | null;
+  name: string;
+  platform: string;
+  appVersion: string;
+  online: boolean;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+  currentDevice: boolean;
+}
+
+interface RemoteRun {
+  id: number;
+  deviceId: number;
+  workflowKey: string;
+  status: string;
+  createdAt: string;
+  expiresAt: string;
+  claimedAt: string | null;
+  finishedAt: string | null;
+  resultCode: string | null;
+}
+
+const REMOTE_STATUS_LABEL: Record<string, string> = {
+  pending: '等待设备领取',
+  claimed: '设备已领取',
+  running: '执行中',
+  succeeded: '已完成',
+  failed: '失败',
+  expired: '已过期',
+  cancelled: '已取消',
+};
+
 export function CloudSyncSettings() {
   const account = useAccountStore((s) => s.account);
   const status = useCloudSyncStore((s) => s.status);
   const refresh = useCloudSyncStore((s) => s.refresh);
 
-  // 云同步：开关（默认关闭）+ 立即同步 + 上次结果；仅专业版/团队版可用
+  // 个人云同步：开关（默认关闭）+ 立即同步 + 上次结果；仅专业版/团队版可用
   const canCloudSync = hasCapability(account, CAP_CLOUD_SYNC);
+  const canRemoteRun = hasCapability(account, CAP_WORKFLOW_REMOTE_RUN);
+  const syncQuotaSummary = cloudSyncQuotaSummary(account?.quotas);
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
   const [cloudSyncing, setCloudSyncing] = useState(false);
   // 本次会话最近一轮同步结果（用于「冲突与失败明细」；仅展示，不落库）
@@ -171,18 +226,29 @@ export function CloudSyncSettings() {
 
   const toggleCloudSync = async () => {
     const next = !cloudSyncEnabled;
+    if (next) {
+      const confirmed = await confirmDialog({
+        title: '开启个人云同步',
+        message:
+          '将同步完整工作流定义与灵感。工作流定义可能包含请求地址、脚本和提示内容。\n\n不会同步设置、API Key、Provider 凭据、插件、技能、执行记录、日志或产物。',
+        confirmText: '确认开启',
+        cancelText: '取消',
+        danger: false,
+      });
+      if (!confirmed) return;
+    }
     setCloudSyncEnabled(next);
     setCloudSyncing(true);
     try {
       // 后端在开启时会立即触发一轮同步，结果随返回值给出
       const r = await invoke<CloudSyncResult>('cloud_sync_set_enabled', { enabled: next });
       if (!next) {
-        showToast('已关闭云同步', 'success');
+        showToast('已关闭个人云同步', 'success');
       } else if (r.error) {
         showToast(r.error, 'error');
       } else {
         showToast(
-          `已开启云同步（${cloudSyncSummary(r)}）`,
+          `已开启个人云同步（${cloudSyncSummary(r)}）`,
           r.failed && r.failed > 0 ? 'warning' : 'success',
         );
       }
@@ -226,35 +292,106 @@ export function CloudSyncSettings() {
     Boolean(lastRun?.failures?.length) ||
     Boolean(lastRun?.updatedItems?.length);
 
+  // ── 远程发起：设备与请求 ───────────────────────────────────────
+  const [remoteDevice, setRemoteDevice] = useState<RemoteDevice | null>(null);
+  const [remoteDevices, setRemoteDevices] = useState<RemoteDevice[]>([]);
+  const [remoteRuns, setRemoteRuns] = useState<RemoteRun[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+
+  const refreshRemote = async () => {
+    if (!canRemoteRun) return;
+    setRemoteLoading(true);
+    try {
+      const [status, devices, runs] = await Promise.all([
+        invoke<RemoteDevice>('remote_device_status'),
+        invoke<RemoteDevice[]>('remote_devices_list'),
+        invoke<RemoteRun[]>('remote_run_list'),
+      ]);
+      setRemoteDevice(status);
+      setRemoteDevices(devices);
+      setRemoteRuns(runs.slice(0, 12));
+    } catch (e) {
+      showToast(`读取远程设备失败：${errorMessage(e)}`, 'error');
+    } finally {
+      setRemoteLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (canRemoteRun) void refreshRemote();
+  }, [canRemoteRun]);
+
+  const registerCurrentDevice = async () => {
+    setRemoteLoading(true);
+    try {
+      const device = await invoke<RemoteDevice>('remote_device_register');
+      setRemoteDevice(device);
+      await refreshRemote();
+      showToast('当前设备已登记，可接收远程工作流', 'success');
+    } catch (e) {
+      showToast(`登记失败：${errorMessage(e)}`, 'error');
+    } finally {
+      setRemoteLoading(false);
+    }
+  };
+
+  const revokeDevice = async (device: RemoteDevice) => {
+    if (device.id == null) return;
+    const confirmed = await confirmDialog({
+      title: '撤销远程设备',
+      message: device.currentDevice
+        ? `撤销「${device.name}」后，本机将停止领取远程工作流，需要时再重新登记。`
+        : `撤销「${device.name}」后，该设备将不能再接收新的远程工作流。`,
+      confirmText: '撤销设备',
+    });
+    if (!confirmed) return;
+    try {
+      await invoke('remote_device_revoke', { deviceId: device.id });
+      await refreshRemote();
+      showToast('设备已撤销', 'success');
+    } catch (e) {
+      showToast(`撤销失败：${errorMessage(e)}`, 'error');
+    }
+  };
+
+  const cancelRemoteRun = async (run: RemoteRun) => {
+    try {
+      await invoke('remote_run_cancel', { requestId: run.id });
+      await refreshRemote();
+      showToast('远程请求已取消', 'success');
+    } catch (e) {
+      showToast(`取消失败：${errorMessage(e)}`, 'error');
+    }
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="settings-page-stack">
       {/* ① 状态概览：开关 / 上次同步 / 结果摘要 */}
       <SettingsSection
-        title="云同步"
-        description="同步不含设置与密钥，工作流跨设备可用。"
+        title="个人云同步"
+        description={`跨设备同步工作流定义与灵感的最新状态${
+          syncQuotaSummary ? `（${syncQuotaSummary}）` : ''
+        }。版本历史仅保留在本地；配置、凭据、插件、技能与执行数据不上云。`}
       >
         <SettingsCard>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => void toggleCloudSync()}
+            <SettingsToggle
+              checked={cloudSyncEnabled}
+              onChange={() => void toggleCloudSync()}
               disabled={!canCloudSync || cloudSyncing}
-              className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
-              style={{
-                width: 36,
-                height: 20,
-                backgroundColor: cloudSyncEnabled ? '#22c55e' : 'var(--bg-field)',
-                border: '1px solid var(--border)',
-              }}
-              title={!canCloudSync ? '云同步为专业版功能' : cloudSyncEnabled ? '点击关闭' : '点击开启'}
-            >
-              <div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-                style={{ left: cloudSyncEnabled ? '18px' : '2px' }}
-              />
-            </button>
+              title={
+                !canCloudSync
+                  ? '个人云同步为专业版功能'
+                  : cloudSyncEnabled
+                    ? '点击关闭'
+                    : '点击开启'
+              }
+            />
             <span
               className="text-xs"
-              style={{ color: cloudSyncEnabled ? '#22c55e' : 'var(--text-tertiary)' }}
+              style={{
+                color: cloudSyncEnabled ? 'var(--status-success)' : 'var(--text-tertiary)',
+              }}
             >
               {cloudSyncEnabled ? '已开启' : '已关闭'}
             </span>
@@ -269,9 +406,14 @@ export function CloudSyncSettings() {
         </SettingsCard>
 
         {!canCloudSync ? (
-          <p className="mt-2 text-[11px]" style={{ color: '#F59E0B' }}>
-            云同步为专业版功能，当前等级不含此能力
-          </p>
+          <UpgradePrompt
+            className="mt-2"
+            capability={CLOUD_SYNC_UPGRADE.capability}
+            plan={CLOUD_SYNC_UPGRADE.plan}
+            title={CLOUD_SYNC_UPGRADE.title}
+            description={CLOUD_SYNC_UPGRADE.description}
+            source="cloud-sync-settings"
+          />
         ) : (
           <div className="mt-3 flex items-center gap-3">
             <SettingsButton
@@ -285,7 +427,7 @@ export function CloudSyncSettings() {
               }
               onClick={() => void syncNow()}
               disabled={cloudSyncing || !cloudSyncEnabled}
-              title={cloudSyncEnabled ? '立即同步一轮' : '已关闭云同步'}
+              title={cloudSyncEnabled ? '立即同步一轮' : '已关闭个人云同步'}
             >
               立即同步
             </SettingsButton>
@@ -297,7 +439,7 @@ export function CloudSyncSettings() {
         )}
       </SettingsSection>
 
-      {/* ② 同步范围：逐类开关（工作流 / 灵感）；插件与技能文件的同步待做 */}
+      {/* ② 同步范围：逐类开关（工作流 / 灵感） */}
       <SettingsSection title="同步范围">
         <SettingsCard>
           <div className="space-y-3">
@@ -305,35 +447,24 @@ export function CloudSyncSettings() {
               const on = syncKinds.includes(opt.kind);
               return (
                 <div key={opt.kind} className="flex items-center gap-3">
-                  <button
-                    onClick={() => void toggleSyncKind(opt.kind)}
+                  <SettingsToggle
+                    checked={on}
+                    onChange={() => void toggleSyncKind(opt.kind)}
                     disabled={!canCloudSync || !cloudSyncEnabled}
-                    className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
-                    style={{
-                      width: 36,
-                      height: 20,
-                      backgroundColor: on ? '#22c55e' : 'var(--bg-field)',
-                      border: '1px solid var(--border)',
-                    }}
                     title={
                       !canCloudSync || !cloudSyncEnabled
-                        ? '云同步已关闭（或当前等级不支持）'
+                        ? '个人云同步已关闭（或当前等级不支持）'
                         : on
                           ? `点击关闭${opt.label}`
                           : `点击开启${opt.label}`
                     }
-                  >
-                    <div
-                      className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-                      style={{ left: on ? '18px' : '2px' }}
-                    />
-                  </button>
+                  />
                   <span className="text-xs" style={{ color: 'var(--text-primary)' }}>
                     {opt.label}
                   </span>
                   <span
                     className="text-[11px]"
-                    style={{ color: on ? '#22c55e' : 'var(--text-tertiary)' }}
+                    style={{ color: on ? 'var(--status-success)' : 'var(--text-tertiary)' }}
                   >
                     {on ? '已开启' : '已关闭'}
                   </span>
@@ -342,7 +473,7 @@ export function CloudSyncSettings() {
             })}
           </div>
           <div className="mt-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            插件与技能文件的同步待后续版本；至少保留一项。
+            插件、技能、Agent 配置、API Key、Provider 凭据、执行记录与产物不会同步；至少保留一项。
           </div>
         </SettingsCard>
         {/* 说明：子工作流不是独立同步对象，其内容随所属主工作流一并上传，避免对端重复导入 */}
@@ -352,6 +483,201 @@ export function CloudSyncSettings() {
             ? `本机现有 ${status.rootCount} 个主工作流、${status.subflowCount} 个子工作流。`
             : ''}
         </p>
+      </SettingsSection>
+
+      {/* 远程发起：设备登记与请求状态 */}
+      <SettingsSection
+        title="远程发起工作流"
+        description="从其他设备发起工作流。云端只保存设备、工作流标识、状态与结果码，执行过程、日志和产物留在目标设备。"
+      >
+        {!canRemoteRun ? (
+          <UpgradePrompt
+            capability={REMOTE_RUN_UPGRADE.capability}
+            plan={REMOTE_RUN_UPGRADE.plan}
+            title={REMOTE_RUN_UPGRADE.title}
+            description={REMOTE_RUN_UPGRADE.description}
+            source="remote-run-settings"
+          />
+        ) : (
+          <>
+            <SettingsCard>
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <Laptop size={15} style={{ color: 'var(--text-secondary)' }} />
+                <div className="min-w-0">
+                  <div className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
+                    {remoteDevice?.registered
+                      ? remoteDevice.name
+                      : '当前设备尚未登记为远程执行节点'}
+                  </div>
+                  <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    {remoteDevice?.registered
+                      ? `${remoteDevice.platform} · PilotDesk ${remoteDevice.appVersion}`
+                      : '登记后可在其他设备选择此设备发起工作流'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {remoteDevice?.registered && (
+                  <span
+                    className="flex items-center gap-1 text-[11px]"
+                    style={{
+                      color: remoteDevice.online
+                        ? 'var(--status-success)'
+                        : 'var(--text-tertiary)',
+                    }}
+                  >
+                    {remoteDevice.online ? <Wifi size={12} /> : <WifiOff size={12} />}
+                    {remoteDevice.online ? '在线' : '离线'}
+                  </span>
+                )}
+                <SettingsButton
+                  icon={
+                    remoteLoading ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : remoteDevice?.registered ? (
+                      <RefreshCw size={13} />
+                    ) : (
+                      <Laptop size={13} />
+                    )
+                  }
+                  onClick={() =>
+                    void (remoteDevice?.registered
+                      ? refreshRemote()
+                      : registerCurrentDevice())
+                  }
+                  disabled={remoteLoading}
+                >
+                  {remoteDevice?.registered ? '刷新状态' : '登记当前设备'}
+                </SettingsButton>
+              </div>
+            </SettingsCard>
+
+            {remoteDevices.length > 0 && (
+              <SettingsCard className="mt-2">
+                <div className="w-full">
+                  <div className="mb-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    已登记设备
+                  </div>
+                  <div className="space-y-1.5">
+                    {remoteDevices.map((device) => (
+                      <div
+                        key={device.id}
+                        className="flex items-center gap-2 rounded-md px-2 py-1.5"
+                        style={{ backgroundColor: 'var(--bg-tertiary)' }}
+                      >
+                        <span
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded"
+                          style={{
+                            color: 'var(--text-secondary)',
+                            backgroundColor: 'var(--bg-secondary)',
+                          }}
+                        >
+                          <Laptop size={13} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
+                            {device.name}
+                            {device.currentDevice ? '（当前设备）' : ''}
+                          </div>
+                          <div
+                            className="text-[10px]"
+                            style={{ color: 'var(--text-tertiary)' }}
+                          >
+                            {device.platform} · PilotDesk {device.appVersion}
+                          </div>
+                        </div>
+                        <span
+                          className="flex items-center gap-1 text-[10px]"
+                          style={{
+                            color: device.online
+                              ? 'var(--status-success)'
+                              : 'var(--text-tertiary)',
+                          }}
+                        >
+                          {device.online ? <Wifi size={11} /> : <WifiOff size={11} />}
+                          {device.revokedAt ? '已撤销' : device.online ? '在线' : '离线'}
+                        </span>
+                        {!device.revokedAt && (
+                          <button
+                            type="button"
+                            className="pd-icon-btn p-1"
+                            title="撤销设备"
+                            onClick={() => void revokeDevice(device)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </SettingsCard>
+            )}
+
+            <SettingsCard className="mt-2">
+              <div className="w-full">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    最近远程请求
+                  </span>
+                  <button
+                    type="button"
+                    className="pd-icon-btn p-1"
+                    title="刷新远程请求"
+                    onClick={() => void refreshRemote()}
+                    disabled={remoteLoading}
+                  >
+                    <RefreshCw size={12} className={remoteLoading ? 'animate-spin' : ''} />
+                  </button>
+                </div>
+                {remoteRuns.length === 0 ? (
+                  <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    暂无远程请求。工作流列表中的“远程发起”会在这里显示状态。
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {remoteRuns.map((run) => (
+                      <div
+                        key={run.id}
+                        className="flex items-center gap-2 rounded-md px-2 py-1.5"
+                        style={{ backgroundColor: 'var(--bg-tertiary)' }}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div
+                            className="truncate text-xs"
+                            style={{ color: 'var(--text-primary)' }}
+                          >
+                            {run.workflowKey}
+                          </div>
+                          <div
+                            className="text-[10px]"
+                            style={{ color: 'var(--text-tertiary)' }}
+                          >
+                            {REMOTE_STATUS_LABEL[run.status] ?? run.status}
+                            {run.resultCode ? ` · ${run.resultCode}` : ''}
+                          </div>
+                        </div>
+                        {run.status === 'pending' && (
+                          <button
+                            type="button"
+                            className="pd-btn px-2 py-1 text-[10px]"
+                            style={{
+                              border: '1px solid var(--border)',
+                              color: 'var(--text-secondary)',
+                            }}
+                            onClick={() => void cancelRemoteRun(run)}
+                          >
+                            取消
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </SettingsCard>
+          </>
+        )}
       </SettingsSection>
 
       {/* ③ 同步间隔（分钟）：1–1440，后端每轮读取 → 保存后下一轮生效（无需重启） */}

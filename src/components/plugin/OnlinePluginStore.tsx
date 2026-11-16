@@ -9,14 +9,21 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Download, Package, Shield, User, HardDrive, AlertCircle, Loader2 } from 'lucide-react';
+import {
+  Download, Package, Shield, User, HardDrive, Loader2, BookOpen,
+} from 'lucide-react';
 import { PluginReadmeDialog } from './PluginReadmeDialog';
+import { MarketLoadError } from '../market/MarketLoadError';
 import { errorMessage } from '../../utils/errorMessage';
 
 // ── 友好错误提示 ──
 
 /** 将后端返回的内部错误信息转换为用户友好的提示文字 */
-function formatUserFriendlyError(raw: string): { title: string; detail: string } {
+function formatUserFriendlyError(
+  raw: string,
+  operation: 'load' | 'install' = 'install',
+): { title: string; detail: string } {
+  const fallbackTitle = operation === 'load' ? '商店加载失败' : '安装失败';
   if (raw.includes('连接失败') || raw.includes('连接超时') || raw.includes('请求超时')) {
     return { title: '网络连接失败', detail: '无法连接到插件商店服务器，请检查网络连接后重试。' };
   }
@@ -24,13 +31,21 @@ function formatUserFriendlyError(raw: string): { title: string; detail: string }
     return { title: '商店服务器繁忙', detail: '插件商店暂时无法响应，请稍后重试。' };
   }
   if (raw.includes('HTTP 4') || raw.includes('HTTP 404')) {
-    return { title: '插件数据异常', detail: '未找到对应的插件文件，请刷新后重试。' };
+    return {
+      title: operation === 'load' ? '商店加载失败' : '插件数据异常',
+      detail: operation === 'load'
+        ? '商店返回了无效的索引数据，请稍后刷新重试。'
+        : '未找到对应的插件文件，请刷新后重试。',
+    };
   }
   if (raw.includes('清单验证失败')) {
     return { title: '插件验证未通过', detail: '该插件不符合安全规范，已拒绝安装。' };
   }
   if (raw.includes('解析索引失败') || raw.includes('解析 manifest')) {
-    return { title: '插件数据异常', detail: '插件数据格式错误，请刷新后重试。' };
+    return {
+      title: operation === 'load' ? '商店加载失败' : '插件数据异常',
+      detail: '插件数据格式错误，请刷新后重试。',
+    };
   }
   if (raw.includes('未找到插件')) {
     return { title: '插件不存在', detail: '该插件在商店中已不存在，请刷新列表。' };
@@ -46,9 +61,9 @@ function formatUserFriendlyError(raw: string): { title: string; detail: string }
   }
   const cleaned = raw.replace(/https?:\/\/[^\s]+/g, '').replace(/\s+/g, ' ').trim();
   if (cleaned.length > 0 && cleaned !== raw) {
-    return { title: '安装失败', detail: cleaned };
+    return { title: fallbackTitle, detail: cleaned };
   }
-  return { title: '安装失败', detail: '发生未知错误，请稍后重试。' };
+  return { title: fallbackTitle, detail: '发生未知错误，请稍后重试。' };
 }
 
 // ── 类型定义 ──
@@ -92,17 +107,14 @@ function PluginCard({
 
   return (
     <div
-      className="px-3 py-2.5 rounded-lg transition-colors"
+      className="pd-card-btn px-3 py-2.5 rounded-lg transition-colors"
       style={{
         backgroundColor: 'var(--bg-secondary)',
         border: '1px solid var(--border)',
-        cursor: isInstalled ? 'default' : 'pointer',
+        cursor: 'default',
       }}
-      onClick={() => !isInstalled && !isInstalling && onInstall(plugin.id)}
       onMouseEnter={(e) => {
-        if (!isInstalled) {
-          e.currentTarget.style.borderColor = 'var(--accent)';
-        }
+        e.currentTarget.style.borderColor = 'var(--accent)';
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.borderColor = 'var(--border)';
@@ -115,9 +127,9 @@ function PluginCard({
           <div
             title={plugin.name}
             style={{
-              width: 20,
-              height: 20,
-              borderRadius: '4px',
+              width: 32,
+              height: 32,
+              borderRadius: '6px',
               backgroundColor: 'var(--bg-tertiary)',
               display: 'flex',
               alignItems: 'center',
@@ -135,15 +147,22 @@ function PluginCard({
                 onError={() => setIconError(true)}
               />
             ) : (
-              <Package size={10} style={{ color: 'var(--text-tertiary)' }} />
+              <Package size={14} style={{ color: 'var(--text-tertiary)' }} />
             )}
           </div>
-          <span className="text-xs truncate" title={plugin.name} style={{ color: 'var(--text-primary)' }}>
-            {plugin.name}
-          </span>
-          <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-            v{plugin.version}
-          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs truncate" title={plugin.name} style={{ color: 'var(--text-primary)' }}>
+                {plugin.name}
+              </span>
+              <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                v{plugin.version}
+              </span>
+            </div>
+            <div className="mt-0.5 flex items-center gap-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+              <User size={9} /> {plugin.author}
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {isInstalled ? (
@@ -151,10 +170,10 @@ function PluginCard({
               <span
                 style={{
                   fontSize: '10px',
-                  color: '#10B981',
+                  color: 'var(--status-success)',
                   padding: '2px 8px',
                   borderRadius: '999px',
-                  backgroundColor: 'rgba(16,185,129,0.1)',
+                  backgroundColor: 'color-mix(in srgb, var(--status-success) 10%, transparent)',
                   fontWeight: 500,
                 }}
               >
@@ -162,11 +181,12 @@ function PluginCard({
               </span>
               <button
                 onClick={(e) => { e.stopPropagation(); onReadme(plugin); }}
-                className="pd-btn px-1.5 py-1 rounded text-[10px]"
+                className="pd-btn p-1 rounded text-[10px]"
                 style={{ color: 'var(--accent)' }}
                 title="查看 README"
+                aria-label={`查看 ${plugin.name} 的 README`}
               >
-                📖
+                <BookOpen size={12} />
               </button>
             </>
           ) : (
@@ -176,7 +196,7 @@ function PluginCard({
               className="pd-btn px-2 py-1 rounded text-[10px] transition-all"
               style={{
                 backgroundColor: 'var(--accent)',
-                color: '#fff',
+                color: 'var(--text-on-accent)',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 3,
@@ -194,8 +214,16 @@ function PluginCard({
         </div>
       </div>
 
-      {/* 分割线 */}
-      <div className="my-1.5" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
+      {/* 用边框绘制分隔线，避免独立 1px 背景条在半像素定位下出现粗细跳变 */}
+      <div
+        aria-hidden="true"
+        style={{
+          width: '100%',
+          height: 0,
+          margin: '8px 0',
+          borderTop: '1px solid var(--border)',
+        }}
+      />
 
       {/* 描述 */}
       <p
@@ -211,10 +239,6 @@ function PluginCard({
 
       {/* 元信息：作者 + 大小 + 最小版本 */}
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1">
-          <User size={10} style={{ color: 'var(--text-tertiary)' }} />
-          <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>{plugin.author}</span>
-        </div>
         {plugin.size && (
           <div className="flex items-center gap-1">
             <HardDrive size={10} style={{ color: 'var(--text-tertiary)' }} />
@@ -245,9 +269,9 @@ function SkeletonCard() {
         <div className="flex items-center gap-2 flex-1">
           <div
             style={{
-              width: 20,
-              height: 20,
-              borderRadius: '4px',
+              width: 32,
+              height: 32,
+              borderRadius: '6px',
               backgroundColor: 'var(--bg-tertiary)',
             }}
           />
@@ -306,7 +330,9 @@ export const OnlinePluginStore: React.FC<{
   searchQuery?: string;
   /** 统计信息变更回调，用于父组件在标题行显示 */
   onStatsChange?: (total: number, filtered: number) => void;
-}> = ({ searchQuery: externalSearchQuery, onStatsChange }) => {
+  /** 外部强制刷新索引后递增，触发当前列表重新读取缓存。 */
+  refreshKey?: number;
+}> = ({ searchQuery: externalSearchQuery, onStatsChange, refreshKey = 0 }) => {
   const [plugins, setPlugins] = useState<OnlinePluginInfo[]>([]);
   const [localVersions, setLocalVersions] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -336,7 +362,7 @@ export const OnlinePluginStore: React.FC<{
       }
       setLocalVersions(localMap);
     } catch (err) {
-      const friendly = formatUserFriendlyError(errorMessage(err));
+      const friendly = formatUserFriendlyError(errorMessage(err), 'load');
       setError(friendly.title + '：' + friendly.detail);
     } finally {
       setLoading(false);
@@ -358,7 +384,7 @@ export const OnlinePluginStore: React.FC<{
     // 不在 effect 体内同步调用：fetchPlugins 开头就 setLoading(true)，属于"effect 体内同步 setState"
     // （`react-hooks/set-state-in-effect` 判为级联渲染）。推到微任务 —— 同一个任务、早于绘制，行为一致。
     void Promise.resolve().then(() => fetchPlugins());
-  }, [fetchPlugins]);
+  }, [fetchPlugins, refreshKey]);
 
   // 统计信息变化时通知父组件
   useEffect(() => {
@@ -379,7 +405,7 @@ export const OnlinePluginStore: React.FC<{
       }
       setLocalVersions(localMap);
     } catch (err) {
-      const friendly = formatUserFriendlyError(errorMessage(err));
+      const friendly = formatUserFriendlyError(errorMessage(err), 'install');
       setError(friendly.title + '：' + friendly.detail);
     } finally {
       setInstallingId(null);
@@ -401,29 +427,12 @@ export const OnlinePluginStore: React.FC<{
 
       {/* 错误提示 */}
       {error && (
-        <div
-          className="flex items-center gap-2 px-3 py-2 rounded-lg mb-4"
-          style={{
-            backgroundColor: 'rgba(239,68,68,0.08)',
-            border: '1px solid rgba(239,68,68,0.2)',
-          }}
-        >
-          <AlertCircle size={14} style={{ color: '#EF4444', flexShrink: 0 }} />
-          <span style={{ fontSize: 'var(--fs-11)', color: '#EF4444', flex: 1 }}>{error}</span>
-          <button
-            onClick={fetchPlugins}
-            className="pd-btn"
-            style={{
-              fontSize: 'var(--fs-10)',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'rgba(239,68,68,0.1)',
-              color: '#EF4444',
-            }}
-          >
-            重试
-          </button>
-        </div>
+        <MarketLoadError
+          error={error}
+          fallbackTitle="插件市场加载失败"
+          onRetry={() => { void fetchPlugins(); }}
+          className="mb-4"
+        />
       )}
 
       {/* 加载中：骨架屏 */}

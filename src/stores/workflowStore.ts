@@ -112,6 +112,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
       set({ definitions, loading: false });
     } catch (err) {
       set({ error: errorMessage(err), loading: false });
+      throw err;
     }
   },
 

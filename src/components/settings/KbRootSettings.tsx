@@ -17,6 +17,7 @@ import { FolderOpen, Loader2, RotateCcw, AlertCircle } from 'lucide-react';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
+import { SettingsButton, SettingsSection } from './index';
 
 interface KbRootInfo {
   root: string;
@@ -120,13 +121,13 @@ export function KbRootSettings() {
   };
 
   return (
-    <div className="space-y-4">
-      <section>
-        <h3 className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>文件根目录</h3>
-
+    <div className="settings-page-stack">
+      <SettingsSection
+        title="文件根目录"
+        description="原文按内容去重后集中存放，多个知识库共享同一份。数据库只记录相对路径，切换目录不会影响条目与检索。"
+      >
         <div
-          className="rounded-lg px-3 py-2.5 space-y-2"
-          style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+          className="pd-settings-inline-note space-y-2"
         >
           <div className="flex items-center gap-2">
             <span className="shrink-0 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>当前</span>
@@ -160,49 +161,35 @@ export function KbRootSettings() {
             </div>
           )}
 
-          <div className="flex items-center gap-2 pt-0.5">
-            <button
+          <div className="pd-settings-actions pt-0.5">
+            <SettingsButton
               onClick={() => void handlePick()}
               disabled={busy}
-              className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
-              style={{
-                color: 'var(--text-secondary)',
-                backgroundColor: 'var(--bg-field)',
-                border: '1px solid var(--border)',
-                opacity: busy ? 0.5 : 1,
-              }}
+              icon={busy ? <Loader2 size={11} className="animate-spin" /> : <FolderOpen size={11} />}
             >
-              {busy ? <Loader2 size={11} className="animate-spin" /> : <FolderOpen size={11} />}
               更改目录…
-            </button>
-            <button
+            </SettingsButton>
+            <SettingsButton
               onClick={() => void handleRestoreDefault()}
               disabled={busy || !info?.isCustom}
-              className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
-              style={{
-                color: 'var(--text-secondary)',
-                backgroundColor: 'var(--bg-field)',
-                border: '1px solid var(--border)',
-                opacity: busy || !info?.isCustom ? 0.5 : 1,
-              }}
+              icon={<RotateCcw size={11} />}
               title="恢复到默认位置：全局工作区/Knowledge"
             >
-              <RotateCcw size={11} />
               恢复默认
-            </button>
+            </SettingsButton>
           </div>
         </div>
 
-        <div className="mt-2 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+        <div className="pd-settings-note mt-2">
           原文按内容去重后集中存放（<code>files/&lt;内容指纹&gt;-&lt;原名&gt;</code>），多个知识库共享同一份。
           库里只记相对路径，所以换目录不会让条目与检索失效。注意 <b>MEMORY.db 不随该目录移动</b> —— 它必须留在本地，
           放到同步盘会损坏数据库。
         </div>
-      </section>
+      </SettingsSection>
 
       {failures.length > 0 && (
         <div
-          className="rounded-lg px-3 py-2.5 text-[11px] space-y-1"
+          className="rounded-md px-3 py-2.5 text-[11px] space-y-1"
           style={{ backgroundColor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--text-secondary)' }}
         >
           <div className="flex items-center gap-1.5" style={{ color: 'var(--status-danger, #EF4444)' }}>
@@ -226,7 +213,7 @@ export function KbRootSettings() {
           onClick={() => setPending(null)}
         >
           <div
-            className="w-[520px] max-w-[92vw] rounded-xl shadow-2xl"
+            className="w-[520px] max-w-[92vw] rounded-lg shadow-2xl"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -240,7 +227,7 @@ export function KbRootSettings() {
               <div>
                 当前目录里有 <b>{info.fileCount} 个原文文件</b>（{fmtSize(info.bytes)}）。要怎么处理它们？
               </div>
-              <div className="rounded-lg px-3 py-2 space-y-1" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+              <div className="rounded-md px-3 py-2 space-y-1" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
                 <div><b>迁移并切换</b>：先搬到新目录，全部成功才生效；失败则不改设置并列出失败项（可重试）。</div>
                 <div><b>仅切换</b>：立刻生效、不动文件；旧原文留在原处，它们的「打开原文」会失效，
                   但条目与检索不受影响（正文早已入库）。适合想把文件留在原处慢慢搬的情况。</div>
@@ -248,28 +235,24 @@ export function KbRootSettings() {
             </div>
             <div className="px-5 py-3 flex items-center gap-2" style={{ borderTop: '1px solid var(--border)' }}>
               <div className="flex-1" />
-              <button
+              <SettingsButton
                 onClick={() => setPending(null)}
-                className="pd-btn px-3 py-1.5 rounded-lg text-xs"
-                style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+                variant="ghost"
               >
                 取消
-              </button>
-              <button
+              </SettingsButton>
+              <SettingsButton
                 onClick={() => void apply(pending.root, false)}
-                className="pd-btn px-3 py-1.5 rounded-lg text-xs"
-                style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
                 title="只改设置，不搬文件"
               >
                 仅切换
-              </button>
-              <button
+              </SettingsButton>
+              <SettingsButton
                 onClick={() => void apply(pending.root, true)}
-                className="pd-btn px-3 py-1.5 rounded-lg text-xs"
-                style={{ backgroundColor: 'var(--accent)', color: '#fff', border: 'none' }}
+                variant="primary"
               >
                 迁移并切换
-              </button>
+              </SettingsButton>
             </div>
           </div>
         </div>

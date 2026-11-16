@@ -112,7 +112,6 @@ export function SessionUsageBar({
       className="flex items-center gap-2 px-4 py-1 text-[10px]"
       style={{ color: 'var(--text-tertiary)' }}
     >
-      <span>本会话用量（含历史累计）</span>
       <span>调用 {fmt(acc.callCount)}</span>
       <span style={{ opacity: 0.5 }}>|</span>
       <span title="输入按「总量/未命中」展示；缓存命中是单独一桶">输入 {fmt(acc.prompt + acc.cacheRead + acc.cacheWrite)}/{fmt(acc.prompt)}(未命中) tok</span>

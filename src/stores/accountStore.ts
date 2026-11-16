@@ -6,7 +6,7 @@
  * 令牌由 Rust 侧加密保存，前端只拿到「账号 + 等级 + 已解锁能力」。
  *
  * 新收费策略：**本地能力不设限**（本地功能对所有登录 / 未登录状态一律开放），
- * 仅**云端服务与内容**仍按能力门控（目前只有 `sync.cloud`）。
+ * 云端服务、团队治理与服务权益由平台登记，产品端只负责按能力键展示和消费。
  */
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
@@ -18,24 +18,50 @@ import { useEnclaveKbStore } from './enclaveKbStore';
 /** 可打开的平台页面：升级会员 / 会员中心（账号设置）/ 组织页 */
 export type PlatformPage = 'upgrade' | 'portal' | 'organizations';
 
-/** 云端能力键（平台侧登记，产品端只消费）：本地能力已全部开放，只剩云同步受门控 */
+/** 客户端可主动推荐的付费档位 */
+export type UpgradePlanKey = 'pro' | 'team';
+
+/** 打开升级页时携带的上下文，用于官网直接定位推荐档位与能力 */
+export interface UpgradeContext {
+  plan?: UpgradePlanKey;
+  capability?: string;
+  source?: string;
+}
+
+/** 打开组织订阅页时携带的上下文，确保购买动作落在正确的组织上 */
+export interface OrganizationUpgradeContext {
+  organizationId?: number;
+  capability?: string;
+  source?: string;
+}
+
+/** 云端能力键（平台侧登记，产品端只消费）：本地能力已全部开放，个人云同步按能力门控 */
 export const CAP_CLOUD_SYNC = 'sync.cloud';
+/** 从其他设备发起本机工作流（仅专业版 / 团队版） */
+export const CAP_WORKFLOW_REMOTE_RUN = 'workflow.remote-run';
+/** 团队席位与成员治理（仅团队版） */
+export const CAP_TEAM_MEMBERS = 'team.members';
+/** 团队共享空间（仅团队版；组织共享工作流会校验该能力） */
+export const CAP_TEAM_SHARED_SPACE = 'team.shared-space';
+/** 团队用量看板（仅团队版；向组织上报用量必须先具备该能力） */
+export const CAP_TEAM_USAGE_BOARD = 'team.usage-board';
 
 /**
- * 已知云端能力键的中文名。
+ * 已知平台能力键的中文名。
  *
  * **与平台登记表（`app/src/services/entitlements/capabilities.ts` 的 `label`）保持一致**——
  * 平台是唯一来源，这里只做展示；新增能力键时两边都要补，否则会显示成裸 key。
  * 未知键回退显示键本身。
  */
 const CAPABILITY_LABELS: Record<string, string> = {
-  'sync.cloud': '云同步',
+  'sync.cloud': '个人云同步',
+  'workflow.remote-run': '远程发起工作流',
   'team.members': '团队席位与成员治理',
   'team.audit': '团队操作审计',
   'team.shared-space': '团队共享空间',
   'team.usage-board': '团队用量看板',
-  'team.provider-credentials': '团队共享凭据',
   'sso.login': '企业单点登录',
+  'support.priority': '优先在线服务',
 };
 
 export function capabilityLabel(key: string): string {
@@ -80,6 +106,15 @@ interface AccountStoreState {
    * 点开即用。不要改用应用内 WebView —— 那是另一套 Cookie jar，会要求重新登录。
    */
   openPlatform: (page: PlatformPage) => Promise<void>;
+  /** 打开组织订阅页，并携带当前组织、缺失能力与来源；不会转成个人团队版购买 */
+  openOrganization: (context?: OrganizationUpgradeContext) => Promise<void>;
+  /**
+   * 打开带购买理由的升级页。
+   *
+   * 官网据此高亮对应档位与能力，避免用户从「个人云同步 / 组织共享」受阻后
+   * 只看到一个没有上下文的通用价格表。
+   */
+  openUpgrade: (context?: UpgradeContext) => Promise<void>;
   /** 取消等待（只影响界面；真正的回调结果会被丢弃） */
   cancelLogin: () => void;
 }
@@ -104,12 +139,13 @@ function resetEnclaveCaches() {
 
 async function reloadEnclaveForAccount() {
   const org = useEnclaveOrgStore.getState();
-  if (!(await org.ensureIdentity())) return;
-  await useEnclaveOrgStore.getState().loadOrgs();
-  // 新账号首次登录本机：快照里还没有它的组织，主动拉一轮
-  if (useEnclaveOrgStore.getState().orgs.length === 0) {
-    await useEnclaveOrgStore.getState().refresh();
-  }
+  await org.ensureOrgs();
+}
+
+async function openPlatformPath(path: string) {
+  // 基址只在 Rust 一处维护，这里按页面拼路径
+  const base = await invoke<string>('account_platform_base');
+  await openUrl(`${base.replace(/\/+$/, '')}${path}`);
 }
 
 export const useAccountStore = create<AccountStoreState>((set, get) => ({
@@ -188,15 +224,44 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
 
   openPlatform: async (page) => {
     try {
-      // 基址只在 Rust 一处维护，这里按页面拼路径
-      const base = await invoke<string>('account_platform_base');
       const path =
         page === 'upgrade'
           ? '/account/upgrade/'
           : page === 'organizations'
             ? '/account/organizations/'
             : '/account/';
-      await openUrl(`${base.replace(/\/+$/, '')}${path}`);
+      await openPlatformPath(path);
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
+  },
+
+  openOrganization: async (context) => {
+    try {
+      const params = new URLSearchParams();
+      if (context?.organizationId && Number.isInteger(context.organizationId)) {
+        params.set('org', String(context.organizationId));
+        params.set('tab', 'billing');
+      }
+      if (context?.capability) {
+        params.set('intent', context.capability);
+      }
+      if (context?.source) params.set('source', context.source);
+      const query = params.toString();
+      await openPlatformPath(`/account/organizations/${query ? `?${query}` : ''}`);
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
+  },
+
+  openUpgrade: async (context) => {
+    try {
+      const params = new URLSearchParams();
+      if (context?.plan) params.set('plan', context.plan);
+      if (context?.capability) params.set('capability', context.capability);
+      if (context?.source) params.set('source', context.source);
+      const query = params.toString();
+      await openPlatformPath(`/account/upgrade/${query ? `?${query}` : ''}`);
     } catch (e) {
       set({ error: errorMessage(e) });
     }

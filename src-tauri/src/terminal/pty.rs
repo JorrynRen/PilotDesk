@@ -34,7 +34,7 @@ impl TerminalProcess {
     ) -> Result<(Self, StdoutStream), String> {
         #[cfg(target_os = "windows")]
         {
-            let (proc, stdout, _stderr, _mode) =
+            let (proc, stdout) =
                 super::conpty_process::spawn_with_conpty(cmdline, cwd, cols, rows)?;
             Ok((Self::Windows(proc), StdoutStream::Windows(stdout)))
         }
@@ -81,16 +81,6 @@ impl TerminalProcess {
             Self::Windows(p) => p.kill(),
             #[cfg(not(target_os = "windows"))]
             Self::Unix(p) => p.kill(),
-        }
-    }
-
-    /// 关闭 stdout 读端以触发 EOF（Unix 无此概念，no-op）
-    pub fn close_stdout_pipe(&self) {
-        match self {
-            #[cfg(target_os = "windows")]
-            Self::Windows(p) => p.close_stdout_pipe(),
-            #[cfg(not(target_os = "windows"))]
-            Self::Unix(_) => {}
         }
     }
 }

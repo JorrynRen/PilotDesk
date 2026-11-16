@@ -7,7 +7,6 @@
 //! 两版均含二进制检测（`crate::is_binary_bytes`），统一保留。
 //! 行为合并规则：二进制检测 → 系统关键文件防护 → 路径展开 → 分段/截断读取。
 
-use crate::tools::deps::expand_user_path;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
 
@@ -79,15 +78,7 @@ limit（读取字节数）分段读取。"
                 return Err("安全限制：不允许读取系统关键文件".to_string());
             }
 
-            // 路径预处理：展开 ~/ 与 %USERPROFILE%
-            let expanded = expand_user_path(raw_path);
-
-            let file_path = std::path::Path::new(&expanded);
-            let abs_path = if file_path.is_absolute() {
-                file_path.to_path_buf()
-            } else {
-                std::path::Path::new(&cwd).join(&expanded)
-            };
+            let abs_path = crate::utils::paths::normalize_absolute_path(raw_path, &cwd);
 
             let bytes = std::fs::read(&abs_path)
                 .map_err(|e| format!("读取文件失败 ({}): {}", abs_path.display(), e))?;

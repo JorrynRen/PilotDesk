@@ -24,6 +24,7 @@ struct HostAcpConfig {
     args: Vec<String>,
     env: Option<serde_json::Map<String, Value>>,
     cwd: String,
+    host_resume_cwd: Option<String>,
 }
 
 /// 门禁所需的全部输入。
@@ -79,13 +80,21 @@ fn prepare(conn: &Connection, agent_type: &str, cwd: Option<&str>) -> Result<Pre
             .to_string_lossy()
             .to_string()
     };
-    let cwd = match cwd.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(dir) if std::path::Path::new(dir).is_dir() => dir.to_string(),
+    let requested_cwd = cwd.map(str::trim).filter(|s| !s.is_empty());
+    let host_resume_cwd = requested_cwd
+        .map(|dir| {
+            crate::utils::paths::normalize_absolute_path(dir, "")
+                .to_string_lossy()
+                .to_string()
+        })
+        .filter(|dir| std::path::Path::new(dir).is_dir());
+    let cwd = match requested_cwd {
+        Some(_) if host_resume_cwd.is_some() => host_resume_cwd.clone().unwrap_or_default(),
         Some(dir) => {
             log::warn!(
                 "[host_sessions] 忽略不存在的工作目录，改用全局工作区: agent={} cwd={}",
                 agent_type,
-                dir
+                crate::utils::paths::normalize_absolute_path(dir, "").display()
             );
             fallback_cwd()
         }
@@ -99,6 +108,7 @@ fn prepare(conn: &Connection, agent_type: &str, cwd: Option<&str>) -> Result<Pre
             args,
             env,
             cwd,
+            host_resume_cwd,
         },
         agent_config,
         conn_json: info.conn,
@@ -213,10 +223,15 @@ pub async fn acp_import_host_session(
         &local_session_id,
         &host_session_id,
     )?;
-    // 把**实际使用**的工作目录写回会话：这轮 ACP 进程就是在这个目录下起的，
-    // 后续发消息的 `session/resume|load` 也会拿会话里的 cwd 去恢复，两者必须一致，
-    // 否则宿主可能认不出该会话（原 cwd 被删/挪走时尤其明显）→ 退回 session/new、上下文丢失。
-    crate::commands::session::update_session_cwd_inner(&conn, &local_session_id, &cfg.cwd)?;
+    // 仅对有效的宿主恢复目录写专用字段。目录不存在时本轮已回退全局工作空间，
+    // 不能把这个兜底路径误记成宿主会话原始 cwd。
+    if let Some(host_resume_cwd) = cfg.host_resume_cwd.as_deref() {
+        crate::commands::session::update_host_resume_cwd_inner(
+            &conn,
+            &local_session_id,
+            host_resume_cwd,
+        )?;
+    }
 
     Ok(messages.len())
 }

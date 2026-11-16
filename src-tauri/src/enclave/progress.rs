@@ -56,13 +56,13 @@ fn lock_state(conn: &Connection, task_id: &str) -> Result<(bool, Option<String>)
         || status == tasks::STATUS_ARCHIVED
         || status == tasks::STATUS_CANCELLED
     {
-        return Ok((true, Some("任务已完成、归档或作废，不能再添加过程记录".to_string())));
-    }
-    if final_report_submitted(conn, task_id)? {
         return Ok((
             true,
-            Some("已提交完成汇报，不能再添加过程记录".to_string()),
+            Some("任务已完成、归档或作废，不能再添加过程记录".to_string()),
         ));
+    }
+    if final_report_submitted(conn, task_id)? {
+        return Ok((true, Some("已提交完成汇报，不能再添加过程记录".to_string())));
     }
     Ok((false, None))
 }
@@ -129,10 +129,7 @@ pub fn add_progress(
         return Err(if status == tasks::STATUS_PENDING {
             "任务尚未开始，请先点「开始」再记录过程".to_string()
         } else {
-            format!(
-                "当前状态（{}）下不能记录过程",
-                tasks::status_label(&status)
-            )
+            format!("当前状态（{}）下不能记录过程", tasks::status_label(&status))
         });
     }
     let content = content.trim();
@@ -155,14 +152,7 @@ pub fn add_progress(
     .map_err(|e| format!("保存过程记录失败：{}", e))?;
 
     for src in attachments {
-        crate::enclave::files::attach_progress_file(
-            conn,
-            org_id,
-            actor,
-            task_id,
-            src,
-            &id,
-        )?;
+        crate::enclave::files::attach_progress_file(conn, org_id, actor, task_id, src, &id)?;
     }
 
     Ok(ProgressView {

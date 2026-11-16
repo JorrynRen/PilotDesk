@@ -94,7 +94,9 @@ pub fn list(
          WHERE org_id = ?1 AND user_id = ?2
          ORDER BY created_at DESC LIMIT ?3"
     };
-    let mut stmt = conn.prepare(sql).map_err(|e| format!("查询通知失败：{}", e))?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("查询通知失败：{}", e))?;
     let rows = stmt
         .query_map(params![org_id, user_id, limit], |r| {
             Ok(NotificationView {
@@ -209,7 +211,11 @@ pub fn sweep_due_reminders(conn: &Connection, now: i64) -> Result<usize, String>
     let mut sent = 0usize;
     for (org_id, task_id, title, assignee_id, due_date) in rows {
         let overdue = due_date < now;
-        let kind = if overdue { "task.overdue" } else { "task.due_soon" };
+        let kind = if overdue {
+            "task.overdue"
+        } else {
+            "task.due_soon"
+        };
         let dup: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notifications
@@ -225,7 +231,11 @@ pub fn sweep_due_reminders(conn: &Connection, now: i64) -> Result<usize, String>
         let body = format!(
             "「{}」{}（截止 {}）",
             title,
-            if overdue { "已逾期" } else { "将在 24 小时内截止" },
+            if overdue {
+                "已逾期"
+            } else {
+                "将在 24 小时内截止"
+            },
             due_text(due_date)
         );
         let inserted = notify(
@@ -234,7 +244,11 @@ pub fn sweep_due_reminders(conn: &Connection, now: i64) -> Result<usize, String>
             "",
             Some(&assignee_id),
             kind,
-            if overdue { "任务已逾期" } else { "任务即将到期" },
+            if overdue {
+                "任务已逾期"
+            } else {
+                "任务即将到期"
+            },
             &body,
             "task",
             &task_id,
@@ -284,15 +298,55 @@ mod tests {
         let store = store();
         store
             .with_conn(|c| {
-                notify(c, "1", "u1", Some("u1"), "task.assigned", "t", "b", "task", "t1")?;
-                notify(c, "1", "u1", Some("u2"), "task.assigned", "t", "b", "task", "t1")?;
-                notify(c, "1", "u1", Some("u2"), "task.assigned", "t", "b", "task", "t1")?;
+                notify(
+                    c,
+                    "1",
+                    "u1",
+                    Some("u1"),
+                    "task.assigned",
+                    "t",
+                    "b",
+                    "task",
+                    "t1",
+                )?;
+                notify(
+                    c,
+                    "1",
+                    "u1",
+                    Some("u2"),
+                    "task.assigned",
+                    "t",
+                    "b",
+                    "task",
+                    "t1",
+                )?;
+                notify(
+                    c,
+                    "1",
+                    "u1",
+                    Some("u2"),
+                    "task.assigned",
+                    "t",
+                    "b",
+                    "task",
+                    "t1",
+                )?;
                 let rows = list(c, "1", "u2", 20, false)?;
                 assert_eq!(rows.len(), 1);
                 mark_read(c, "1", "u2", &[])?;
                 assert_eq!(list(c, "1", "u2", 20, true)?.len(), 0);
                 // 已读后同一对象可以再提醒（例如再次退回）
-                notify(c, "1", "u1", Some("u2"), "task.assigned", "t", "b", "task", "t1")?;
+                notify(
+                    c,
+                    "1",
+                    "u1",
+                    Some("u2"),
+                    "task.assigned",
+                    "t",
+                    "b",
+                    "task",
+                    "t1",
+                )?;
                 assert_eq!(list(c, "1", "u2", 20, true)?.len(), 1);
                 Ok(())
             })
@@ -340,8 +394,28 @@ mod tests {
         let store = store();
         store
             .with_conn(|c| {
-                notify(c, "1", "u1", Some("u2"), "comment.new", "t", "b", "task", "t1")?;
-                notify(c, "1", "u1", Some("u2"), "report.submitted", "t", "b", "task", "t2")?;
+                notify(
+                    c,
+                    "1",
+                    "u1",
+                    Some("u2"),
+                    "comment.new",
+                    "t",
+                    "b",
+                    "task",
+                    "t1",
+                )?;
+                notify(
+                    c,
+                    "1",
+                    "u1",
+                    Some("u2"),
+                    "report.submitted",
+                    "t",
+                    "b",
+                    "task",
+                    "t2",
+                )?;
                 let rows = list(c, "1", "u2", 20, false)?;
                 assert_eq!(rows.len(), 2);
                 // 别人的通知删不掉

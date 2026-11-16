@@ -78,6 +78,13 @@ interface EnclaveOrgState {
   loadOrgs: () => Promise<void>;
   /** 用当前登录身份刷新本机身份；平台不可达时按已有身份离线继续（返回 true） */
   ensureIdentity: () => Promise<boolean>;
+  /**
+   * 确保当前账号的组织清单可用，并返回最终选中的组织 id。
+   *
+   * `forceRefresh=true` 用于用户手动刷新：等待平台快照写入本地后再读组织；
+   * 否则先读本机快照，只有清单为空时才补拉一轮。
+   */
+  ensureOrgs: (forceRefresh?: boolean) => Promise<string>;
   /** 账号切换 / 退出：清空全部本地团队缓存 */
   reset: () => void;
   selectOrg: (id: string) => Promise<void>;
@@ -141,6 +148,11 @@ interface EnclaveOrgState {
   rejectLanTransfer: (orgId: string, transferId: string) => Promise<boolean>;
 }
 
+/** 让较早发出的本地组织查询晚到时不能覆盖新一轮刷新结果。 */
+let orgListGeneration = 0;
+/** 同一时刻只跑一轮平台快照刷新；多个页面的手动刷新共享同一次结果。 */
+let orgRefreshInFlight: Promise<void> | null = null;
+
 export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   orgs: [],
   activeOrgId: '',
@@ -182,8 +194,21 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     }
   },
 
+  ensureOrgs: async (forceRefresh = false) => {
+    if (!get().identityVerified && !(await get().ensureIdentity())) return '';
+
+    if (forceRefresh) {
+      await get().refresh();
+    } else {
+      await get().loadOrgs();
+      if (get().orgs.length === 0) await get().refresh();
+    }
+    return get().activeOrgId;
+  },
+
   /** 账号切换 / 退出：清空全部本地团队缓存，避免沿用上一个账号的数据。 */
   reset: () => {
+    orgListGeneration += 1;
     set({
       orgs: [],
       activeOrgId: '',
@@ -212,9 +237,11 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
 
   /** 拉组织列表；默认选中首个（或保持原有选中项）。 */
   loadOrgs: async () => {
+    const generation = ++orgListGeneration;
     set({ loading: true, error: null });
     try {
       const orgs = await invoke<OrgSnapshotView[]>('enclave_org_list');
+      if (generation !== orgListGeneration) return;
       set({ orgs });
       const next = orgs.some((o) => o.orgId === get().activeOrgId)
         ? get().activeOrgId
@@ -245,16 +272,28 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
 
   /** 触发一轮全量刷新（后端联网拉平台），成功后重拉列表。 */
   refresh: async () => {
-    set({ loading: true, error: null });
+    if (orgRefreshInFlight) return orgRefreshInFlight;
+
+    const request = (async () => {
+      set({ loading: true, error: null });
+      try {
+        const outcome = await invoke<SnapshotOutcome>('enclave_snapshot_refresh', {
+          orgId: null,
+        });
+        set({ lastRefresh: outcome });
+      } catch (e) {
+        set({ error: errorMessage(e), loading: false });
+        return;
+      }
+      await get().loadFreshness();
+      await get().loadOrgs();
+    })();
+    orgRefreshInFlight = request;
     try {
-      const outcome = await invoke<SnapshotOutcome>('enclave_snapshot_refresh', { orgId: null });
-      set({ lastRefresh: outcome });
-    } catch (e) {
-      set({ error: errorMessage(e), loading: false });
-      return;
+      await request;
+    } finally {
+      if (orgRefreshInFlight === request) orgRefreshInFlight = null;
     }
-    await get().loadFreshness();
-    await get().loadOrgs();
   },
 
   loadFreshness: async () => {

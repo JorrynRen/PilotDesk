@@ -15,6 +15,7 @@ use crate::api_agent::system_prompt::get_pilotdesk_config_dir;
 use crate::utils::errors::AppError;
 use crate::utils::paths;
 use crate::DbState;
+use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::State;
@@ -1750,11 +1751,7 @@ fn enrich_context(
 ///
 /// 归因粒度只到"知识库"这一层，**记不到"哪次会话触发的沉淀"**：`kb_*` 命令的入参里没有
 /// 会话/房间上下文（要更细就得让前端把 sessionId 一起传下来）。
-fn record_kb_usage_db(
-    db: &DbState,
-    kb_id: &str,
-    model: &crate::api_agent::kb_llm::KbModel,
-) {
+fn record_kb_usage_db(db: &DbState, kb_id: &str, model: &crate::api_agent::kb_llm::KbModel) {
     let Ok(conn) = db.pool.get() else {
         log::warn!("[KB] 取不到连接，本次用量未记账");
         return;
@@ -1838,7 +1835,7 @@ pub struct SedimentOutcome {
     pub count: usize,
     /// 对话过长被截断（只整理了前 `DIGEST_MAX_CHARS` 字）—— UI 要说出来，别让用户以为整段都整理了
     pub truncated: bool,
-    /// `count == 0` 时的原因：`busy`（同会话在途）/ `no_new`（没有新增）/ `no_base`（没有知识库）/ `off`（自动开关关闭）/ `too_soon`（距上次太近）/ `error`
+    /// `count == 0` 时的原因：`busy`（同会话在途）/ `no_new`（没有新增）/ `no_base`（没有知识库）/ `off`（自动开关关闭）/ `too_soon`（距上次太近）/ `workflow`（工作流内部会话）/ `inactive`（归档或已删除）/ `error`
     pub skipped: String,
 }
 
@@ -2053,11 +2050,35 @@ pub async fn sediment_session(
 /// 失败只记日志 —— 自动沉淀是增益，绝不能影响用户正在做的事。这也是它与显式命令的差别：
 /// 显式命令（`kb_sediment_session`）直接调核心、如实报错。
 pub async fn auto_sediment_session(state: &DbState, session_id: &str) -> SedimentOutcome {
-    // 闸门 ①：开关（默认开）
+    // 闸门 ①：开关（默认开）+ 只允许仍在使用的普通用户会话。
+    //
+    // 工作流 Agent 节点会创建内部会话；它们由工作流引擎管理，不应进入“用户工作沉淀”。
+    // 前端扫描也会过滤，但这里再守一道：自动触发是后台路径，不能依赖单一调用方。
     match state.pool.get() {
         Ok(conn) => {
             if !kb_auto_enabled(&conn) {
                 return SedimentOutcome::skip("off");
+            }
+            let row = conn
+                .query_row(
+                    "SELECT status, origin FROM sessions WHERE id = ?1",
+                    rusqlite::params![session_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+                )
+                .optional();
+            match row {
+                Ok(Some((status, _))) if status != "active" => {
+                    return SedimentOutcome::skip("inactive");
+                }
+                Ok(Some((_, Some(origin)))) if origin.starts_with("workflow") => {
+                    return SedimentOutcome::skip("workflow");
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => return SedimentOutcome::skip("inactive"),
+                Err(e) => {
+                    log::warn!("[KB] 自动沉淀跳过：读取会话状态失败（{}）", e);
+                    return SedimentOutcome::skip("error");
+                }
             }
         }
         Err(e) => {
@@ -2352,7 +2373,8 @@ fn ingest_capability_db(db: &DbState) -> IngestCapabilityView {
     match db.pool.get() {
         Ok(conn) => match crate::api_agent::kb_llm::resolve_kb_model(&conn) {
             Ok(m) => {
-                let trust = crate::commands::api_provider::provider_trust_domain(&conn, &m.provider_id);
+                let trust =
+                    crate::commands::api_provider::provider_trust_domain(&conn, &m.provider_id);
                 view.can_process = if trust == crate::enclave::gate::TrustDomain::Internal {
                     "local".into()
                 } else {
@@ -2534,19 +2556,17 @@ async fn process_ingest_row(
                 .await
                 .map(|_| ())
         }
-        "cloud" => {
-            cloud_ingest_doc_impl(
-                db,
-                &row.kb_id,
-                s("accountId").ok_or_else(|| "待整理记录缺少云文档账号".to_string())?,
-                s("namespace").unwrap_or(""),
-                s("docId").ok_or_else(|| "待整理记录缺少云文档 id".to_string())?,
-                s("name"),
-                false,
-            )
-            .await
-            .map(|_| ())
-        }
+        "cloud" => cloud_ingest_doc_impl(
+            db,
+            &row.kb_id,
+            s("accountId").ok_or_else(|| "待整理记录缺少云文档账号".to_string())?,
+            s("namespace").unwrap_or(""),
+            s("docId").ok_or_else(|| "待整理记录缺少云文档 id".to_string())?,
+            s("name"),
+            false,
+        )
+        .await
+        .map(|_| ()),
         "snippet" => {
             let value = s("value")
                 .ok_or_else(|| "待整理记录缺少片段正文".to_string())?

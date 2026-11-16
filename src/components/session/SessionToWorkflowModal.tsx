@@ -634,7 +634,7 @@ export function SessionToWorkflowModal({ open, sessionId, sessionTitle, onClose,
                       : { color: 'var(--text-tertiary)', border: '1px solid transparent' }}
                     onClick={extractWithAi}
                     disabled={extracting || switching}
-                    title="让模型读取本会话并整理任务清单（需要配置了提供商的 API 会话）"
+                    title="使用当前会话的 Agent 读取本会话并整理任务清单"
                   >
                     {extracting ? '提炼中…' : '模型提炼'}
                   </button>

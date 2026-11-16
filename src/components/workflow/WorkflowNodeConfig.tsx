@@ -743,6 +743,8 @@ const MappingEditor: React.FC<{
                     />
                     <div
                       ref={dropdownRef}
+                      role="menu"
+                      className="pd-menu"
                       style={{
                         position: 'absolute',
                         right: 0,
@@ -751,11 +753,6 @@ const MappingEditor: React.FC<{
                         minWidth: 200,
                         maxHeight: 200,
                         overflow: 'auto',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--border)',
-                        background: 'var(--bg-primary)',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                        fontSize: 'var(--fs-11)',
                       }}
                     >
                       <input
@@ -763,19 +760,9 @@ const MappingEditor: React.FC<{
                         value={searchQuery}
                         onChange={(e) => { e.stopPropagation(); setSearchQuery(e.target.value); }}
                         placeholder="搜索字段…"
+                        className="pd-menu-search"
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setActiveDropdown(null); } }}
-                        style={{
-                          width: '100%',
-                          padding: '6px 8px',
-                          fontSize: 'var(--fs-11)',
-                          border: 'none',
-                          borderBottom: '1px solid var(--border)',
-                          outline: 'none',
-                          background: 'var(--bg-primary)',
-                          color: 'var(--text-primary)',
-                          boxSizing: 'border-box',
-                        }}
                       />
                       {(() => {
                         const showAll = searchQuery.length > 0;
@@ -816,6 +803,7 @@ const MappingEditor: React.FC<{
                             {/* 第一级：[序号] 阶段名 */}
                             {stage.group && (
                               <div
+                                className="pd-menu-label"
                                 onClick={() => {
                                   const k = 's:' + stage.group;
                                   setExpandedStages(prev => {
@@ -825,11 +813,6 @@ const MappingEditor: React.FC<{
                                   });
                                 }}
                                 style={{
-                                  padding: '4px 8px',
-                                  fontSize: 'var(--fs-10)',
-                                  color: 'var(--text-tertiary)',
-                                  fontWeight: 600,
-                                  borderBottom: '1px solid var(--border)',
                                   background: 'var(--bg-tertiary)',
                                   cursor: 'pointer',
                                   userSelect: 'none',
@@ -849,11 +832,10 @@ const MappingEditor: React.FC<{
                                   handleValueChange(key, opt.value);
                                   setActiveDropdown(null);
                                 }}
-                                className={opt.value === value?.[key] ? 'pd-option pd-option-selected' : 'pd-option'}
-                                style={{
-                                  padding: '6px 8px 6px 16px',
-                                  borderBottom: '1px solid var(--border)',
-                                }}
+                                role="menuitemradio"
+                                aria-checked={opt.value === value?.[key]}
+                                className="pd-menu-item"
+                                data-active={opt.value === value?.[key] ? 'true' : undefined}
                               >
                                 {opt.label}
                               </div>
@@ -862,6 +844,7 @@ const MappingEditor: React.FC<{
                             {stage.children && stage.children.map((nodeGroup, ni) => (
                               <div key={ni}>
                                 <div
+                                  className="pd-menu-label"
                                   onClick={() => {
                                     const k = 'n:' + stage.group + ':' + ni;
                                     setExpandedNodes(prev => {
@@ -871,11 +854,6 @@ const MappingEditor: React.FC<{
                                     });
                                   }}
                                   style={{
-                                    padding: '6px 8px 6px 16px',
-                                    fontSize: 'var(--fs-10)',
-                                    color: 'var(--text-secondary)',
-                                    fontWeight: 500,
-                                    borderBottom: '1px solid var(--border)',
                                     cursor: 'pointer',
                                     userSelect: 'none',
                                   }}
@@ -890,11 +868,10 @@ const MappingEditor: React.FC<{
                                       handleValueChange(key, opt.value);
                                       setActiveDropdown(null);
                                     }}
-                                    className={opt.value === value?.[key] ? 'pd-option pd-option-selected' : 'pd-option'}
-                                    style={{
-                                      padding: '5px 8px 5px 32px',
-                                      borderBottom: '1px solid var(--border)',
-                                    }}
+                                    role="menuitemradio"
+                                    aria-checked={opt.value === value?.[key]}
+                                    className="pd-menu-item"
+                                    data-active={opt.value === value?.[key] ? 'true' : undefined}
                                   >
                                     {opt.label}
                                   </div>
@@ -1086,6 +1063,9 @@ const SubflowSelector: React.FC<{
       {/* 下拉选项列表 */}
       {isOpen && (
         <div
+          role="listbox"
+          aria-label="选择工作流"
+          className="pd-menu"
           style={{
             position: 'absolute',
             top: '100%',
@@ -1093,11 +1073,7 @@ const SubflowSelector: React.FC<{
             right: 0,
             maxHeight: 200,
             overflowY: 'auto',
-            background: 'var(--bg-primary)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
             zIndex: 1000,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
           }}
         >
           {filtered.length === 0 && (
@@ -1112,6 +1088,8 @@ const SubflowSelector: React.FC<{
             return (
               <div
                 key={d.id}
+                role="option"
+                aria-selected={d.id === value}
                 onClick={() => {
                   if (!disabled) {
                     onChange(d.id);
@@ -1119,19 +1097,12 @@ const SubflowSelector: React.FC<{
                     setSearchQuery('');
                   }
                 }}
+                className="pd-menu-item"
+                data-active={d.id === value ? 'true' : undefined}
                 style={{
-                  padding: '6px 12px',
                   cursor: disabled ? 'not-allowed' : 'pointer',
                   opacity: disabled ? 0.4 : 1,
-                  color: 'var(--text-primary)',
-                  background: d.id === value ? 'var(--accent-light)' : 'transparent',
-                  fontSize: 'var(--fs-12)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
                 }}
-                onMouseEnter={(e) => { if (!disabled) (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'; }}
-                onMouseLeave={(e) => { if (!disabled) (e.currentTarget as HTMLElement).style.background = d.id === value ? 'var(--accent-light)' : 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'; }}
               >
                 <span style={{ color: 'var(--text-primary)' }}>{d.name}</span>
                 {isSelf && <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>(自身)</span>}
@@ -1724,6 +1695,8 @@ useEffect(() => {
                       </div>
                       {resumeDropdownOpen && (
                         <div
+          role="menu"
+          className="pd-menu"
                           style={{
                             position: 'absolute',
                             left: 0,
@@ -1732,11 +1705,6 @@ useEffect(() => {
                             zIndex: 100,
                             maxHeight: 200,
                             overflow: 'auto',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid var(--border)',
-                            background: 'var(--bg-primary)',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                            fontSize: 'var(--fs-11)',
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -1745,19 +1713,9 @@ useEffect(() => {
                             value={resumeSearchQuery}
                             onChange={(e) => { e.stopPropagation(); setResumeSearchQuery(e.target.value); }}
                             placeholder="搜索字段…"
+                            className="pd-menu-search"
                             onClick={(e) => e.stopPropagation()}
                             onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setResumeDropdownOpen(false); } }}
-                            style={{
-                              width: '100%',
-                              padding: '6px 8px',
-                              fontSize: 'var(--fs-11)',
-                              border: 'none',
-                              borderBottom: '1px solid var(--border)',
-                              outline: 'none',
-                              background: 'var(--bg-primary)',
-                              color: 'var(--text-primary)',
-                              boxSizing: 'border-box',
-                            }}
                           />
                           {(() => {
                             const showAll = resumeSearchQuery.length > 0;
@@ -1785,6 +1743,7 @@ useEffect(() => {
                             <div key={si}>
                               {stage.group && (
                                 <div
+                                  className="pd-menu-label"
                                   onClick={() => {
                                     const k = 'sr:' + stage.group;
                                     setExpandedResumeStages(prev => {
@@ -1793,7 +1752,7 @@ useEffect(() => {
                                       return next;
                                     });
                                   }}
-                                  style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)', cursor: 'pointer', userSelect: 'none' }}
+                                  style={{ background: 'var(--bg-tertiary)', cursor: 'pointer', userSelect: 'none' }}
                                 >
                                   {expandedResumeStages.has('sr:' + stage.group) ? '\u25bc' : '\u25b6'} {stage.kind === 'sessions' ? stage.group : `[step${si + 1}] ${stage.group}`}
                                 </div>
@@ -1801,16 +1760,17 @@ useEffect(() => {
                               {(showAll || expandedResumeStages.has('sr:' + stage.group)) && (
                               <>
                               {stage.options.length > 0 && stage.options.map((opt) => (
-                                <div key={opt.value} title={opt.title ?? opt.label} onClick={() => {
+                                <div key={opt.value} title={opt.title ?? opt.label} role="menuitemradio" aria-checked={opt.value === resumeRef} onClick={() => {
                                   // eslint-disable-next-line react-hooks/refs -- 事件回调，不在渲染期调用
                                   selectResumeRef(opt.value);
-                                }} className={opt.value === resumeRef ? 'pd-option pd-option-selected' : 'pd-option'} style={{ padding: '6px 8px 6px 16px', borderBottom: '1px solid var(--border)' }}>
+                                }} className="pd-menu-item" data-active={opt.value === resumeRef ? 'true' : undefined}>
                                   {opt.label}
                                 </div>
                               ))}
                               {stage.children && stage.children.map((nodeGroup, ni) => (
                                 <div key={ni}>
                                   <div
+                                    className="pd-menu-label"
                                     onClick={() => {
                                       const k = 'nr:' + stage.group + ':' + ni;
                                       setExpandedResumeNodes(prev => {
@@ -1819,12 +1779,12 @@ useEffect(() => {
                                         return next;
                                       });
                                     }}
-                                    style={{ padding: '6px 8px 6px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)', cursor: 'pointer', userSelect: 'none' }}
+                                    style={{ cursor: 'pointer', userSelect: 'none' }}
                                   >
                                     {expandedResumeNodes.has('nr:' + stage.group + ':' + ni) ? '\u25bc' : '\u25b6'} {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                   </div>
                                   {(showAll || expandedResumeNodes.has('nr:' + stage.group + ':' + ni)) && nodeGroup.options.map((opt) => (
-                                    <div key={opt.value} title={opt.title ?? opt.label} onClick={() => selectResumeRef(opt.value)} className={opt.value === resumeRef ? 'pd-option pd-option-selected' : 'pd-option'} style={{ padding: '6px 8px 6px 32px', borderBottom: '1px solid var(--border)' }}>
+                                    <div key={opt.value} title={opt.title ?? opt.label} role="menuitemradio" aria-checked={opt.value === resumeRef} onClick={() => selectResumeRef(opt.value)} className="pd-menu-item" data-active={opt.value === resumeRef ? 'true' : undefined}>
                                       {opt.label}
                                     </div>
                                   ))}

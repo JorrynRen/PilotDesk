@@ -38,6 +38,7 @@ use std::sync::Arc;
 pub fn build_groupchat_tool_registry(
     conn: &rusqlite::Connection,
     cwd: &str,
+    workspace_roots: &[String],
     model: &str,
     api_format: ApiFormat,
     image: Option<(String, String)>,
@@ -99,6 +100,7 @@ pub fn build_groupchat_tool_registry(
 
     let env = crate::tools::ToolEnv {
         cwd: cwd.to_string(),
+        workspace_roots: workspace_roots.to_vec(),
         api_format,
         image: image.clone(),
         vision,
@@ -179,6 +181,8 @@ pub struct RoomMcpAssets {
 /// 异步构建房间级 MCP 资产：连接一次并枚举全部已配置服务器的工具。
 /// 入参为已加载的服务器配置（调用方同步读取，避免 `&Connection` 跨 await 导致非 Send）。
 /// 连接/枚举失败仅告警跳过（与会话模式行为一致），不阻断房间启动。
+/// 注：resources/prompts 合成工具（`mcp_<服务器>__list_resources` 等）仅会话模式注册，
+/// 群聊房间只暴露服务端原生工具，保持房间装配简单。
 pub async fn build_room_mcp_assets(servers: Vec<McpServerConfig>) -> RoomMcpAssets {
     let pool = crate::tools::mcp::McpConnectionPool::new();
     let mut entries = Vec::new();

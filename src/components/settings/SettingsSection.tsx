@@ -2,27 +2,39 @@ import type { ReactNode } from 'react';
 
 interface SettingsSectionProps {
   title: string;
-  description?: string;
+  description?: ReactNode;
   /** 标题行右侧的操作按钮 */
   actions?: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
+  className?: string;
+  contentClassName?: string;
+  /** 仅渲染标题与操作区；用于导入面板等按需展开、当前没有正文的区块。 */
+  bodyless?: boolean;
 }
 
-export function SettingsSection({ title, description, actions, children }: SettingsSectionProps) {
+export function SettingsSection({
+  title,
+  description,
+  actions,
+  children,
+  className = '',
+  contentClassName = '',
+  bodyless = false,
+}: SettingsSectionProps) {
   return (
-    <section>
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-          {title}
-        </h3>
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+    <section
+      className={`pd-settings-section ${bodyless ? 'pd-settings-section-bodyless' : ''} ${className}`}
+    >
+      <div className="pd-settings-section-header">
+        <div className="pd-settings-section-heading">
+          <h3 className="pd-settings-section-title">{title}</h3>
+          {description && <div className="pd-settings-section-description">{description}</div>}
+        </div>
+        {actions && <div className="pd-settings-section-actions">{actions}</div>}
       </div>
-      {description && (
-        <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>
-          {description}
-        </p>
+      {!bodyless && (
+        <div className={`pd-settings-section-body ${contentClassName}`}>{children}</div>
       )}
-      {children}
     </section>
   );
 }

@@ -27,7 +27,10 @@ interface ApiProviderState {
     apiEndpoint: string;
     apiKey?: string;
     models: string[];
+    modelNotes?: Record<string, string>;
     apiFormat?: string;
+    /** 显式信任域；飞地共享连接导入时固定为 cloud。 */
+    trustDomain?: 'cloud' | 'internal';
     sortOrder?: number;
   }) => Promise<ApiProvider>;
   deleteProvider: (id: string) => Promise<void>;

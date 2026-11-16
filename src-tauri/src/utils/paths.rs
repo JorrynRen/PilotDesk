@@ -2,9 +2,11 @@
 //! 统一路径管理模块
 //!
 //! 职责范围：本地文件系统路径的统一管理与派生
-//! 所有路径派生自**应用根目录**（app_root_dir，见下）
+//! 配置、数据库与用户工作空间分开管理。
 //!
-//! 工作区路径解析规则：调用方自有配置 → 全局工作区（app_settings）→ 应用根目录
+//! 工作区路径解析规则：调用方已持有的运行根 → 全局工作空间（app_settings）
+//! → 全局工作空间的用户可见兜底目录（`<文档>/PilotDesk` → `<用户主目录>/PilotDesk`）。
+//! 文档目录本身不是独立工作根，只是“全局工作空间未配置”时的实现兜底。
 //!
 //! 不包含：远程在线商店 URL 配置
 //!   → Rust 端：见 market.rs（SERVER_SOURCES / build_urls / PLUGINS_INDEX_PATH 等）
@@ -13,11 +15,34 @@
 //!
 //! 全局只有三类路径（其余都从它们派生）：
 //!   1. 配置目录      app_root_dir()：主库 / MEMORY.db / plugins / resources / skills —— 用户基本不用维护
-//!   2. 附件目录      `<会话工作目录>/attachments/<session_id>` —— 用户一般不用维护
-//!   3. 产物目录      `<全局工作区>/outputs/<名字>` —— 用户可见
-//! 「全局工作区」本身就是"用户未选用其它位置时"的兜底目录（见 resolve_workspace_path）。
+//!   2. 附件目录      `<工作根>/attachments/<owner_id>` —— 用户一般不用维护
+//!   3. 产物目录      `<工作根>/outputs/<名字>` —— 用户可见
+//! 「全局工作空间」是未归属项目时的默认工作根（见 resolve_workspace_path）。
 
 use std::path::PathBuf;
+
+/// 将 Windows 扩展长度路径转换为用户可读形式。
+///
+/// `std::fs::canonicalize` 在 Windows 上会返回 `\\?\C:\...`；UNC 路径则是
+/// `\\?\UNC\server\share`。这些前缀只属于 Win32 文件 API，不应写入工具输出、
+/// 消息历史或界面。非扩展长度路径保持原样。
+pub fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{}", rest);
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' {
+            return rest.to_string();
+        }
+    }
+    path.to_string()
+}
+
+/// 用户可读的路径字符串。实际文件操作仍应优先使用原始 `Path`。
+pub fn path_display(path: &std::path::Path) -> String {
+    strip_windows_verbatim_prefix(&path.to_string_lossy())
+}
 
 /// 应用根目录（配置与数据同根）。
 ///
@@ -31,6 +56,13 @@ use std::path::PathBuf;
 /// 注意：知识库正文这类**大体积用户数据**不放在这里 —— 它们放「全局工作区/Knowledge」，
 /// 那个位置用户可见、可换盘、可整体备份。
 pub fn app_root_dir() -> PathBuf {
+    // Keep normal installs on the platform default, but allow development and
+    // automated acceptance runs to use a throwaway data root.
+    if let Some(root) = std::env::var_os("PILOTDESK_APP_ROOT") {
+        if !root.is_empty() {
+            return PathBuf::from(root);
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         dirs::data_dir()
@@ -47,6 +79,27 @@ pub fn app_root_dir() -> PathBuf {
             .expect("Cannot determine app config directory")
             .join("pilotdesk")
     }
+}
+
+/// 全局工作空间未配置时的用户可见兜底目录。
+///
+/// 优先用户文档目录，无法取得时回退用户主目录。应用配置目录属于内部数据，
+/// 不能再被当作会话/圆桌/工作流的运行工作根。
+fn global_workspace_fallback_dir() -> PathBuf {
+    dirs::document_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("PilotDesk")
+}
+
+/// 一次全局工作空间解析结果。
+///
+/// `configured=false` 表示使用用户可见兜底目录，但语义上仍属于「全局工作空间」，
+/// 不是第四种工作根来源。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalWorkspace {
+    pub path: PathBuf,
+    pub configured: bool,
 }
 
 /// 数据库文件路径
@@ -132,24 +185,47 @@ pub fn get_global_workspace(conn: &rusqlite::Connection) -> Option<String> {
     get_app_setting_opt(conn, "pilotdesk-workspace")
 }
 
-/// 解析工作区路径：调用方自有配置 -> 全局工作区 -> 应用根目录
+/// 解析全局工作空间：用户配置 -> 用户可见兜底目录。
+///
+/// v14 之前新库可能把应用配置目录写成默认值；该值不代表用户选择，按未配置处理。
+pub fn resolve_global_workspace(conn: &rusqlite::Connection) -> GlobalWorkspace {
+    match get_global_workspace(conn) {
+        Some(global) => {
+            let resolved = normalize_absolute_path(&global, "");
+            if !resolved.is_absolute() || path_key(&resolved) == path_key(&app_root_dir()) {
+                GlobalWorkspace {
+                    path: global_workspace_fallback_dir(),
+                    configured: false,
+                }
+            } else {
+                GlobalWorkspace {
+                    path: resolved,
+                    configured: true,
+                }
+            }
+        }
+        None => GlobalWorkspace {
+            path: global_workspace_fallback_dir(),
+            configured: false,
+        },
+    }
+}
+
+/// 在调用方已持有运行根时派生其子路径；否则从全局工作空间派生。
+///
+/// 这里不接受“用户为普通工作另行指定的工作根”。运行根只能由
+/// `commands::projects` 按宿主绑定、项目归属、全局工作空间三级规则解析。
 pub fn resolve_workspace_path(
     caller_workspace: Option<&str>,
     sub_path: &str,
     conn: &rusqlite::Connection,
 ) -> PathBuf {
     match caller_workspace {
-        Some(dir) if !dir.is_empty() => {
-            let resolved = resolve_tilde(dir);
-            PathBuf::from(resolved).join(sub_path)
-        }
-        _ => match get_global_workspace(conn) {
-            Some(global) => {
-                let resolved = resolve_tilde(&global);
-                PathBuf::from(resolved).join(sub_path)
-            }
-            None => app_root_dir().join(sub_path),
-        },
+        Some(dir) if !dir.trim().is_empty() => normalize_absolute_path(sub_path, dir),
+        _ => normalize_absolute_path(
+            sub_path,
+            &resolve_global_workspace(conn).path.to_string_lossy(),
+        ),
     }
 }
 
@@ -321,14 +397,205 @@ pub fn path_key(p: &std::path::Path) -> String {
         .to_lowercase()
 }
 
-/// 解析会话工作目录：`session.cwd` 优先，为空则回退到全局工作区（含 app_root_dir 兜底）
-pub fn resolve_session_cwd(conn: &rusqlite::Connection, session_cwd: Option<&str>) -> String {
-    match session_cwd {
-        Some(dir) if !dir.is_empty() => resolve_tilde(dir),
-        _ => resolve_workspace_path(None, "", conn)
-            .to_string_lossy()
-            .to_string(),
+/// Lexically normalize `.` / `..` without requiring the path to exist.
+fn normalize_path_components(path: &std::path::Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !path.has_root() {
+                    normalized.push("..");
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
     }
+    normalized
+}
+
+/// Resolve a user-supplied path to a normalized absolute path.
+///
+/// Existing files/roots are canonicalized. For a new file, the nearest existing
+/// parent is canonicalized before appending the filename so `.` / `..` and
+/// symlinks do not leak into persisted file-history paths.
+pub fn normalize_absolute_path(raw_path: &str, cwd: &str) -> PathBuf {
+    let expanded = strip_windows_verbatim_prefix(&resolve_tilde(raw_path));
+    let candidate = if std::path::Path::new(&expanded).is_absolute() {
+        PathBuf::from(expanded)
+    } else {
+        PathBuf::from(strip_windows_verbatim_prefix(cwd)).join(expanded)
+    };
+    let lexical = normalize_path_components(&candidate);
+    if let Ok(canonical) = std::fs::canonicalize(&lexical) {
+        return PathBuf::from(strip_windows_verbatim_prefix(&canonical.to_string_lossy()));
+    }
+    if let (Some(parent), Some(file_name)) = (lexical.parent(), lexical.file_name()) {
+        if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+            let resolved = canonical_parent.join(file_name);
+            return PathBuf::from(strip_windows_verbatim_prefix(&resolved.to_string_lossy()));
+        }
+    }
+    lexical
+}
+
+fn is_remote_context_path(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("data:")
+        || lower.starts_with("blob:")
+        || lower.starts_with("base64:")
+}
+
+fn normalize_context_path(value: &str, cwd: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || is_remote_context_path(value) {
+        return None;
+    }
+    let normalized = normalize_absolute_path(value, cwd);
+    normalized
+        .is_absolute()
+        .then(|| normalized.to_string_lossy().to_string())
+}
+
+fn normalize_json_path_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    cwd: &str,
+) {
+    let Some(serde_json::Value::String(raw)) = object.get_mut(key) else {
+        return;
+    };
+    if let Some(normalized) = normalize_context_path(raw, cwd) {
+        *raw = normalized;
+    }
+}
+
+fn normalize_json_path_array(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    cwd: &str,
+) {
+    let Some(serde_json::Value::Array(items)) = object.get_mut(key) else {
+        return;
+    };
+    for item in items {
+        let serde_json::Value::String(raw) = item else {
+            continue;
+        };
+        if let Some(normalized) = normalize_context_path(raw, cwd) {
+            *raw = normalized;
+        }
+    }
+}
+
+/// Normalize persisted tool-context paths before they enter message history.
+///
+/// Only built-in local-file tools are rewritten. Remote URLs/data URIs and dynamic
+/// MCP arguments keep their original shape, because their transport semantics may
+/// require a virtual or remote path rather than a local absolute path.
+pub fn normalize_tool_call_context_paths(tool_calls: &str, cwd: &str) -> String {
+    if cwd.trim().is_empty() {
+        return tool_calls.to_string();
+    }
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(tool_calls) else {
+        return tool_calls.to_string();
+    };
+    let Some(steps) = value.as_array_mut() else {
+        return tool_calls.to_string();
+    };
+
+    for step in steps {
+        let Some(object) = step.as_object_mut() else {
+            continue;
+        };
+        normalize_json_path_field(object, "filePath", cwd);
+        let tool_name = object
+            .get("toolName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let Some(mut args_value) = object.get("args").cloned() else {
+            continue;
+        };
+        let mut args = match &args_value {
+            serde_json::Value::String(raw) => match serde_json::from_str(raw) {
+                Ok(value) => value,
+                Err(_) => continue,
+            },
+            serde_json::Value::Object(_) => args_value.clone(),
+            _ => continue,
+        };
+        let Some(args_object) = args.as_object_mut() else {
+            continue;
+        };
+
+        match tool_name.as_str() {
+            "write_file" | "edit_file" | "read_file" | "read_image" | "list_files" | "glob"
+            | "grep" | "browser" => normalize_json_path_field(args_object, "path", cwd),
+            "parse_document" | "create_document" => {
+                normalize_json_path_field(args_object, "file", cwd)
+            }
+            "edit_image" => {
+                normalize_json_path_field(args_object, "image", cwd);
+                normalize_json_path_field(args_object, "mask", cwd);
+            }
+            "generate_image" => normalize_json_path_array(args_object, "image", cwd),
+            "generate_video" | "stt" => {
+                normalize_json_path_field(args_object, "image", cwd);
+                normalize_json_path_field(args_object, "file", cwd);
+            }
+            "execute_command" => normalize_json_path_field(args_object, "cwd", cwd),
+            "execute_python" => {
+                let python_cwd = args_object
+                    .get("cwd")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|raw| normalize_context_path(raw, cwd));
+                normalize_json_path_field(args_object, "cwd", cwd);
+                if let Some(python_cwd) = python_cwd {
+                    normalize_json_path_field(args_object, "file", &python_cwd);
+                } else {
+                    normalize_json_path_field(args_object, "file", cwd);
+                }
+            }
+            _ => {}
+        }
+        normalize_json_path_array(args_object, "files", cwd);
+
+        let primary_path = matches!(
+            tool_name.as_str(),
+            "write_file" | "edit_file" | "create_document" | "edit_image"
+        )
+        .then(|| {
+            args_object
+                .get("path")
+                .or_else(|| args_object.get("file"))
+                .or_else(|| args_object.get("image"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .flatten();
+        if object.get("filePath").is_none() {
+            if let Some(primary_path) = primary_path {
+                object.insert(
+                    "filePath".to_string(),
+                    serde_json::Value::String(primary_path),
+                );
+            }
+        }
+        args_value = match args_value {
+            serde_json::Value::String(_) => {
+                serde_json::Value::String(serde_json::to_string(&args).unwrap_or_default())
+            }
+            _ => args,
+        };
+        object.insert("args".to_string(), args_value);
+    }
+
+    serde_json::to_string(&value).unwrap_or_else(|_| tool_calls.to_string())
 }
 
 /// 目录名清洗：过滤 Windows 非法字符、剥离结尾点/空格（Windows 会静默剥离导致路径漂移）、
@@ -358,34 +625,40 @@ pub fn sanitize_dir_name(title: &str, fallback: &str) -> String {
     }
 }
 
-/// 工作流产物目录：`<全局工作区>/outputs/<工作流名>`。
+/// 从工作根派生一次运行使用的产物目录：`<工作根>/outputs/<名字>`。
 ///
-/// 与群聊的 `<全局工作区>/outputs/<房间名>` 同构：按名字归类、不按执行实例或时间分层、
-/// 不做清理。返回值同时被用作节点的 cwd 与授权边界（工作区内路径免审批），
-/// 目录不存在时顺带创建。
-pub fn workflow_artifacts_dir(conn: &rusqlite::Connection, workflow_name: &str) -> PathBuf {
-    let base = resolve_workspace_path(None, "", conn)
-        .to_string_lossy()
-        .to_string();
-    let dir_name = sanitize_dir_name(workflow_name, "workflow");
-    let dir = PathBuf::from(format!(
-        "{}\\outputs\\{}",
-        base.trim_end_matches(['\\', '/']),
-        dir_name
-    ));
+/// `owner_name` 只能传工作名称（会话/圆桌/工作流标题），不能传调用方持有的绝对路径。
+/// 返回值属于运行时派生值，不持久化；工作归属变化后，下一次运行自然落到新工作根下。
+pub fn workspace_artifacts_dir(work_root: &str, owner_name: &str, fallback: &str) -> PathBuf {
+    let base = normalize_absolute_path(work_root, "");
+    let dir_name = sanitize_dir_name(owner_name.trim(), fallback);
+    let dir = base.join("outputs").join(dir_name);
     let _ = std::fs::create_dir_all(&dir);
-    dir
+    normalize_absolute_path(&dir.to_string_lossy(), "")
 }
 
-/// 会话附件落盘目录：`<工作目录>/attachments/<session_id>`
-pub fn resolve_attachments_dir(
+/// 工作流产物目录：`<工作根>/outputs/<工作流名>`；无项目时工作根即全局工作区。
+///
+/// 与群聊的 `<全局工作区>/outputs/<房间名>` 同构：按名字归类、不按执行实例或时间分层、
+/// 不做清理。返回值只作为产物落点与额外安全根（工作区路径权限仍由矩阵统一判定）；
+/// Agent 的 cwd 始终是项目主目录或全局工作区，不随产物目录变化。目录不存在时顺带创建。
+pub fn workflow_artifacts_dir(
     conn: &rusqlite::Connection,
-    session_cwd: Option<&str>,
-    session_id: &str,
+    workflow_name: &str,
+    work_root: Option<&str>,
 ) -> PathBuf {
-    PathBuf::from(resolve_session_cwd(conn, session_cwd))
+    let base = work_root
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| normalize_absolute_path(path, ""))
+        .unwrap_or_else(|| resolve_workspace_path(None, "", conn));
+    workspace_artifacts_dir(&base.to_string_lossy(), workflow_name, "workflow")
+}
+
+/// 会话/圆桌附件落盘目录：`<动态工作根>/attachments/<owner_id>`
+pub fn resolve_attachments_dir(work_root: &str, owner_id: &str) -> PathBuf {
+    normalize_absolute_path(work_root, "")
         .join("attachments")
-        .join(session_id)
+        .join(owner_id)
 }
 
 /// 解析路径中的 `~` 与 `%USERPROFILE%` 为用户 home 目录
@@ -455,6 +728,51 @@ mod tests {
         let again = migrate_knowledge_files(&old, &new).unwrap();
         assert_eq!(again.moved, 0);
         assert_eq!(again.skipped, 0, "源目录已空，没有可搬的了");
+    }
+
+    #[test]
+    fn workflow_artifacts_live_under_outputs_not_at_the_work_root() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let work_root = tmp_dir("workflow-root");
+        let artifacts =
+            workflow_artifacts_dir(&conn, "Release Notes", Some(&work_root.to_string_lossy()));
+
+        assert_eq!(
+            path_key(&artifacts),
+            path_key(&work_root.join("outputs").join("Release Notes"))
+        );
+        assert_ne!(artifacts, work_root);
+        assert!(artifacts.exists(), "产物目录应在执行前准备好");
+    }
+
+    #[test]
+    fn absolute_paths_are_normalized_for_new_files() {
+        let root = tmp_dir("normalize-path");
+        let normalized =
+            normalize_absolute_path("../report.md", &root.join("nested").to_string_lossy());
+        let canonical_root = PathBuf::from(strip_windows_verbatim_prefix(
+            &std::fs::canonicalize(&root).unwrap().to_string_lossy(),
+        ));
+
+        assert_eq!(normalized, canonical_root.join("report.md"));
+        assert!(normalized.is_absolute());
+        assert!(!normalized.to_string_lossy().starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn windows_verbatim_paths_are_user_readable() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\E:\tmp\outputs\report.md"),
+            r"E:\tmp\outputs\report.md"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\report.md"),
+            r"\\server\share\report.md"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"E:\tmp\outputs\report.md"),
+            r"E:\tmp\outputs\report.md"
+        );
     }
 
     #[test]

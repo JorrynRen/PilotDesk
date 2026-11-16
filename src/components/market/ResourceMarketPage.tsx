@@ -1,12 +1,10 @@
 import { useCallback, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Store, Workflow, Bot, Lightbulb, Search, X, RefreshCw, ArrowRight, Package,
 } from 'lucide-react';
-import { TitleBar, StatusBar } from '../layout';
-import { useTerminal, type ViewMode } from '../../TerminalManager';
+import { WorkbenchAssetPage } from '../layout';
 import { OnlinePluginStore } from '../plugin/OnlinePluginStore';
 import { WorkflowTemplateMarket } from '../workflow/WorkflowTemplateMarket';
 import { AgentConfigMarket } from '../env/AgentConfigMarket';
@@ -51,72 +49,53 @@ const MINE: Record<MarketTab, { label: string; where: string; to: string }> = {
 
 export function ResourceMarketPage() {
   const navigate = useNavigate();
-  const { viewMode, setMode } = useTerminal();
 
   // 支持 /market?tab=xxx 深链（旧入口跳转过来时落到对应 tab）
   const [searchParams] = useSearchParams();
   const urlTab = searchParams.get('tab') as MarketTab | null;
   const isValidTab = (t: string | null): t is MarketTab => !!t && TABS.some((x) => x.key === t);
   const [activeTab, setActiveTab] = useState<MarketTab>(isValidTab(urlTab) ? urlTab : 'plugins');
+  /** 首次访问后再保持挂载：搜索、筛选与滚动位置不会因切换页签丢失。 */
+  const [mountedTabs, setMountedTabs] = useState<Set<MarketTab>>(
+    () => new Set<MarketTab>([isValidTab(urlTab) ? urlTab : 'plugins']),
+  );
   // URL 深链变化时对齐状态：用「渲染期修正」而非 effect（同 SettingsPage，避免级联渲染）
   const [syncedTab, setSyncedTab] = useState<string | null>(urlTab);
   if (urlTab !== syncedTab) {
     setSyncedTab(urlTab);
-    if (isValidTab(urlTab)) setActiveTab(urlTab);
+    if (isValidTab(urlTab)) {
+      setActiveTab(urlTab);
+      setMountedTabs((prev) => (prev.has(urlTab) ? prev : new Set(prev).add(urlTab)));
+    }
   }
 
-  /**
-   * 从资源市集切到某个模式（组合菜单点击）。
-   *
-   * 关键在顺序：必须**先把模式同步落地，再发导航**。
-   * navigate 走的是 React Router 的 transition（低优先级）；若与 setMode（紧急更新）
-   * 同批提交，个别运行环境下这次 transition 会一直挂着不提交 —— 表现为
-   * "点了模式按钮页面没走，得再点一次别的入口才到"。
-   * 用 flushSync 把模式更新先同步刷完，剩下的导航就是唯一的待提交工作，稳定落地。
-   * （可直接对照 `/workflow` 的 ModeRedirect：它在 effect 里 setMode 后 navigate，天然是两步。）
-   */
-  const handleModeChange = (mode: ViewMode) => {
-    flushSync(() => setMode(mode));
-    navigate('/');
+  const activateTab = (tab: MarketTab) => {
+    setActiveTab(tab);
+    setMountedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
   };
 
   const mine = MINE[activeTab];
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <TitleBar
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        noActiveSegment
-        marketOpen
-        onOpenMarket={() => navigate('/')}
-        onOpenInspirations={() => navigate('/inspirations')}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenEnclave={() => navigate('/enclave')}
-      />
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
+    <WorkbenchAssetPage contextLabel="资源市集" activeAsset="market">
+      <div className="h-full flex flex-col overflow-hidden">
 
       {/* 页面标题 + tab 切换 + 「我的在哪」出口
           结构与「工作流定义」页的 tab 行保持一致：容器 pt-1，行高由 pd-tab（36px）决定，
           标题靠 items-center 垂直居中 —— 顶部留白与其它页统一，不贴住 TitleBar */}
-      <div
-        className="shrink-0 px-4 pt-1 flex items-center gap-3 overflow-x-clip"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
+      <div className="pd-page-head shrink-0">
         <div className="flex items-center gap-2 shrink-0">
           <Store size={14} style={{ color: 'var(--accent)' }} />
           <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>资源市集</span>
         </div>
 
-        <div className="flex items-center gap-0.5 overflow-x-clip">
+        <div className="pd-page-tabs">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => activateTab(tab.key)}
                 className={'pd-tab' + (activeTab === tab.key ? ' pd-tab-active' : '')}
               >
                 <Icon size={12} />
@@ -131,7 +110,7 @@ export function ResourceMarketPage() {
         {/* 我的在哪：市集只负责获取，自己的数据仍在原生地管理 */}
         <button
           onClick={() => navigate(mine.to)}
-          className="pd-btn text-[11px] px-2 py-1 rounded flex items-center gap-1 shrink-0"
+          className="pd-page-head-action pd-btn text-[11px] px-2 py-1 rounded flex items-center gap-1 shrink-0"
           style={{
             border: '1px solid var(--border)',
             backgroundColor: 'var(--bg-field)',
@@ -140,35 +119,43 @@ export function ResourceMarketPage() {
           title={`前往${mine.where}`}
         >
           {mine.label}
-          <span style={{ color: 'var(--text-tertiary)' }}>· {mine.where}</span>
+          <span className="pd-page-head-action-context" style={{ color: 'var(--text-tertiary)' }}>· {mine.where}</span>
           <ArrowRight size={11} />
         </button>
       </div>
 
       {/* 内容区 */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'plugins' && <PluginMarketTab />}
-
-        {activeTab === 'workflow' && (
-          <WorkflowTemplateMarket
-            // 安装结果（成功/失败）由市场组件自己 toast；父级只负责「装完去哪看」
-            onUseTemplate={() => navigate('/workflow')}
-          />
+        {mountedTabs.has('plugins') && (
+          <div className="h-full" hidden={activeTab !== 'plugins'}>
+            <PluginMarketTab />
+          </div>
         )}
 
-        {activeTab === 'agents' && <AgentConfigMarket />}
+        {mountedTabs.has('workflow') && (
+          <div className="h-full" hidden={activeTab !== 'workflow'}>
+            <WorkflowTemplateMarket
+              // 安装结果（成功/失败）由市场组件自己 toast；父级只负责「装完去哪看」
+              onUseTemplate={() => navigate('/workflow')}
+            />
+          </div>
+        )}
 
-        {activeTab === 'inspiration' && <InspirationMarketTab />}
+        {mountedTabs.has('agents') && (
+          <div className="h-full" hidden={activeTab !== 'agents'}>
+            <AgentConfigMarket />
+          </div>
+        )}
+
+        {mountedTabs.has('inspiration') && (
+          <div className="h-full" hidden={activeTab !== 'inspiration'}>
+            <InspirationMarketTab />
+          </div>
+        )}
       </div>
 
-        </div>
       </div>
-
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
-    </div>
+    </WorkbenchAssetPage>
   );
 }
 
@@ -181,6 +168,7 @@ function PluginMarketTab() {
   const [query, setQuery] = useState('');
   const [stats, setStats] = useState<{ total: number; filtered: number } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   /**
    * ⚠️ 必须用 useCallback 固定引用。
@@ -203,6 +191,8 @@ function PluginMarketTab() {
     try {
       // 强制刷新索引缓存（OnlinePluginStore 挂载时读的就是这份缓存）
       await invoke('plugin_store_fetch_index', { forceRefresh: true });
+      // 索引更新完成后让子组件重新读取，否则当前页面仍展示刷新前的内容。
+      setRefreshKey((value) => value + 1);
     } catch (err) {
       showToast(`刷新插件索引失败：${errorMessage(err)}`, 'error');
     } finally {
@@ -212,10 +202,7 @@ function PluginMarketTab() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div
-        className="shrink-0 px-4 py-2 flex items-center gap-2"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
+      <div className="pd-market-toolbar">
         <div className="relative flex-1 min-w-0 max-w-md">
           <Search
             size={13}
@@ -233,8 +220,7 @@ function PluginMarketTab() {
             placeholder="搜索插件名称、描述、作者..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="search-input w-full"
-            style={{ paddingLeft: 32, backgroundColor: 'var(--bg-field)' }}
+            className="pd-market-search"
           />
           {query && (
             <button
@@ -265,18 +251,19 @@ function PluginMarketTab() {
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1 shrink-0"
-          style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+          className="pd-market-icon-button pd-btn"
+          title="刷新插件索引"
+          aria-label="刷新插件索引"
         >
           <RefreshCw size={11} className={refreshing ? 'pd-animate-spin' : ''} />
-          刷新
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pd-scroll-stable">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pd-scroll-stable">
         <OnlinePluginStore
           searchQuery={query}
           onStatsChange={handleStatsChange}
+          refreshKey={refreshKey}
         />
       </div>
     </div>

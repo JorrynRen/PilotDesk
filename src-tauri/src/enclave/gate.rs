@@ -71,7 +71,10 @@ fn is_private_172(host: &str) -> bool {
     if parts.next() != Some("172") {
         return false;
     }
-    matches!(parts.next().and_then(|s| s.parse::<u8>().ok()), Some(16..=31))
+    matches!(
+        parts.next().and_then(|s| s.parse::<u8>().ok()),
+        Some(16..=31)
+    )
 }
 
 /// 团队内容能否注入到该会话（唯一判定口径）。

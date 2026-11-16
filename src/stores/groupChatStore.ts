@@ -15,6 +15,7 @@ import type {
   GroupChatDepChangePreview,
 } from '../types/groupchat';
 import type { Attachment } from '../types';
+import type { WorkflowDefinition } from '../types/workflow';
 import { errorMessage } from '../utils/errorMessage';
 
 /** 群聊消息分页大小（首屏 + 每次向上加载） */
@@ -75,7 +76,6 @@ interface GroupChatStoreState {
   resume: () => Promise<void>;
   abort: () => Promise<void>;
   setDirector: (newDirectorId: string) => Promise<void>;
-  setRoomOutputDir: (outputDir: string) => Promise<void>;
   /** 同层任务执行并行上限（1-4），写库后对当前波次不生效、后续波次生效。 */
   setRoomMaxParallel: (maxParallel: number) => Promise<void>;
   /** 任务级人工干预（跳过 / 追加新增 / 改依赖）。写库即对调度生效，变更由 task_updated 事件回流。 */
@@ -86,7 +86,7 @@ interface GroupChatStoreState {
   previewTaskDeps: (taskId: string, dependsOn: string[]) => Promise<GroupChatDepChangePreview>;
   /** 精准转换：把任务议程落库为可直接运行的工作流定义（返回新定义，供跳转编辑器）。 */
   promoteWorkflow: () => Promise<{ id: string; name: string }>;
-  exportWorkflow: () => Promise<Record<string, unknown>>;
+  exportWorkflow: () => Promise<WorkflowDefinition>;
   applyEvent: (event: GroupChatEvent) => void;
 }
 
@@ -372,15 +372,6 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
     await invoke('groupchat_set_director', { roomId, newDirectorId });
   },
 
-  setRoomOutputDir: async (outputDir: string) => {
-    const roomId = get().currentRoomId;
-    if (!roomId) return;
-    const room = await invoke<GroupChatRoom>('groupchat_set_output_dir', { roomId, outputDir });
-    set((s) => ({
-      rooms: s.rooms.map((r) => (r.id === roomId ? { ...r, outputDir: room.outputDir } : r)),
-    }));
-  },
-
   setRoomMaxParallel: async (maxParallel: number) => {
     const roomId = get().currentRoomId;
     if (!roomId) return;
@@ -396,7 +387,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
   exportWorkflow: async () => {
     const roomId = get().currentRoomId;
     if (!roomId) throw new Error('未选择圆桌');
-    return invoke<Record<string, unknown>>('groupchat_export_workflow', { roomId });
+    return invoke<WorkflowDefinition>('groupchat_export_workflow', { roomId });
   },
 
   skipTask: async (taskId) => {
@@ -466,15 +457,6 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         set((s) => ({
           rooms: s.rooms.map((r) =>
             r.id === event.roomId ? { ...r, topic: event.topic } : r,
-          ),
-        }));
-        break;
-      }
-      case 'output_dir_updated': {
-        // 产物目录已在目标理解阶段确定/变更：同步房间列表，右侧面板动态显示当前值。
-        set((s) => ({
-          rooms: s.rooms.map((r) =>
-            r.id === event.roomId ? { ...r, outputDir: event.outputDir } : r,
           ),
         }));
         break;

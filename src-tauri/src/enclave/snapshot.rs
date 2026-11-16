@@ -175,12 +175,7 @@ pub async fn refresh_local_identity(
                     },
                 )?;
                 // 成员名单可能因角色拿不到，但自己的资料始终可更新
-                org::refresh_own_member_profile(
-                    c,
-                    &user_id,
-                    &me.user.nickname,
-                    &me.user.email,
-                )
+                org::refresh_own_member_profile(c, &user_id, &me.user.nickname, &me.user.email)
             })?;
             Ok(IdentityRefresh {
                 online: true,
@@ -250,7 +245,8 @@ pub async fn platform_check(
         }),
     }
 
-    match platform::get_json_with_status::<OrgsResp>("/api/v1/organizations/mine", Some(&token)).await
+    match platform::get_json_with_status::<OrgsResp>("/api/v1/organizations/mine", Some(&token))
+        .await
     {
         Ok(resp) => match resp
             .organizations
@@ -406,7 +402,11 @@ pub async fn run_snapshot_round(
             // 快照绑定本次同步的登录身份：换账号后旧行自动失效
             viewer_id: me.user.id.to_string(),
             // 平台登记的主机设备：空 = 尚未登记（需本机认领或从旧主机接管）
-            host_device_id: o.host.as_ref().map(|h| h.device_id.clone()).unwrap_or_default(),
+            host_device_id: o
+                .host
+                .as_ref()
+                .map(|h| h.device_id.clone())
+                .unwrap_or_default(),
             host_device_name: o
                 .host
                 .as_ref()

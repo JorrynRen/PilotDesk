@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 13;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 23;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -57,6 +57,153 @@ CREATE TABLE IF NOT EXISTS enclave_settings (
     value      TEXT NOT NULL DEFAULT '',
     updated_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- ───────────────── API 共享 ─────────────────
+-- Provider 原始密钥永远留在主库 agent_secrets；这里只保存共享策略与 Provider 标识。
+CREATE TABLE IF NOT EXISTS api_share_sources (
+    id                 TEXT PRIMARY KEY,
+    org_id             TEXT NOT NULL,
+    provider_id        TEXT NOT NULL,
+    name               TEXT NOT NULL DEFAULT '',
+    name_key           TEXT NOT NULL DEFAULT '',
+    models             TEXT NOT NULL DEFAULT '[]',
+    enabled            INTEGER NOT NULL DEFAULT 1,
+    created_by         TEXT NOT NULL DEFAULT '',
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL,
+    UNIQUE(org_id, name_key)
+);
+CREATE INDEX IF NOT EXISTS idx_api_share_sources_org
+    ON api_share_sources(org_id, enabled, updated_at);
+
+-- 令牌是跨共享源的访问凭证；限流、并发与日额度全部在令牌层。
+CREATE TABLE IF NOT EXISTS api_share_tokens (
+    id                  TEXT PRIMARY KEY,
+    org_id              TEXT NOT NULL,
+    owner_user_id       TEXT NOT NULL,
+    created_by          TEXT NOT NULL DEFAULT '',
+    name                TEXT NOT NULL DEFAULT '',
+    name_key            TEXT NOT NULL DEFAULT '',
+    api_format          TEXT NOT NULL DEFAULT 'openai',
+    token_prefix        TEXT NOT NULL DEFAULT '',
+    token_hash          TEXT NOT NULL UNIQUE,
+    secret_ciphertext   TEXT NOT NULL,
+    secret_version      INTEGER NOT NULL DEFAULT 1,
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    revoked_at          INTEGER,
+    archived_at         INTEGER,
+    expires_at          INTEGER,
+    rpm_limit           INTEGER NOT NULL DEFAULT 0,
+    burst_limit         INTEGER NOT NULL DEFAULT 0,
+    max_concurrency     INTEGER NOT NULL DEFAULT 0,
+    daily_request_limit INTEGER NOT NULL DEFAULT 0,
+    daily_token_limit   INTEGER NOT NULL DEFAULT 0,
+    copied_at           INTEGER,
+    first_used_at       INTEGER,
+    last_used_at        INTEGER,
+    request_count       INTEGER NOT NULL DEFAULT 0,
+    created_at          INTEGER NOT NULL,
+    UNIQUE(org_id, name_key)
+);
+CREATE INDEX IF NOT EXISTS idx_api_share_tokens_owner
+    ON api_share_tokens(org_id, owner_user_id, created_at);
+
+-- 令牌模型授权。exposed_model 是对外不透明模型 ID，禁止通过字符串反解来源。
+CREATE TABLE IF NOT EXISTS api_share_token_grants (
+    token_id       TEXT NOT NULL REFERENCES api_share_tokens(id) ON DELETE CASCADE,
+    source_id      TEXT NOT NULL REFERENCES api_share_sources(id) ON DELETE CASCADE,
+    source_model   TEXT NOT NULL,
+    exposed_model  TEXT NOT NULL,
+    created_at     INTEGER NOT NULL,
+    PRIMARY KEY (token_id, source_id, source_model),
+    UNIQUE (token_id, exposed_model)
+);
+CREATE INDEX IF NOT EXISTS idx_api_share_token_grants_source
+    ON api_share_token_grants(source_id);
+
+-- 路由令牌与 Provider 配置共用一种分发记录；Key 永不进入这里或传讯日志。
+CREATE TABLE IF NOT EXISTS api_share_distributions (
+    id                 TEXT PRIMARY KEY,
+    org_id             TEXT NOT NULL,
+    kind               TEXT NOT NULL, -- route_token | provider_config
+    source_id          TEXT REFERENCES api_share_sources(id) ON DELETE CASCADE,
+    token_id           TEXT REFERENCES api_share_tokens(id) ON DELETE SET NULL,
+    batch_id           TEXT NOT NULL DEFAULT '',
+    created_by         TEXT NOT NULL,
+    recipient_user_id  TEXT NOT NULL,
+    models             TEXT NOT NULL DEFAULT '[]',
+    message_id         TEXT,
+    sent_at            INTEGER,
+    opened_at          INTEGER,
+    applied_at         INTEGER,
+    revoked_at         INTEGER,
+    archived_at        INTEGER,
+    expires_at         INTEGER,
+    created_at         INTEGER NOT NULL,
+    CHECK (
+        (kind = 'route_token' AND token_id IS NOT NULL AND source_id IS NULL)
+        OR
+        (kind = 'provider_config' AND source_id IS NOT NULL AND token_id IS NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_api_share_distributions_org
+    ON api_share_distributions(org_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_api_share_distributions_recipient
+    ON api_share_distributions(org_id, recipient_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_api_share_distributions_batch
+    ON api_share_distributions(org_id, batch_id);
+
+-- 每条路由令牌分发拥有独立凭据；撤销分发可拒绝该凭据的所有副本，
+-- 不影响父令牌及其他接收者。Provider 配置分发不创建此凭据。
+CREATE TABLE IF NOT EXISTS api_share_distribution_credentials (
+    id                TEXT PRIMARY KEY,
+    org_id            TEXT NOT NULL,
+    distribution_id   TEXT NOT NULL UNIQUE
+                      REFERENCES api_share_distributions(id) ON DELETE CASCADE,
+    parent_token_id   TEXT NOT NULL
+                      REFERENCES api_share_tokens(id) ON DELETE CASCADE,
+    token_prefix      TEXT NOT NULL DEFAULT '',
+    token_hash        TEXT NOT NULL UNIQUE,
+    secret_ciphertext TEXT NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    revoked_at        INTEGER,
+    created_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_api_share_distribution_credentials_parent
+    ON api_share_distribution_credentials(parent_token_id, enabled);
+
+-- 组织成员级 API 共享黑名单。与分发记录完全解耦：
+-- 拉黑一个成员会同时拒绝其名下令牌及其作为接收人的分发凭据；解封后恢复。
+CREATE TABLE IF NOT EXISTS api_share_member_blocks (
+    org_id      TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    reason      TEXT NOT NULL DEFAULT '',
+    created_by  TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (org_id, user_id),
+    FOREIGN KEY (org_id, user_id)
+      REFERENCES member_snapshot(org_id, user_id) ON DELETE CASCADE
+);
+
+-- 按令牌、来源、UTC 日期聚合；不保留逐请求明细。
+CREATE TABLE IF NOT EXISTS api_share_usage_daily (
+    org_id                TEXT NOT NULL,
+    source_id             TEXT NOT NULL,
+    token_id              TEXT NOT NULL,
+    day                   TEXT NOT NULL,
+    requests              INTEGER NOT NULL DEFAULT 0,
+    success_requests      INTEGER NOT NULL DEFAULT 0,
+    rate_limited_requests INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens         INTEGER NOT NULL DEFAULT 0,
+    completion_tokens     INTEGER NOT NULL DEFAULT 0,
+    total_tokens          INTEGER NOT NULL DEFAULT 0,
+    updated_at            INTEGER NOT NULL,
+    PRIMARY KEY (org_id, source_id, token_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_api_share_usage_daily_org
+    ON api_share_usage_daily(org_id, day);
+CREATE INDEX IF NOT EXISTS idx_api_share_usage_daily_source
+    ON api_share_usage_daily(source_id, day);
 
 -- 成员快照（只读，来自平台；成员消失置 seat_status='removed'，不物理删）
 CREATE TABLE IF NOT EXISTS member_snapshot (
@@ -433,13 +580,35 @@ impl EnclaveStore {
             ));
         }
 
+        // v23 将路由令牌改为跨共享源凭证。当前没有真实用户，直接重建 API 共享结构；
+        // 其他飞地数据不受影响，也不保留旧的单源令牌与来源绑定的分发数据。
+        if current > 0 && current < 23 {
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS api_share_distribution_credentials;
+                 DROP TABLE IF EXISTS api_share_distributions;
+                 DROP TABLE IF EXISTS api_share_token_grants;
+                 DROP TABLE IF EXISTS api_share_usage;
+                 DROP TABLE IF EXISTS api_share_usage_daily;
+                 DROP TABLE IF EXISTS api_share_invites;
+                 DROP TABLE IF EXISTS api_share_direct_shares;
+                 DROP TABLE IF EXISTS api_share_tokens;
+                 DROP TABLE IF EXISTS api_share_sources;",
+            )
+            .map_err(|e| format!("清理旧 API 共享结构失败: {}", e))?;
+        }
+
         conn.execute_batch(ENCLAVE_SCHEMA_SQL)
             .map_err(|e| format!("初始化飞地表结构失败: {}", e))?;
 
         // v1 → v2：存量库的 `org_snapshot` 加不了新列（CREATE TABLE IF NOT EXISTS 不会改已有表），
         // 迁移期显式补列；新库建表语句里已含该列，这里会直接跳过。
         if current < 2 {
-            Self::ensure_column(conn, "org_snapshot", "my_role", "TEXT NOT NULL DEFAULT 'member'")?;
+            Self::ensure_column(
+                conn,
+                "org_snapshot",
+                "my_role",
+                "TEXT NOT NULL DEFAULT 'member'",
+            )?;
         }
         // v3 → v4：过程记录附件
         if current < 4 {
@@ -448,7 +617,12 @@ impl EnclaveStore {
         // v4 → v5：组织快照绑定登录身份（换账号后旧快照不得继续用于权限判定）。
         // 存量行补列后 viewer_id = ''，在下一次快照同步前一律视为无效（默认拒绝）。
         if current < 5 {
-            Self::ensure_column(conn, "org_snapshot", "viewer_id", "TEXT NOT NULL DEFAULT ''")?;
+            Self::ensure_column(
+                conn,
+                "org_snapshot",
+                "viewer_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
         }
         // v5 → v6：附件改为「挂载关系」表（同一原件可多处挂载）；迁移历史 task_files 行。
         // task_files 保留不再读写，后续版本再视情况清理。
@@ -534,15 +708,47 @@ impl EnclaveStore {
             )?;
         }
         if current < 9 {
-            Self::ensure_column(conn, "org_snapshot", "host_addr", "TEXT NOT NULL DEFAULT ''")?;
-            Self::ensure_column(conn, "org_snapshot", "host_port", "INTEGER NOT NULL DEFAULT 0")?;
+            Self::ensure_column(
+                conn,
+                "org_snapshot",
+                "host_addr",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
+            Self::ensure_column(
+                conn,
+                "org_snapshot",
+                "host_port",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
         }
         // v11 → v12：任务产出可选归档到自定义库（空 = 默认库，存量任务行为不变）
         if current < 12 {
-            Self::ensure_column(conn, "org_tasks", "target_kb_id", "TEXT NOT NULL DEFAULT ''")?;
+            Self::ensure_column(
+                conn,
+                "org_tasks",
+                "target_kb_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
         }
         // v12 → v13：知识库文件之间的关系（正文—附件 / 新版—旧版）。
         // 新表由全量建表语句幂等创建，无存量数据需要回填，这里只留版本语义。
+        // v13 → v17：API 共享采用「共享源 + 令牌层限流 + 统一分发」模型。
+        // 旧邀请与直发表已在 v17 开始时清理，Provider Key 仍只在主库。
+        // v17 → v18：令牌与分发增加归档态；令牌额外记录撤销时间。
+        if current < 18 {
+            Self::ensure_column(conn, "api_share_tokens", "revoked_at", "INTEGER")?;
+            Self::ensure_column(conn, "api_share_tokens", "archived_at", "INTEGER")?;
+            Self::ensure_column(conn, "api_share_distributions", "archived_at", "INTEGER")?;
+        }
+        // v18 → v19：路由令牌分发增加独立凭据，撤销分发可精确拒绝其全部副本。
+        // 新表由全量建表语句幂等创建；存量分发在首次领取时补发凭据。
+        // v19 → v20：API 共享增加组织成员级黑名单；新表由全量建表语句幂等创建，
+        // 不依赖任何分发记录，拉黑与解封均保留成员原有令牌和分发数据。
+        // v20 → v21：取消成员自助签发，令牌只能由组织所有者/管理员创建并主动分发。
+        if current < 21 && Self::has_column(conn, "api_share_sources", "allow_member_tokens")? {
+            conn.execute_batch("ALTER TABLE api_share_sources DROP COLUMN allow_member_tokens;")
+                .map_err(|e| format!("移除共享源成员签发字段失败: {}", e))?;
+        }
 
         if current != ENCLAVE_SCHEMA_VERSION {
             conn.execute_batch(&format!("PRAGMA user_version = {}", ENCLAVE_SCHEMA_VERSION))
@@ -555,7 +761,10 @@ impl EnclaveStore {
     ///
     /// **调用方绝不可在这个闭包里 `.await`**：`Mutex<Connection>` 是同步锁，
     /// 持锁跨 await 会阻塞后台任务、并可能把 tokio 单线程调度器拖死。
-    pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+    pub fn with_conn<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
         let conn = self
             .conn
             .lock()
@@ -595,6 +804,16 @@ impl EnclaveStore {
         Ok(cols.iter().any(|c| c == column))
     }
 
+    fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            rusqlite::params![table],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|exists| exists != 0)
+        .map_err(|e| format!("读取表 {} 状态失败: {}", table, e))
+    }
+
     /// 数据库文件路径。
     pub fn path(&self) -> &Path {
         &self.path
@@ -603,5 +822,114 @@ impl EnclaveStore {
     /// 打开时确定的结构版本。
     pub fn schema_version(&self) -> i64 {
         self.schema_version
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v23_rebuilds_api_share_tables_without_legacy_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE api_share_sources (
+                 id            TEXT PRIMARY KEY,
+                 org_id        TEXT NOT NULL,
+                 provider_id   TEXT NOT NULL,
+                 name          TEXT NOT NULL DEFAULT '',
+                 api_format    TEXT NOT NULL DEFAULT 'openai',
+                 base_url      TEXT NOT NULL DEFAULT '',
+                 trust_domain  TEXT NOT NULL DEFAULT 'cloud',
+                 mode          TEXT NOT NULL DEFAULT 'both',
+                 models        TEXT NOT NULL DEFAULT '[]',
+                 enabled       INTEGER NOT NULL DEFAULT 1,
+                 created_by    TEXT NOT NULL DEFAULT '',
+                 created_at    INTEGER NOT NULL,
+                 updated_at    INTEGER NOT NULL,
+                 UNIQUE(org_id, provider_id)
+             );
+             CREATE TABLE api_share_direct_shares (
+                 id                TEXT PRIMARY KEY,
+                 org_id            TEXT NOT NULL,
+                 source_id         TEXT NOT NULL,
+                 created_by        TEXT NOT NULL,
+                 recipient_user_id TEXT NOT NULL,
+                 models            TEXT NOT NULL DEFAULT '[]',
+                 expires_at        INTEGER NOT NULL,
+                 revoked_at        INTEGER,
+                 opened_at         INTEGER,
+                 created_at        INTEGER NOT NULL
+             );
+             CREATE TABLE api_share_invites (id TEXT PRIMARY KEY);
+             INSERT INTO api_share_sources
+                 (id, org_id, provider_id, created_at, updated_at)
+             VALUES ('s1', 'o1', 'p1', 1, 1);
+             PRAGMA user_version = 16;",
+        )
+        .unwrap();
+
+        EnclaveStore::migrate(&conn).unwrap();
+
+        assert!(!EnclaveStore::has_column(&conn, "api_share_sources", "mode").unwrap());
+        assert!(!EnclaveStore::has_column(&conn, "api_share_sources", "api_format").unwrap());
+        assert!(!EnclaveStore::has_column(&conn, "api_share_sources", "base_url").unwrap());
+        assert!(!EnclaveStore::has_column(&conn, "api_share_sources", "trust_domain").unwrap());
+        assert!(
+            !EnclaveStore::has_column(&conn, "api_share_sources", "allow_member_tokens").unwrap()
+        );
+        assert!(EnclaveStore::has_column(&conn, "api_share_tokens", "secret_ciphertext").unwrap());
+        assert!(EnclaveStore::has_column(&conn, "api_share_tokens", "daily_token_limit").unwrap());
+        assert!(EnclaveStore::has_column(&conn, "api_share_tokens", "revoked_at").unwrap());
+        assert!(EnclaveStore::has_column(&conn, "api_share_tokens", "archived_at").unwrap());
+        assert!(EnclaveStore::has_column(&conn, "api_share_distributions", "archived_at").unwrap());
+        assert!(EnclaveStore::has_column(&conn, "api_share_sources", "name_key").unwrap());
+        assert!(!EnclaveStore::has_column(&conn, "api_share_tokens", "source_id").unwrap());
+        assert!(!EnclaveStore::has_column(&conn, "api_share_tokens", "allowed_models").unwrap());
+        assert!(EnclaveStore::has_column(&conn, "api_share_tokens", "api_format").unwrap());
+        assert!(EnclaveStore::table_exists(&conn, "api_share_token_grants").unwrap());
+        assert!(!EnclaveStore::table_exists(&conn, "api_share_invites").unwrap());
+        assert!(!EnclaveStore::table_exists(&conn, "api_share_direct_shares").unwrap());
+        assert!(!EnclaveStore::table_exists(&conn, "api_share_usage").unwrap());
+        assert!(EnclaveStore::table_exists(&conn, "api_share_distributions").unwrap());
+        assert!(EnclaveStore::table_exists(&conn, "api_share_distribution_credentials").unwrap());
+        assert!(EnclaveStore::table_exists(&conn, "api_share_member_blocks").unwrap());
+        assert!(EnclaveStore::table_exists(&conn, "api_share_usage_daily").unwrap());
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, ENCLAVE_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v23_removes_member_self_issue_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE api_share_sources (
+                 id                   TEXT PRIMARY KEY,
+                 org_id               TEXT NOT NULL,
+                 provider_id          TEXT NOT NULL,
+                 name                 TEXT NOT NULL DEFAULT '',
+                 models               TEXT NOT NULL DEFAULT '[]',
+                 enabled              INTEGER NOT NULL DEFAULT 1,
+                 allow_member_tokens  INTEGER NOT NULL DEFAULT 1,
+                 created_by           TEXT NOT NULL DEFAULT '',
+                 created_at           INTEGER NOT NULL,
+                 updated_at           INTEGER NOT NULL,
+                 UNIQUE(org_id, provider_id)
+             );
+             PRAGMA user_version = 20;",
+        )
+        .unwrap();
+
+        EnclaveStore::migrate(&conn).unwrap();
+
+        assert!(
+            !EnclaveStore::has_column(&conn, "api_share_sources", "allow_member_tokens").unwrap()
+        );
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, ENCLAVE_SCHEMA_VERSION);
     }
 }

@@ -395,10 +395,7 @@ pub fn demote_after_transfer(conn: &Connection, org_id: &str) -> Result<(), Stri
 
 /// 取某组织详情（组织信息 + 成员列表）；不存在返回 `None`。
 /// 成员按角色排序：owner → admin → member（其余角色排最后）。
-pub fn org_detail(
-    conn: &Connection,
-    org_id: &str,
-) -> Result<Option<OrgDetailView>, String> {
+pub fn org_detail(conn: &Connection, org_id: &str) -> Result<Option<OrgDetailView>, String> {
     let org = conn
         .query_row(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
@@ -470,8 +467,11 @@ pub struct LocalIdentityRow {
 /// 覆盖写本机登录身份（平台只会有一个当前用户，旧行一律删掉）。
 pub fn upsert_local_identity(conn: &Connection, row: &LocalIdentityRow) -> Result<(), String> {
     let synced_at = chrono::Utc::now().timestamp();
-    conn.execute("DELETE FROM local_identity WHERE user_id <> ?1", params![row.user_id])
-        .map_err(|e| format!("清理旧登录身份失败：{}", e))?;
+    conn.execute(
+        "DELETE FROM local_identity WHERE user_id <> ?1",
+        params![row.user_id],
+    )
+    .map_err(|e| format!("清理旧登录身份失败：{}", e))?;
     conn.execute(
         "INSERT INTO local_identity (user_id, email, nickname, synced_at)
          VALUES (?1, ?2, ?3, ?4)
@@ -725,7 +725,8 @@ mod tests {
     /// 建一个内存库：本机登录身份 = 用户 1，组织 8 的角色由参数决定。
     fn seeded(role: &str) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(crate::enclave::db::ENCLAVE_SCHEMA_SQL).unwrap();
+        conn.execute_batch(crate::enclave::db::ENCLAVE_SCHEMA_SQL)
+            .unwrap();
         conn.execute(
             "INSERT INTO local_identity (user_id, email, nickname, synced_at)
              VALUES ('1', 'a@b.c', '测试', 0)",
@@ -759,17 +760,25 @@ mod tests {
         assert!(authorize(&conn, "8", Action::PolicyWrite).is_err());
         assert!(org_detail(&conn, "8").unwrap().is_none());
         assert!(list_orgs(&conn).unwrap().is_empty());
-        assert!(crate::enclave::authz::role_for_org(&conn, "8").unwrap().is_none());
+        assert!(crate::enclave::authz::role_for_org(&conn, "8")
+            .unwrap()
+            .is_none());
     }
 
     /// 主机判定必须同时满足 owner 与「登记设备就是本机」。
     #[test]
     fn host_org_ids_requires_registered_device() {
         let conn = seeded("owner");
-        assert!(host_org_ids(&conn, "dev-a").unwrap().is_empty(), "未登记不得自认主机");
+        assert!(
+            host_org_ids(&conn, "dev-a").unwrap().is_empty(),
+            "未登记不得自认主机"
+        );
         set_host_device(&conn, "8", "dev-a", "A").unwrap();
         assert_eq!(host_org_ids(&conn, "dev-a").unwrap(), vec!["8".to_string()]);
-        assert!(host_org_ids(&conn, "dev-b").unwrap().is_empty(), "其他设备不得成为主机");
+        assert!(
+            host_org_ids(&conn, "dev-b").unwrap().is_empty(),
+            "其他设备不得成为主机"
+        );
         assert_eq!(
             host_device_of(&conn, "8").unwrap(),
             ("dev-a".to_string(), "A".to_string())
@@ -853,7 +862,14 @@ mod tests {
         let actor = authorize(&conn, "8", Action::EmergencySet).unwrap();
         set_emergency(&conn, "8", true, &actor).unwrap();
         // 与命令层一致：写表后经唯一审计入口留痕
-        audit(&conn, "8", &actor, "host.emergency", "{\"from\":false,\"to\":true}").unwrap();
+        audit(
+            &conn,
+            "8",
+            &actor,
+            "host.emergency",
+            "{\"from\":false,\"to\":true}",
+        )
+        .unwrap();
 
         let view = emergency_view(&conn, "8").unwrap();
         assert!(view.disabled);
@@ -870,7 +886,14 @@ mod tests {
         let conn = seeded("owner");
         let actor = authorize(&conn, "8", Action::EmergencySet).unwrap();
         for i in 0..3 {
-            audit(&conn, "8", &actor, "host.emergency", &format!("{{\"n\":{}}}", i)).unwrap();
+            audit(
+                &conn,
+                "8",
+                &actor,
+                "host.emergency",
+                &format!("{{\"n\":{}}}", i),
+            )
+            .unwrap();
         }
         let page1 = list_audit(&conn, "8", 2, 0).unwrap();
         let page2 = list_audit(&conn, "8", 2, 2).unwrap();

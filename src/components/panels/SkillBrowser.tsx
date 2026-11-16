@@ -10,6 +10,11 @@ import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { SkillEntryEditor } from './SkillEntryEditor';
+import { SettingsButton, SettingsSection } from '../settings';
+
+interface SkillBrowserProps {
+  onConfigureSkills?: () => void;
+}
 
 /**
  * SkillBrowser — 全部技能管理（按 agent 分组）。
@@ -20,16 +25,16 @@ import { SkillEntryEditor } from './SkillEntryEditor';
  * 目录归属提醒：技能落在**该 Agent 自己的技能目录**里（可能是 CLI Agent 的全局目录，
  * 如 ~/.claude/skills）—— 卸载/改主文件会直接影响该 Agent，故卸载前二次确认并显示路径。
  */
-export function SkillBrowser() {
+export function SkillBrowser({ onConfigureSkills }: SkillBrowserProps) {
   const { skillsByAgent, isLoading, setAgentSkills, setLoading } = useSkillStore();
   const { agents, getDisplayName, getTheme } = useAgentRegistry();
   const { envInfo } = useEnvInfo();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<{ agent: string; name: string; description: string; category?: string } | null>(null);
-  const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
 
   const toggleAgent = (agent: string) => {
-    setCollapsedAgents((prev) => {
+    setExpandedAgents((prev) => {
       const next = new Set(prev);
       if (next.has(agent)) {
         next.delete(agent);
@@ -160,33 +165,43 @@ export function SkillBrowser() {
   };
 
   return (
-    <div className="flex flex-col">
-      {/* Header —— 左右内边距交给外层（设置页内容区），这样标题/搜索框与列表、与其它设置页左右对齐 */}
-      <div className="pb-3 mb-1" style={{ borderBottom: '1px solid var(--border)' }}>
-        <h3 className="text-xs font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-          全部技能
-        </h3>
-        <div className="relative">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
+    <SettingsSection
+      title="全部技能"
+      description="按 Agent 浏览本机技能。技能目录由各 Agent 独立读取，安装、编辑主文件或卸载会直接影响对应 Agent。"
+      actions={
+        onConfigureSkills ? (
+          <SettingsButton onClick={onConfigureSkills} icon={<FolderOpen size={12} />}>
+            配置技能读取目录
+          </SettingsButton>
+        ) : undefined
+      }
+    >
+      <div className="flex flex-col">
+        <div className="pd-settings-search">
+          <Search
+            size={12}
+            aria-hidden
+            className="pd-settings-search-icon"
+          />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索技能..."
-            className="search-input"
+            className="pd-settings-input pd-settings-search-input w-full"
           />
         </div>
-      </div>
 
-      {/* Skills list by agent —— 不设内部滚动：交给设置页整页滚动 */}
-      <div>
+        {/* Skills list by agent —— 不设内部滚动：交给设置页整页滚动 */}
+        <div className="pd-settings-skill-groups">
         {isLoading ? (
-          <div className="flex items-center justify-center py-8">
+          <div className="pd-settings-empty">
+            <FolderOpen size={20} style={{ color: 'var(--text-tertiary)' }} />
             <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>加载中...</span>
           </div>
         ) : !hasAny ? (
-          <div className="flex flex-col items-center justify-center py-8 gap-2">
-            <FolderOpen size={24} style={{ color: 'var(--text-tertiary)' }} />
+          <div className="pd-settings-empty">
+            <FolderOpen size={20} style={{ color: 'var(--text-tertiary)' }} />
             <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
               {searchQuery ? '未找到匹配技能' : '暂无已安装技能'}
             </span>
@@ -195,140 +210,143 @@ export function SkillBrowser() {
           allAgentTypes.map((agt) => {
             const filtered = getFiltered(agt);
             return (
-              <div key={agt}>
-                {/* Agent group header — click to toggle
-                    这是带背景色的横条（不是普通行），保留自身左右内边距，避免文字贴边 */}
-                <div
-                  className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
-                  style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
-                  onClick={() => toggleAgent(agt)}
-                >
-                  <Bot size={14} style={{ color: getTheme(agt).color }} />
-                  <span className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                    {getDisplayName(agt)}
-                  </span>
-                  <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                    ({filtered.length})
-                  </span>
-                  {/* 安装到「该 Agent 自己的技能目录」：目录或 .zip 包两种来源 */}
-                  <div className="ml-auto shrink-0 flex items-center gap-0.5">
+              <section
+                key={agt}
+                className="pd-settings-skill-group"
+                data-collapsed={!expandedAgents.has(agt)}
+              >
+                {/* 一级：Agent 分组标题。整条可展开/收起，操作按钮浮于命中区之上。 */}
+                <div className="pd-settings-skill-group-header">
+                  <button
+                    type="button"
+                    className="pd-settings-skill-group-toggle"
+                    onClick={() => toggleAgent(agt)}
+                    aria-expanded={expandedAgents.has(agt)}
+                    aria-label={`${expandedAgents.has(agt) ? '收起' : '展开'} ${getDisplayName(agt)} 的技能`}
+                  />
+                  <div className="pd-settings-skill-group-heading">
+                    <Bot size={14} style={{ color: getTheme(agt).color }} />
+                    <span className="pd-settings-skill-group-name">
+                      {getDisplayName(agt)}
+                    </span>
+                    <span className="pd-settings-skill-group-count">
+                      {filtered.length}
+                    </span>
+                  </div>
+                  <div className="pd-settings-skill-group-actions">
                     <button
+                      type="button"
                       onClick={(e) => { e.stopPropagation(); void handleInstall(agt, 'dir'); }}
                       disabled={busy}
-                      className="p-1 rounded transition-colors hover:opacity-80"
+                      className="pd-settings-skill-icon-button"
                       style={{ color: 'var(--text-tertiary)', cursor: busy ? 'not-allowed' : 'pointer' }}
                       title={`从本地目录安装技能到 ${getDisplayName(agt)} 的技能目录`}
                     >
                       <FolderOpen size={13} />
                     </button>
                     <button
+                      type="button"
                       onClick={(e) => { e.stopPropagation(); void handleInstall(agt, 'zip'); }}
                       disabled={busy}
-                      className="p-1 rounded transition-colors hover:opacity-80"
+                      className="pd-settings-skill-icon-button"
                       style={{ color: 'var(--text-tertiary)', cursor: busy ? 'not-allowed' : 'pointer' }}
                       title={`从 .zip 包安装技能到 ${getDisplayName(agt)} 的技能目录`}
                     >
                       <FileArchive size={13} />
                     </button>
-                    <span className="flex items-center" style={{ color: 'var(--text-tertiary)' }}>
-                      {collapsedAgents.has(agt) ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                    <span className="pd-settings-skill-chevron" aria-hidden>
+                      {expandedAgents.has(agt) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                     </span>
                   </div>
                 </div>
 
-                {/* Skills */}
-                {!collapsedAgents.has(agt) && (
-                  filtered.length > 0 ? filtered.map((skill) => {
-                    const isSelected = selectedSkill?.agent === agt && selectedSkill?.name === skill.name;
-                    const noPath = !skill.entryPath;
-                    return (
-                      <div
-                        key={`${agt}:${skill.name}`}
-                        className="flex items-center transition-colors"
-                        style={{
-                          backgroundColor: isSelected ? 'var(--bg-tertiary)' : 'transparent',
-                          borderBottom: '1px solid var(--border)',
-                        }}
-                      >
-                        <button
-                          onClick={() => setSelectedSkill({ agent: agt, ...skill })}
-                          className="flex-1 min-w-0 flex items-center gap-2 py-2.5 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
-                              <Cpu size={12} className="shrink-0" style={{ color: getTheme(agt).color }} />
-                              <span className="truncate">{skill.name}</span>
+                {/* 二级：技能条目缩进在 Agent 分组内，整行负责选中，操作按钮独立。 */}
+                {expandedAgents.has(agt) && (
+                  <div className="pd-settings-skill-group-body">
+                    {filtered.length > 0 ? (
+                      <div className="pd-settings-skill-list">
+                        {filtered.map((skill) => {
+                          const isSelected = selectedSkill?.agent === agt && selectedSkill?.name === skill.name;
+                          const noPath = !skill.entryPath;
+                          return (
+                            <div
+                              key={`${agt}:${skill.name}`}
+                              className="pd-settings-skill-row"
+                              data-selected={isSelected}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setSelectedSkill({ agent: agt, ...skill })}
+                                className="pd-settings-skill-row-select"
+                                aria-label={`选择技能 ${skill.name}`}
+                                aria-pressed={isSelected}
+                              />
+                              <div className="pd-settings-skill-row-content">
+                                <div className="pd-settings-skill-name">
+                                  <Cpu size={12} className="shrink-0" style={{ color: getTheme(agt).color }} />
+                                  <span className="truncate">{skill.name}</span>
+                                </div>
+                                <div className="pd-settings-skill-description pd-settings-note truncate">
+                                  {skill.description}
+                                </div>
+                              </div>
+                              {/* 主文件编辑 / 卸载：都按落盘路径操作，取不到路径时禁用并说明原因 */}
+                              <div className="pd-settings-skill-row-actions">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (skill.entryPath) setEditTarget({ agent: agt, skillName: skill.name, entryPath: skill.entryPath });
+                                  }}
+                                  disabled={busy || noPath}
+                                  className="pd-settings-skill-icon-button"
+                                  style={{ color: 'var(--text-tertiary)', cursor: busy || noPath ? 'not-allowed' : 'pointer' }}
+                                  title={noPath ? '未取到技能主文件路径，无法编辑' : '编辑技能主文件（SKILL.md）'}
+                                >
+                                  <FileText size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleUninstall(agt, skill)}
+                                  disabled={busy || !skill.dirPath}
+                                  className="pd-settings-skill-icon-button"
+                                  style={{ color: 'var(--text-tertiary)', cursor: busy || !skill.dirPath ? 'not-allowed' : 'pointer' }}
+                                  title={skill.dirPath ? '卸载技能（删除技能目录）' : '未取到技能目录，无法卸载'}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
                             </div>
-                            <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-                              {skill.description}
-                            </div>
-                          </div>
-                        </button>
-                        {/* 主文件编辑 / 卸载：都按落盘路径操作，取不到路径时禁用并说明原因 */}
-                        <div className="flex items-center gap-0.5 shrink-0">
-                          <button
-                            onClick={() => {
-                              if (skill.entryPath) setEditTarget({ agent: agt, skillName: skill.name, entryPath: skill.entryPath });
-                            }}
-                            disabled={busy || noPath}
-                            className="p-1 rounded transition-colors hover:opacity-80"
-                            style={{ color: 'var(--text-tertiary)', cursor: busy || noPath ? 'not-allowed' : 'pointer' }}
-                            title={noPath ? '未取到技能主文件路径，无法编辑' : '编辑技能主文件（SKILL.md）'}
-                          >
-                            <FileText size={13} />
-                          </button>
-                          <button
-                            onClick={() => void handleUninstall(agt, skill)}
-                            disabled={busy || !skill.dirPath}
-                            className="p-1 rounded transition-colors hover:opacity-80"
-                            style={{ color: 'var(--text-tertiary)', cursor: busy || !skill.dirPath ? 'not-allowed' : 'pointer' }}
-                            title={skill.dirPath ? '卸载技能（删除技能目录）' : '未取到技能目录，无法卸载'}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                          );
+                        })}
                       </div>
-                    );
-                  }) : (
-                    <div className="py-2 text-[10px]" style={{ color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border)' }}>
+                    ) : (
+                      <div className="pd-settings-skill-empty">
                       暂无技能文件（可用右上角「目录 / 压缩包」按钮安装）
-                    </div>
-                  )
+                      </div>
+                    )}
+                  </div>
                 )}
-              </div>
+              </section>
             );
           })
         )}
-      </div>
-
-      {/* Skill detail */}
-      {selectedSkill && (
-        <div className="pt-3 mt-1" style={{ borderTop: '1px solid var(--border)' }}>
-          <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-            <span style={{ color: 'var(--text-tertiary)' }}>来源:</span> {getDisplayName(selectedSkill.agent)}
-            {selectedSkill.category && (
-              <span className="ml-2">
-                <span style={{ color: 'var(--text-tertiary)' }}>分类:</span> {selectedSkill.category}
-              </span>
-            )}
-          </div>
         </div>
-      )}
 
-      {/* 主文件编辑器：保存成功后刷新该 Agent 的技能列表（name/description 可能已改） */}
-      {editTarget && (
-        <SkillEntryEditor
-          agentType={editTarget.agent}
-          skillName={editTarget.skillName}
-          entryPath={editTarget.entryPath}
-          onClose={() => setEditTarget(null)}
-          onSaved={() => {
-            const agent = editTarget.agent;
-            setEditTarget(null);
-            void requestSkills(agent);
-          }}
-        />
-      )}
-    </div>
+        {/* 主文件编辑器：保存成功后刷新该 Agent 的技能列表（name/description 可能已改） */}
+        {editTarget && (
+          <SkillEntryEditor
+            agentType={editTarget.agent}
+            skillName={editTarget.skillName}
+            entryPath={editTarget.entryPath}
+            onClose={() => setEditTarget(null)}
+            onSaved={() => {
+              const agent = editTarget.agent;
+              setEditTarget(null);
+              void requestSkills(agent);
+            }}
+          />
+        )}
+      </div>
+    </SettingsSection>
   );
 }

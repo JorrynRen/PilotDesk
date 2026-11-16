@@ -4,6 +4,7 @@ import { Search, RefreshCw, X, Download, Check, Lightbulb, Sparkles, Loader2 } f
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { TagChips } from '../inspiration/TagChips';
+import { MarketLoadError } from './MarketLoadError';
 
 /**
  * 灵感市场（「资源市集 › 灵感」tab）。
@@ -162,10 +163,7 @@ export function InspirationMarketTab() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* 工具行：搜索 + 计数 + 刷新 */}
-      <div
-        className="shrink-0 px-4 py-2 flex items-center gap-2"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
+      <div className="pd-market-toolbar">
         <div className="relative flex-1 min-w-0 max-w-md">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2"
             style={{ color: 'var(--text-tertiary)' }} />
@@ -174,8 +172,7 @@ export function InspirationMarketTab() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索灵感标题或摘要..."
-            className="block w-full pl-8 pr-3 py-1.5 rounded-md text-[11px] outline-none"
-            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            className="pd-market-search"
           />
         </div>
 
@@ -190,31 +187,23 @@ export function InspirationMarketTab() {
         <button
           onClick={() => { void load(); void loadImported(); }}
           disabled={loading}
-          className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1 shrink-0"
-          style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+          className="pd-market-icon-button pd-btn"
           title="重新获取市场索引"
+          aria-label="刷新灵感市场"
         >
           <RefreshCw size={11} className={loading ? 'pd-animate-spin' : ''} />
-          刷新
         </button>
       </div>
 
       {/* 列表 */}
-      <div className="flex-1 overflow-y-auto p-4 pd-scroll-stable">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pd-scroll-stable">
         {error && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg mb-3"
-            style={{ backgroundColor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
-            <span className="text-[11px] flex-1" style={{ color: '#EF4444' }}>
-              读取灵感市场失败：{error}
-            </span>
-            <button
-              onClick={() => void load()}
-              className="pd-btn text-[10px] px-2 py-0.5 rounded"
-              style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}
-            >
-              重试
-            </button>
-          </div>
+          <MarketLoadError
+            error={error}
+            fallbackTitle="灵感市场加载失败"
+            onRetry={() => { void load(); }}
+            className="mb-3"
+          />
         )}
 
         {loading && !error && (
@@ -241,7 +230,7 @@ export function InspirationMarketTab() {
                   onClick={() => openDetail(item)}
                   /* pd-card-btn：覆盖全局 button 重置（它把按钮定成 inline-flex + row，
                      卡片需要纵向堆叠 —— 这个必须用未分层的类，Tailwind 的 flex-col 盖不住） */
-                  className="pd-card-btn relative overflow-hidden rounded-lg p-3 transition-colors"
+                  className="pd-card-btn relative min-h-[140px] overflow-hidden rounded-lg p-3 transition-colors"
                   style={{
                     backgroundColor: 'var(--bg-secondary)',
                     border: `1px solid ${isImported ? 'var(--accent)' : 'var(--border)'}`,
@@ -264,9 +253,9 @@ export function InspirationMarketTab() {
                     </span>
                   )}
                   {/* 标题行在有角标时右侧留出空位，避免长标题钻到角标底下 */}
-                  <div className="flex items-center gap-2 min-w-0" style={isImported ? { paddingRight: 46 } : undefined}>
-                    <span style={{ fontSize: 18, lineHeight: 1 }}>{item.icon}</span>
-                    <span className="text-xs font-medium truncate flex-1" style={{ color: 'var(--text-primary)' }}>
+                  <div className="flex items-start gap-2 min-w-0" style={isImported ? { paddingRight: 46 } : undefined}>
+                    <span className="shrink-0" style={{ fontSize: 18, lineHeight: 1.2 }}>{item.icon}</span>
+                    <span className="text-xs font-medium leading-snug line-clamp-2 flex-1 min-w-0" style={{ color: 'var(--text-primary)' }}>
                       {item.title}
                     </span>
                   </div>
@@ -319,15 +308,31 @@ function InspirationDetailDialog({
   const content = state?.content ?? '';
   const canImport = !loading && content.length > 0;
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`灵感详情：${item.title}`}
     >
       <div
-        className="w-[640px] max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
-        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}
+        className="max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
+        style={{
+          width: 'min(640px, calc(100vw - 32px))',
+          backgroundColor: 'var(--bg-primary)',
+          border: '1px solid var(--border)',
+          overflow: 'hidden',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -361,13 +366,11 @@ function InspirationDetailDialog({
           )}
 
           {!loading && state?.error && (
-            <div className="flex flex-col items-center gap-3 py-10">
-              <span className="text-xs" style={{ color: '#EF4444' }}>获取正文失败：{state.error}</span>
-              <button onClick={onRetry} className="pd-btn px-3 py-1 rounded text-[11px]"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-                重试
-              </button>
-            </div>
+            <MarketLoadError
+              error={state.error}
+              fallbackTitle="灵感内容加载失败"
+              onRetry={onRetry}
+            />
           )}
 
           {!loading && !state?.error && (

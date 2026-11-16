@@ -200,7 +200,7 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
             style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            输入消息开始新会话（先选择会话模型与工作目录），或从左侧选择已有会话或新建
+            输入消息开始新会话，或从左侧选择已有会话或新建
           </div>
         </div>
       </div>

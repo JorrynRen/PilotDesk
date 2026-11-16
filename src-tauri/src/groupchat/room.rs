@@ -4,7 +4,6 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -429,11 +428,9 @@ fn normalize_message_content(content: &str) -> String {
     out
 }
 
-/// 工具调用链 JSON（ThinkingChainStep[]）落库前的归一化：对其中的文本字段
-/// （content/result/fileDiff）逐项折叠空行。工具输出、文件 diff、推理文本可能含
-/// 连续空行，若不处理，前端 whitespace-pre-wrap 直出时会原样显示多空行。
-/// 用 serde_json::Value 泛化处理，避免依赖具体步骤类型，保持群聊模块可整体开源。
-fn normalize_tool_calls(tool_calls: &str) -> String {
+/// 工具调用链 JSON（ThinkingChainStep[]）落库前的归一化：折叠文本字段空行，
+/// 并把本房间内建文件工具的路径参数统一成相对工作根的绝对路径。
+fn normalize_tool_calls(tool_calls: &str, work_root: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(tool_calls) {
         if let Some(items) = value.as_array_mut() {
             for item in items.iter_mut() {
@@ -448,7 +445,10 @@ fn normalize_tool_calls(tool_calls: &str) -> String {
             }
         }
         if let Ok(serialized) = serde_json::to_string(&value) {
-            return serialized;
+            return crate::utils::paths::normalize_tool_call_context_paths(
+                serialized.as_str(),
+                work_root,
+            );
         }
     }
     tool_calls.to_string()
@@ -503,10 +503,10 @@ pub enum RoomCommand {
     SetDirector {
         director_id: String,
     },
-    /// 房间统一产物目录变更（命令层已落库，运行时同步字段使后续上下文生效）。
-    SetOutputDir(String),
     /// 参与者名册发生变更（加入/移除），需要重建运行时并重新编排角色与任务。
     ParticipantChanged,
+    /// 项目主目录、关联目录或项目归属变更：只刷新运行时工作区，不触发名册重排。
+    WorkspaceChanged,
     Pause,
     Resume,
     Abort,
@@ -682,6 +682,7 @@ impl RoomRegistry {
             shared_director.clone(),
             acp_gate.clone(),
             security_shared.clone(),
+            "",
         )?;
 
         // 应用重启后懒恢复：读取 DB 真实状态与轮次，供 run() 判断是否续跑未完成任务。
@@ -689,17 +690,14 @@ impl RoomRegistry {
         let round = store::max_message_round(&conn, room_id);
         let topic = room.topic.clone();
 
-        // 房间产物目录（v3.4ay）：显式指定优先；空则先以 `<工作目录>/outputs/<房间标题>/` 兜底，
-        // 待目标理解阶段由 resolve_and_persist_output_dir 按主题目录名确定、创建并落库。
-        let output_dir = if room.output_dir.trim().is_empty() {
-            let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
-                .to_string_lossy()
-                .to_string();
-            let title = sanitize_room_title(&room.title);
-            format!("{}\\outputs\\{}", cwd.trim_end_matches(['\\', '/']), title)
-        } else {
-            room.output_dir.clone()
-        };
+        // 产物目录只存在于本次运行时：按 `<工作根>/outputs/<房间标题>/` 派生。
+        // 目标理解阶段可用主持人命名的短目录名替换，但不写回房间行。
+        let workspace = room_workspace_context(&conn, room_id, "")?;
+        let artifact_name = workspace.artifact_name;
+        let workspace_resolution = workspace.workspace;
+        let work_root = workspace_resolution.work_root.clone();
+        let linked_roots = workspace_resolution.linked_roots.clone();
+        let output_dir = workspace.output_dir;
 
         let runtime = RoomRuntime {
             room_id: room_id.to_string(),
@@ -739,7 +737,11 @@ impl RoomRegistry {
             acp_gate,
             participant_failures,
             input_refs: Vec::new(),
+            artifact_name,
             output_dir,
+            work_root,
+            linked_roots,
+            workspace_resolution,
         };
 
         // 使用 tauri::async_runtime::spawn 而非 tokio::spawn：
@@ -804,6 +806,16 @@ impl RoomRegistry {
     pub fn remove(&self, room_id: &str) {
         self.rooms.lock().unwrap().remove(room_id);
     }
+
+    /// 项目目录或工作归属变化后，通知已启动房间重建参与者工作区。
+    /// 未启动的房间无需处理，下次懒加载时会直接从数据库读取最新目录。
+    pub fn notify_workspace_changed(&self, room_id: &str) {
+        if let Some(handle) = self.get(room_id) {
+            if !handle.send(RoomCommand::WorkspaceChanged) {
+                self.remove(room_id);
+            }
+        }
+    }
 }
 
 /// 从 DB 构建参与者与 Director。
@@ -846,6 +858,42 @@ fn is_coordinator_role(role: &str) -> bool {
             || r.eq_ignore_ascii_case("moderator"))
 }
 
+struct RoomWorkspace {
+    workspace: crate::commands::projects::WorkspaceResolution,
+    roots: Vec<String>,
+    artifact_name: String,
+    output_dir: String,
+}
+
+/// 圆桌每次运行都从最新工作根派生产物目录。
+///
+/// `artifact_name_hint` 只能是目录名称，不能是历史绝对路径；项目归属或主目录
+/// 变化后，下一次重建会自然落到新工作根，旧路径不会成为新的运行基准。
+fn room_workspace_context(
+    conn: &rusqlite::Connection,
+    room_id: &str,
+    artifact_name_hint: &str,
+) -> Result<RoomWorkspace, AppError> {
+    let context = crate::commands::projects::resolve_workspace_context(
+        conn,
+        crate::commands::projects::WorkspaceOwner::room(room_id),
+    )?;
+    let artifact_name = if artifact_name_hint.trim().is_empty() {
+        sanitize_room_title(&context.owner_title)
+    } else {
+        sanitize_room_title(artifact_name_hint)
+    };
+    let output_dir = context.artifact_root_for_name(&artifact_name);
+    let workspace = context.workspace;
+    let roots = workspace.runtime_roots([output_dir.clone()]);
+    Ok(RoomWorkspace {
+        workspace,
+        roots,
+        artifact_name,
+        output_dir,
+    })
+}
+
 fn build_participants(
     conn: &rusqlite::Connection,
     pool: &DbPool,
@@ -858,19 +906,16 @@ fn build_participants(
     shared_director: Arc<RwLock<Option<Arc<Director>>>>,
     acp_gate: Arc<dyn crate::agent::transport::ApprovalGate>,
     security_shared: Arc<RwLock<Option<SecurityMode>>>,
+    artifact_name_hint: &str,
 ) -> Result<BuiltParticipants, AppError> {
     let rows = store::list_participants(conn, &room.id)?;
     // 群聊作用域技能禁用集（构造时读一次的快照，随后 rebuild_participants 时刷新）：
     // 只从 `<available_skills>` 目录隐藏，load_skill 仍可点名加载被隐藏技能。
     let disabled_skills = crate::commands::app_settings::load_skill_scope_disabled(conn).groupchat;
-    // 房间工作区根 = 产物目录（用户选定项目/工作空间根）；未选时回退全局工作空间。
-    let cwd = if room.output_dir.trim().is_empty() {
-        crate::utils::paths::resolve_workspace_path(None, "", conn)
-            .to_string_lossy()
-            .to_string()
-    } else {
-        room.output_dir.clone()
-    };
+    // 房间工作根 = 项目主目录（未归属时全局工作区）；产物目录仅额外授权，不改变相对路径基准。
+    let workspace = room_workspace_context(conn, &room.id, artifact_name_hint)?;
+    let cwd = workspace.workspace.work_root.clone();
+    let workspace_roots = workspace.roots;
 
     let mut participants: HashMap<String, Arc<dyn Participant>> = HashMap::new();
     let mut director: Option<Arc<Director>> = None;
@@ -901,6 +946,7 @@ fn build_participants(
             None,
             mcp.clone(),
             security_mode,
+            &workspace_roots,
         ) {
             director = Some(Arc::new(Director::new(Arc::new(llm), row.id.clone())));
         }
@@ -928,6 +974,7 @@ fn build_participants(
                     Some(cancel.clone()),
                     mcp.clone(),
                     security_mode,
+                    &workspace_roots,
                 ) {
                     let llm = if shared_director.read().unwrap().clone().is_some() {
                         llm.with_approval_handler(make_director_approval(
@@ -960,6 +1007,7 @@ fn build_participants(
                     Arc::new(AsyncMutex::new(AgentManager::new())),
                     pool.clone(),
                     cwd.clone(),
+                    workspace_roots.clone(),
                     acp_gate.clone(),
                     security_shared.clone(),
                     // 与 API 参与者同一 scope 约定（见 build_llm_client 注释）
@@ -1013,6 +1061,7 @@ fn build_llm_client(
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     mcp: Option<Arc<RoomMcpAssets>>,
     security_mode: Option<SecurityMode>,
+    workspace_roots: &[String],
 ) -> Option<PilotDeskLlmClient> {
     let v: serde_json::Value = serde_json::from_str(agent_config_json).ok()?;
     let provider_id = v["provider"].as_str()?;
@@ -1045,8 +1094,10 @@ fn build_llm_client(
     // 持久化权限规则：群聊与会话共用同一清单分类体系（高风险/风险/安全）
     client = client
         .with_permission_rules(crate::commands::permission::load_rules(conn).unwrap_or_default());
-    // 工作区目录（工作区内路径 = 安全路径）
-    client = client.with_workspace(Some(cwd.to_string()));
+    // 工作根 + 项目关联目录 + 统一产物目录，均由 room_workspace_context 统一去重后传入。
+    client = client
+        .with_workspace(Some(cwd.to_string()))
+        .with_workspace_roots(workspace_roots.to_vec());
     // 会话安全模式（本波次有效，不持久化）
     client = client.with_security_mode(security_mode);
     // 流式 chunk 空闲超时：全局 app_settings 可配置（与会话共用同一键）
@@ -1064,6 +1115,7 @@ fn build_llm_client(
         let registry = super::adapter::tools::build_groupchat_tool_registry(
             conn,
             cwd,
+            workspace_roots,
             &model,
             format,
             image,
@@ -1371,11 +1423,21 @@ fn anchor_base_dir(anchor: &str, cwd: &str) -> Option<std::path::PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
     };
     match anchor.trim() {
-        "桌面" | "桌面文件夹" | "我的桌面" => home().map(|h| h.join("Desktop")),
-        "文档" | "我的文档" => home().map(|h| h.join("Documents")),
-        "下载" | "下载目录" => home().map(|h| h.join("Downloads")),
-        "工作目录" | "项目目录" | "当前目录" => Some(std::path::PathBuf::from(cwd)),
-        "上级目录" | "上一级" => std::path::Path::new(cwd).parent().map(|p| p.to_path_buf()),
+        "桌面" | "桌面文件夹" | "我的桌面" => home().map(|h| {
+            crate::utils::paths::normalize_absolute_path(&h.join("Desktop").to_string_lossy(), "")
+        }),
+        "文档" | "我的文档" => home().map(|h| {
+            crate::utils::paths::normalize_absolute_path(&h.join("Documents").to_string_lossy(), "")
+        }),
+        "下载" | "下载目录" => home().map(|h| {
+            crate::utils::paths::normalize_absolute_path(&h.join("Downloads").to_string_lossy(), "")
+        }),
+        "工作目录" | "项目目录" | "当前目录" => {
+            Some(crate::utils::paths::normalize_absolute_path(cwd, ""))
+        }
+        "上级目录" | "上一级" => crate::utils::paths::normalize_absolute_path(cwd, "")
+            .parent()
+            .map(std::path::Path::to_path_buf),
         _ => None,
     }
 }
@@ -1421,18 +1483,25 @@ fn resolve_input_refs(
                     .as_str()
                     .trim_end_matches(['\\', '/', '.', '，', '。', ';', '；', '、'])
                     .to_string();
-                push(v.clone(), Some(v));
+                let resolved = crate::utils::paths::normalize_absolute_path(&v, cwd)
+                    .to_string_lossy()
+                    .to_string();
+                push(v, Some(resolved));
             }
         }
         for cap in unc_re.captures_iter(text) {
             if let Some(m) = cap.get(0) {
-                push(m.as_str().to_string(), Some(m.as_str().to_string()));
+                let raw = m.as_str().to_string();
+                let resolved = crate::utils::paths::normalize_absolute_path(&raw, cwd)
+                    .to_string_lossy()
+                    .to_string();
+                push(raw, Some(resolved));
             }
         }
         for cap in rel_re.captures_iter(text) {
             if let Some(m) = cap.get(0) {
                 let rel = m.as_str();
-                let joined = std::path::Path::new(cwd).join(rel);
+                let joined = crate::utils::paths::normalize_absolute_path(rel, cwd);
                 let resolved = if joined.exists() {
                     Some(joined.to_string_lossy().to_string())
                 } else {
@@ -1483,7 +1552,10 @@ fn resolve_input_refs(
                 }
                 // 子路径可能含空格（如"2024 项目资料"），保守取首段
                 let first_seg = sub.split(' ').next().unwrap_or(&sub).to_string();
-                let joined = base.join(&first_seg);
+                let joined = crate::utils::paths::normalize_absolute_path(
+                    &base.join(&first_seg).to_string_lossy(),
+                    cwd,
+                );
                 let resolved = if joined.exists() {
                     Some(joined.to_string_lossy().to_string())
                 } else {
@@ -1503,6 +1575,7 @@ fn resolve_input_refs(
         for seg in &d.subpath {
             joined = joined.join(seg);
         }
+        joined = crate::utils::paths::normalize_absolute_path(&joined.to_string_lossy(), cwd);
         let resolved = if joined.exists() {
             Some(joined.to_string_lossy().to_string())
         } else {
@@ -1536,7 +1609,7 @@ fn format_input_refs_section(input_refs: &[ResolvedRef]) -> String {
 /// - 本地文件：write_file / edit_file / edit_image / create_document 等写入类工具的参数 path（绝对路径）；
 /// - 网络资源：generate_image / generate_video / fetch_web 返回的 Markdown 图片/链接 URL（尖括号界定边界）。
 /// 排除 data: base64 URI（体积爆炸且不可直接引用）；result 文本不扫裸本地路径（防误报库路径/噪音）。
-fn extract_artifacts_from_tool_calls(tool_calls: &str) -> Vec<ArtifactRef> {
+fn extract_artifacts_from_tool_calls(tool_calls: &str, cwd: &str) -> Vec<ArtifactRef> {
     let v: Option<serde_json::Value> = serde_json::from_str(tool_calls).ok();
     let Some(arr) = v.and_then(|v| v.as_array().cloned()) else {
         return Vec::new();
@@ -1561,8 +1634,19 @@ fn extract_artifacts_from_tool_calls(tool_calls: &str) -> Vec<ArtifactRef> {
                 if WRITE_TOOLS.contains(&name) {
                     if let Some(args) = step["args"].as_str() {
                         if let Ok(a) = serde_json::from_str::<serde_json::Value>(args) {
-                            if let Some(p) = a["path"].as_str() {
-                                push_unique(ArtifactKind::File, p.to_string());
+                            if let Some(p) = a["path"]
+                                .as_str()
+                                .or_else(|| a["file"].as_str())
+                                .or_else(|| a["image"].as_str())
+                            {
+                                let normalized =
+                                    crate::utils::paths::normalize_absolute_path(p, cwd);
+                                if normalized.is_absolute() {
+                                    push_unique(
+                                        ArtifactKind::File,
+                                        normalized.to_string_lossy().to_string(),
+                                    );
+                                }
                             }
                         }
                     }
@@ -1642,9 +1726,16 @@ struct RoomRuntime {
     /// 用户输入物引用解析结果（v3.4an）：用户指令/目标/约束中的路径与 URL 引用，
     /// 注入 Director 上下文（B 层）与执行者 prompt（C 层），避免执行者臆测路径。
     input_refs: Vec<ResolvedRef>,
-    /// 房间统一产物目录（v3.4ao）：所有参与者产物必须写入该目录（绝对路径）。
-    /// 来源：room.output_dir；空时回退 `<工作目录>/outputs/<房间标题>/`。
+    /// 本次运行的产物目录名称提示；只用于从最新工作根重新派生，不保存绝对路径。
+    artifact_name: String,
+    /// 本次运行的房间统一产物目录（绝对路径），按工作根动态派生，不持久化。
     output_dir: String,
+    /// 房间工作根：项目主目录，未归属项目时为全局工作区。CLI/ACP 的相对路径基准。
+    work_root: String,
+    /// 项目关联目录：与主目录一起进入安全路径，并显式写入参与者提示词。
+    linked_roots: Vec<String>,
+    /// 完整工作区语义（来源、项目根、记忆根、关联目录）。
+    workspace_resolution: crate::commands::projects::WorkspaceResolution,
 }
 
 impl RoomRuntime {
@@ -1747,12 +1838,11 @@ impl RoomRuntime {
                 RoomCommand::SetDirector { director_id } => {
                     self.set_director(&director_id).await;
                 }
-                RoomCommand::SetOutputDir(output_dir) => {
-                    self.room.output_dir = output_dir.clone();
-                    self.output_dir = output_dir;
-                }
                 RoomCommand::ParticipantChanged => {
                     self.handle_participant_changed().await;
+                }
+                RoomCommand::WorkspaceChanged => {
+                    self.handle_workspace_changed().await;
                 }
                 RoomCommand::Pause => {
                     self.persist_control_notice("已暂停：正在完成当前执行中的任务，之后将暂停调度新任务。点击「继续」可恢复。").await;
@@ -1813,6 +1903,20 @@ impl RoomRuntime {
         let Ok(conn) = self.conn() else {
             return;
         };
+        // 项目归属/目录可能刚被其他页面修改，重建前先读取最新房间行，
+        // 确保参与者 cwd 与安全根不继续使用旧快照。
+        if let Ok(Some(room)) = store::get_room(&conn, &self.room_id) {
+            self.room = room;
+        }
+        let Ok(workspace) = room_workspace_context(&conn, &self.room_id, &self.artifact_name)
+        else {
+            return;
+        };
+        self.artifact_name = workspace.artifact_name;
+        self.work_root = workspace.workspace.work_root.clone();
+        self.linked_roots = workspace.workspace.linked_roots.clone();
+        self.workspace_resolution = workspace.workspace;
+        self.output_dir = workspace.output_dir;
         let Ok(built) = build_participants(
             &conn,
             &self.pool,
@@ -1825,6 +1929,7 @@ impl RoomRuntime {
             self.shared_director.clone(),
             self.acp_gate.clone(),
             self.security_shared.clone(),
+            &self.artifact_name,
         ) else {
             return;
         };
@@ -1838,6 +1943,11 @@ impl RoomRuntime {
         self.floor = FloorManager::new(built.floor_order.clone());
         self.floor_order = built.floor_order;
         self.executor_order = built.executor_order;
+    }
+
+    /// 项目目录或归属变化后仅刷新工作区与参与者运行时，不触发任务重排。
+    async fn handle_workspace_changed(&mut self) {
+        self.rebuild_participants().await;
     }
 
     /// 格式化可用模型 + CLI Agent 清单，供 Director 按需组建参与者时选模型/agent。
@@ -2374,15 +2484,18 @@ impl RoomRuntime {
         if !self.room.goal_notes.trim().is_empty() {
             texts.push(self.room.goal_notes.clone());
         }
-        let cwd = self
-            .conn()
-            .ok()
-            .map(|c| {
-                crate::utils::paths::resolve_workspace_path(None, "", &c)
-                    .to_string_lossy()
-                    .to_string()
-            })
-            .unwrap_or_default();
+        let cwd = if self.work_root.trim().is_empty() {
+            self.conn()
+                .ok()
+                .map(|c| {
+                    crate::utils::paths::resolve_workspace_path(None, "", &c)
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .unwrap_or_default()
+        } else {
+            self.work_root.clone()
+        };
         // LLM 语义层：仅输出 anchor+subpath 结构（防幻觉），拼接与存在性校验交给 resolve_input_refs。
         let mut llm_drafts: Vec<InputRefDraft> = Vec::new();
         if let Some(director) = self.director.clone() {
@@ -2404,6 +2517,13 @@ impl RoomRuntime {
     /// B 层注入：把用户输入物解析段、统一产物目录与累积约束合并，作为 Director 上下文的 notes。
     fn combined_notes(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
+        let workspace = crate::commands::projects::workspace_context_prompt(
+            &self.workspace_resolution,
+            (!self.output_dir.is_empty()).then_some(self.output_dir.as_str()),
+        );
+        if !workspace.is_empty() {
+            parts.push(workspace);
+        }
         let input_section = format_input_refs_section(&self.input_refs);
         if !input_section.is_empty() {
             parts.push(input_section);
@@ -2422,62 +2542,35 @@ impl RoomRuntime {
         parts.join("\n")
     }
 
-    /// 目标理解阶段确定产物目录（v3.4ay）：用户已填则校验合法性并尝试创建；
-    /// 未填/不合法/创建失败则回退 `<工作目录>/outputs/<目录名>` 并创建（目录名优先取
-    /// 主持人命名的 `dir_name_hint`，为空才按目标主题截断兜底）；
-    /// 结果落库 room.output_dir 并发事件，前端右侧面板可动态显示当前值。
-    async fn resolve_and_persist_output_dir(&mut self, goal: &str, dir_name_hint: &str) -> String {
+    /// 目标理解阶段派生本次运行的产物目录：`<工作根>/outputs/<短目录名>`。
+    /// 目录名优先采用主持人给出的短名称，为空时回退房间标题/目标主题。
+    /// 该路径属于运行时派生值，不写回房间行；项目切换后按新工作根重新计算。
+    async fn resolve_output_dir(&mut self, goal: &str, dir_name_hint: &str) -> String {
         let conn = match self.conn() {
             Ok(c) => c,
             Err(_) => return self.output_dir.clone(),
         };
-        let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
-            .to_string_lossy()
-            .to_string();
-        // 目录名：主持人命名优先（简短贴切）；主持人未命名（如阶段A整理失败/未返回该字段）时
-        // 回退**圆桌标题**（用户创建时必填的短名），标题也缺失时再退回目标主题。
-        // 绝不把用户首条消息全文当目录名——那会生成一个又长又含标点的路径。
-        let source = if !dir_name_hint.trim().is_empty() {
+        let artifact_name = if !dir_name_hint.trim().is_empty() {
             dir_name_hint
         } else if !self.room.title.trim().is_empty() {
             self.room.title.as_str()
         } else {
             goal
         };
-        let dir_name = sanitize_room_title(&source.replace(['\n', '\r', '\t'], ""));
-
-        let resolved = if self.room.output_dir.trim().is_empty() {
-            let fallback = format!(
-                "{}\\outputs\\{}",
-                cwd.trim_end_matches(['\\', '/']),
-                dir_name
-            );
-            let _ = fs::create_dir_all(&fallback);
-            fallback
-        } else {
-            let p = self.room.output_dir.trim().to_string();
-            if Path::new(&p).is_absolute()
-                && (Path::new(&p).exists() || fs::create_dir_all(&p).is_ok())
-            {
-                p
-            } else {
-                // 用户填写的路径不合法/无法创建：按未提供处理，回退默认产物目录。
-                let fallback = format!(
-                    "{}\\outputs\\{}",
-                    cwd.trim_end_matches(['\\', '/']),
-                    dir_name
-                );
-                let _ = fs::create_dir_all(&fallback);
-                fallback
-            }
+        let Ok(workspace) = room_workspace_context(&conn, &self.room_id, artifact_name) else {
+            return self.output_dir.clone();
         };
-
-        if self.room.output_dir != resolved {
-            let _ = store::update_room_output_dir(&conn, &self.room_id, &resolved);
-            self.room.output_dir = resolved.clone();
-        }
+        let cwd = workspace.workspace.work_root.clone();
+        // 目录名：主持人命名优先（简短贴切）；主持人未命名（如阶段A整理失败/未返回该字段）时
+        // 回退**圆桌标题**（用户创建时必填的短名），标题也缺失时再退回目标主题。
+        // 绝不把用户首条消息全文当目录名——那会生成一个又长又含标点的路径。
+        let resolved = workspace.output_dir.clone();
+        let _ = fs::create_dir_all(&resolved);
+        self.artifact_name = workspace.artifact_name;
+        self.work_root = cwd;
+        self.linked_roots = workspace.workspace.linked_roots.clone();
+        self.workspace_resolution = workspace.workspace;
         self.output_dir = resolved.clone();
-        self.emit(GroupChatEvent::output_dir_updated(&self.room_id, &resolved));
         resolved
     }
 
@@ -2667,7 +2760,10 @@ impl RoomRuntime {
         }
         self.room.topic = new_topic;
         // 目标锚点变更后立即通知前端，避免右侧面板直到切房间才刷新。
-        self.emit(GroupChatEvent::room_updated(&self.room_id, &self.room.topic));
+        self.emit(GroupChatEvent::room_updated(
+            &self.room_id,
+            &self.room.topic,
+        ));
         let director_sender = self.director_sender();
         let sys_msg = self
             .persist_message(
@@ -2753,7 +2849,10 @@ impl RoomRuntime {
         self.room.goal_notes = "[]".to_string();
         self.memory = LayeredMemory::new(new_goal, "");
         // 目标锚点变更后立即通知前端刷新右侧面板。
-        self.emit(GroupChatEvent::room_updated(&self.room_id, &self.room.topic));
+        self.emit(GroupChatEvent::room_updated(
+            &self.room_id,
+            &self.room.topic,
+        ));
 
         // 3) 发系统提示，目标变更可追溯。
         let director_sender = self.director_sender();
@@ -2795,11 +2894,8 @@ impl RoomRuntime {
                 Ok(RoomCommand::SetDirector { director_id }) => {
                     self.set_director(&director_id).await
                 }
-                Ok(RoomCommand::SetOutputDir(output_dir)) => {
-                    self.room.output_dir = output_dir.clone();
-                    self.output_dir = output_dir;
-                }
                 Ok(RoomCommand::ParticipantChanged) => self.handle_participant_changed().await,
+                Ok(RoomCommand::WorkspaceChanged) => self.handle_workspace_changed().await,
                 Ok(RoomCommand::Pause) => {
                     self.persist_control_notice("已暂停：正在完成当前执行中的任务，之后将暂停调度新任务。点击「继续」可恢复。").await;
                     self.set_status(RoomStatus::Paused).await;
@@ -3095,7 +3191,7 @@ impl RoomRuntime {
             }
             // 消化循环结束：落位整理后的总目标并进入编排。
             self.set_room_topic(&current_goal).await;
-            self.resolve_and_persist_output_dir(&current_goal, &current_dir_name)
+            self.resolve_output_dir(&current_goal, &current_dir_name)
                 .await;
             self.kickoff_first(&current_goal).await
         } else {
@@ -3119,7 +3215,7 @@ impl RoomRuntime {
             self.emit(GroupChatEvent::message(&self.room_id, msg));
 
             self.set_room_topic(&goal).await;
-            self.resolve_and_persist_output_dir(&goal, &dir_name).await;
+            self.resolve_output_dir(&goal, &dir_name).await;
             self.kickoff_first(&goal).await
         }
     }
@@ -3135,7 +3231,10 @@ impl RoomRuntime {
         }
         self.room.topic = topic;
         // 目标理解完成后立即通知前端，右侧面板「目标」无需切房即可更新。
-        self.emit(GroupChatEvent::room_updated(&self.room_id, &self.room.topic));
+        self.emit(GroupChatEvent::room_updated(
+            &self.room_id,
+            &self.room.topic,
+        ));
     }
 
     /// 主持人侦查（v3.5c B 层）：让主持人以工具方式核验材料/产物/工作区，为决策收集证据。
@@ -3164,7 +3263,7 @@ impl RoomRuntime {
                 Some(self.control.abort.clone()),
                 self.mcp.clone(),
                 self.security_mode,
-                &self.output_dir,
+                &self.artifact_name,
             )
         };
         let Some(executor) = executor else {
@@ -3184,6 +3283,9 @@ impl RoomRuntime {
             roster: Vec::new(),
             user_language: String::new(),
             output_dir: self.output_dir.clone(),
+            workspace_root: self.work_root.clone(),
+            linked_roots: self.linked_roots.clone(),
+            workspace: Some(self.workspace_resolution.clone()),
             // 与房间内其他成员共用本轮锚点（侦查也是本轮的一部分）
             clock: self.round_clock.clone(),
         };
@@ -4180,9 +4282,12 @@ impl RoomRuntime {
                 .to_string();
         }
 
-        let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
-            .to_string_lossy()
-            .to_string();
+        let Ok(workspace) = room_workspace_context(&conn, &self.room_id, &self.artifact_name)
+        else {
+            return "主持人失活且工作区解析失败，无法触发恢复流程".to_string();
+        };
+        let cwd = workspace.workspace.work_root.clone();
+        let workspace_roots = workspace.roots;
         // 名册段文本（id / 显示名 / 角色），供恢复决策避免重复 provider 的单点故障。
         let roster_text = self
             .participant_roster()
@@ -4226,6 +4331,7 @@ impl RoomRuntime {
                 None,
                 self.mcp.clone(),
                 self.security_mode,
+                &workspace_roots,
             ) else {
                 reasons.push(format!("[@{}] 决策客户端构建失败", exec.id));
                 continue;
@@ -4597,6 +4703,9 @@ impl RoomRuntime {
             );
             // v3.4ao：房间统一产物目录注入讨论发言视图。
             view.output_dir = self.output_dir.clone();
+            view.workspace_root = self.work_root.clone();
+            view.linked_roots = self.linked_roots.clone();
+            view.workspace = Some(self.workspace_resolution.clone());
             // 注入参与者名册（id、显示名、角色），供 LLM 刻画 id ↔ 语义角色映射。
             view.roster = self.participant_roster();
             // 本轮统一时钟锚点：与主持人、其他参与者、执行者完全一致（房间级，每轮一个值）
@@ -4652,11 +4761,8 @@ impl RoomRuntime {
                                 staged_directive = Some((content, msg));
                             }
                             Some(RoomCommand::SetDirector { director_id }) => self.set_director(&director_id).await,
-                            Some(RoomCommand::SetOutputDir(output_dir)) => {
-                                self.room.output_dir = output_dir.clone();
-                                self.output_dir = output_dir;
-                            }
                             Some(RoomCommand::ParticipantChanged) => self.handle_participant_changed().await,
+                            Some(RoomCommand::WorkspaceChanged) => self.handle_workspace_changed().await,
                             Some(RoomCommand::Pause) => {
                                 self.persist_control_notice("已暂停：正在完成当前发言，之后将暂停讨论。点击「继续」可恢复。").await;
                                 self.set_status(RoomStatus::Paused).await;
@@ -4933,6 +5039,17 @@ impl RoomRuntime {
         extra: &str,
     ) -> MessageRow {
         self.seq += 1;
+        let normalized_attachments = attachments
+            .iter()
+            .cloned()
+            .map(|mut attachment| {
+                attachment.path =
+                    crate::utils::paths::normalize_absolute_path(&attachment.path, &self.work_root)
+                        .to_string_lossy()
+                        .to_string();
+                attachment
+            })
+            .collect::<Vec<_>>();
         let msg = MessageRow {
             id: uuid::Uuid::new_v4().to_string(),
             room_id: self.room_id.clone(),
@@ -4943,8 +5060,9 @@ impl RoomRuntime {
             kind: kind.to_string(),
             reply_to: reply_to.map(String::from),
             content: normalize_message_content(content),
-            attachments: serde_json::to_string(attachments).unwrap_or_else(|_| "[]".into()),
-            tool_calls: normalize_tool_calls(tool_calls),
+            attachments: serde_json::to_string(&normalized_attachments)
+                .unwrap_or_else(|_| "[]".into()),
+            tool_calls: normalize_tool_calls(tool_calls, &self.work_root),
             reasoning_content: reasoning_content.to_string(),
             extra: extra.to_string(),
             timestamp: crate::utils::now(),
@@ -5143,9 +5261,7 @@ impl RoomRuntime {
                 .ok()
                 .and_then(|conn| store::get_room(&conn, &self.room_id).ok().flatten())
                 .map(|r| r.max_parallel);
-            from_db
-                .unwrap_or(self.room.max_parallel)
-                .clamp(1, 4) as usize
+            from_db.unwrap_or(self.room.max_parallel).clamp(1, 4) as usize
         };
 
         // 下标 -> 最终状态（依赖检查用，下标与 tasks 数组一致）
@@ -5260,7 +5376,11 @@ impl RoomRuntime {
                         .iter()
                         .find(|id| !used_assignees.contains(*id))
                         .cloned()
-                        .or_else(|| self.executor_order.get(idx % self.executor_order.len().max(1)).cloned())
+                        .or_else(|| {
+                            self.executor_order
+                                .get(idx % self.executor_order.len().max(1))
+                                .cloned()
+                        })
                         .or_else(|| self.executor_order.first().cloned()),
                 };
                 if let Some(id) = &initial_assignee {
@@ -5293,7 +5413,11 @@ impl RoomRuntime {
                 let participant_failures = self.participant_failures.clone();
                 let user_language = self.memory.detect_user_language(&self.user_id);
                 let input_refs = self.input_refs.clone();
+                let artifact_name = self.artifact_name.clone();
                 let output_dir = self.output_dir.clone();
+                let workspace_root = self.work_root.clone();
+                let linked_roots = self.linked_roots.clone();
+                let workspace_resolution = self.workspace_resolution.clone();
                 // 本轮统一时钟锚点：执行者与讨论发言、主持人共用同一个值
                 let round_clock = self.round_clock.clone();
 
@@ -5302,6 +5426,7 @@ impl RoomRuntime {
 
                 // 任务延续性注入：收集该任务的前置成功任务成果（优先本轮内存缓存，其次 DB 反查），
                 // 使执行者基于前置成果继续，不重复执行前置子任务的工作。
+                let artifact_cwd = self.work_root.clone();
                 let prior_results: Vec<PriorResult> = deps[idx]
                     .iter()
                     .filter(|&&d| d < n && final_status[d] == "success")
@@ -5315,7 +5440,7 @@ impl RoomRuntime {
                         let artifacts = if tool_calls.trim().is_empty() {
                             Vec::new()
                         } else {
-                            extract_artifacts_from_tool_calls(&tool_calls)
+                            extract_artifacts_from_tool_calls(&tool_calls, &artifact_cwd)
                         };
                         // v3.4av：前置成果片段完整透传执行者输出（LLM 输出侧产物），
                         // 不做输入侧硬截断——后继任务判断依赖完整成果；摘要压缩仅由 LLM 输出承担。
@@ -5361,7 +5486,11 @@ impl RoomRuntime {
                         user_language,
                         prior_results,
                         input_refs,
+                        artifact_name,
                         output_dir,
+                        workspace_root,
+                        linked_roots,
+                        workspace_resolution,
                         round_clock,
                         progress_tx,
                     )
@@ -5419,11 +5548,8 @@ impl RoomRuntime {
                                     staged_directive = Some((content, msg));
                                 }
                                 Some(RoomCommand::SetDirector { director_id }) => self.set_director(&director_id).await,
-                                Some(RoomCommand::SetOutputDir(output_dir)) => {
-                                    self.room.output_dir = output_dir.clone();
-                                    self.output_dir = output_dir;
-                                }
                                 Some(RoomCommand::ParticipantChanged) => self.handle_participant_changed().await,
+                                Some(RoomCommand::WorkspaceChanged) => self.handle_workspace_changed().await,
                                 Some(RoomCommand::Pause) => {
                                     self.persist_control_notice("已暂停：正在完成当前执行中的任务，之后将暂停调度新任务。点击「继续」可恢复。").await;
                                     self.set_status(RoomStatus::Paused).await;
@@ -5518,7 +5644,10 @@ impl RoomRuntime {
                             task_no: task.task_no,
                             description: task.description.clone(),
                             result_summary: task.result_summary.clone().unwrap_or_default(),
-                            artifacts: extract_artifacts_from_tool_calls(&outcome.tool_calls),
+                            artifacts: extract_artifacts_from_tool_calls(
+                                &outcome.tool_calls,
+                                &self.work_root,
+                            ),
                             snippet,
                         },
                     );
@@ -5916,11 +6045,8 @@ impl RoomRuntime {
                 Some(RoomCommand::SetDirector { director_id }) => {
                     self.set_director(&director_id).await
                 }
-                Some(RoomCommand::SetOutputDir(output_dir)) => {
-                    self.room.output_dir = output_dir.clone();
-                    self.output_dir = output_dir;
-                }
                 Some(RoomCommand::ParticipantChanged) => self.handle_participant_changed().await,
+                Some(RoomCommand::WorkspaceChanged) => self.handle_workspace_changed().await,
                 Some(RoomCommand::Pause) => self.set_status(RoomStatus::Paused).await,
                 Some(RoomCommand::Resume) => self.set_status(RoomStatus::Running).await,
                 Some(RoomCommand::Abort) => return None,
@@ -5991,18 +6117,14 @@ impl RoomRuntime {
         cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
         mcp: Option<Arc<RoomMcpAssets>>,
         security_mode: Option<SecurityMode>,
-        output_dir: &str,
+        artifact_name_hint: &str,
     ) -> Option<Arc<dyn Participant>> {
         let rows = store::list_participants(conn, room_id).ok()?;
         let row = rows.iter().find(|r| r.participant_type == "director")?;
-        // 执行器工作区根 = 房间产物目录（选定项目/工作空间根）；未选时回退全局工作空间。
-        let cwd = if output_dir.trim().is_empty() {
-            crate::utils::paths::resolve_workspace_path(None, "", conn)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            output_dir.to_string()
-        };
+        // 执行器 cwd 使用项目主目录；产物目录只进入安全根与提示词。
+        let workspace = room_workspace_context(conn, room_id, artifact_name_hint).ok()?;
+        let cwd = workspace.workspace.work_root;
+        let workspace_roots = workspace.roots;
         let event_session_id = format!("groupchat:{}:director", room_id);
         // 群聊作用域技能禁用集：主持人亲自执行/侦查同样处于群聊注入面，须隐藏被禁技能目录。
         let disabled_skills =
@@ -6019,6 +6141,7 @@ impl RoomRuntime {
             cancel,
             mcp,
             security_mode,
+            &workspace_roots,
         )?;
         Some(Arc::new(LlmParticipant {
             id: director_id.to_string(),
@@ -6058,7 +6181,11 @@ impl RoomRuntime {
         user_language: String,
         prior_results: Vec<PriorResult>,
         input_refs: Vec<ResolvedRef>,
+        artifact_name: String,
         output_dir: String,
+        workspace_root: String,
+        linked_roots: Vec<String>,
+        workspace_resolution: crate::commands::projects::WorkspaceResolution,
         // 本轮统一时钟锚点（房间级，与主持人/讨论发言共用）
         round_clock: String,
         progress_tx: tokio::sync::mpsc::Sender<()>,
@@ -6138,6 +6265,9 @@ impl RoomRuntime {
                 prior_results.clone(),
                 input_refs.clone(),
                 output_dir.clone(),
+                workspace_root.clone(),
+                linked_roots.clone(),
+                workspace_resolution.clone(),
                 round_clock.clone(),
                 progress_tx.clone(),
             )
@@ -6416,7 +6546,7 @@ impl RoomRuntime {
                                         Some(control.abort.clone()),
                                         mcp.clone(),
                                         security_mode,
-                                        &output_dir,
+                                        &artifact_name,
                                     ) {
                                         participants.insert(director_sender.clone(), executor);
                                         current_assignee = director_sender.clone();
@@ -6449,11 +6579,15 @@ impl RoomRuntime {
                                             MAX_AUTO_NEW_PARTICIPANTS_REPLAN,
                                         );
                                         if let Some(new_id) = created.first().cloned() {
-                                            let cwd = crate::utils::paths::resolve_workspace_path(
-                                                None, "", &conn,
-                                            )
-                                            .to_string_lossy()
-                                            .to_string();
+                                            let Ok(workspace) = room_workspace_context(
+                                                &conn,
+                                                &room_id,
+                                                &artifact_name,
+                                            ) else {
+                                                continue;
+                                            };
+                                            let cwd = workspace.workspace.work_root.clone();
+                                            let workspace_roots = workspace.roots;
                                             let mut built_ok = false;
                                             if let Some(row) =
                                                 store::get_participant(&conn, &room_id, &new_id)
@@ -6480,13 +6614,11 @@ impl RoomRuntime {
                                                         )),
                                                         pool.clone(),
                                                         cwd.clone(),
+                                                        workspace_roots.clone(),
                                                         gate,
                                                         security_shared,
                                                         // 与 API 参与者同一 scope 约定
-                                                        format!(
-                                                            "groupchat:{}:{}",
-                                                            room_id, new_id
-                                                        ),
+                                                        format!("groupchat:{}:{}", room_id, new_id),
                                                         app.clone(),
                                                     ));
                                                     let p = CliParticipant {
@@ -6523,6 +6655,7 @@ impl RoomRuntime {
                                                         Some(control.abort.clone()),
                                                         mcp.clone(),
                                                         security_mode,
+                                                        &workspace_roots,
                                                     ) {
                                                         let llm = if shared_director
                                                             .read()
@@ -6703,6 +6836,9 @@ impl RoomRuntime {
         prior_results: Vec<PriorResult>,
         input_refs: Vec<ResolvedRef>,
         output_dir: String,
+        workspace_root: String,
+        linked_roots: Vec<String>,
+        workspace: crate::commands::projects::WorkspaceResolution,
         // 本轮统一时钟锚点（房间级，与主持人/讨论发言共用）
         round_clock: String,
         progress_tx: tokio::sync::mpsc::Sender<()>,
@@ -6766,6 +6902,9 @@ impl RoomRuntime {
             roster: Vec::new(),
             user_language,
             output_dir,
+            workspace_root,
+            linked_roots,
+            workspace: Some(workspace),
             clock: round_clock,
         };
         // delta_fn move 闭包捕获 speaker_id 后不可再借用。
@@ -7117,5 +7256,81 @@ impl RoomRuntime {
                 self.memory.summary().to_string()
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    fn normalized(path: &str) -> String {
+        crate::utils::paths::normalize_absolute_path(path, "")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    #[test]
+    fn room_uses_project_primary_as_cwd_and_links_plus_artifacts_as_security_roots() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES ('p1', 'Project', '', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO project_directories
+                (id, project_id, path, is_primary, sort_order, created_at, updated_at)
+             VALUES
+                ('primary', 'p1', 'D:\\Primary', 1, 0, 1, 1),
+                ('linked', 'p1', 'D:\\Linked', 0, 1, 1, 1);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO groupchat_rooms
+                (id, title, topic, status, strategy, max_rounds, max_parallel,
+                 created_at, updated_at, project_id)
+             VALUES
+                ('r1', 'Room', '', 'idle', 'round_robin', 0, 2, 1, 1, 'p1')",
+            [],
+        )
+        .unwrap();
+
+        let workspace = room_workspace_context(&conn, "r1", "Room").unwrap();
+        assert_eq!(workspace.workspace.work_root, normalized("D:\\Primary"));
+        assert_eq!(
+            workspace.workspace.linked_roots,
+            vec![normalized("D:\\Linked")]
+        );
+        assert_eq!(
+            workspace.roots,
+            vec![
+                normalized("D:\\Primary"),
+                normalized("D:\\Linked"),
+                normalized("D:\\Primary\\outputs\\Room"),
+            ]
+        );
+
+        conn.execute(
+            "UPDATE project_directories SET path = 'E:\\NewPrimary' WHERE id = 'primary'",
+            [],
+        )
+        .unwrap();
+        let workspace = room_workspace_context(&conn, "r1", "Room").unwrap();
+        assert_eq!(workspace.workspace.work_root, normalized("E:\\NewPrimary"));
+        assert_eq!(
+            workspace.output_dir,
+            normalized("E:\\NewPrimary\\outputs\\Room")
+        );
+        assert_eq!(
+            workspace.roots,
+            vec![
+                normalized("E:\\NewPrimary"),
+                normalized("D:\\Linked"),
+                normalized("E:\\NewPrimary\\outputs\\Room"),
+            ]
+        );
     }
 }

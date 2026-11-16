@@ -23,10 +23,12 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   Search, RefreshCw, Download, Grid3X3, List, SlidersHorizontal,
   Filter, X, Heart, FolderOpen, Sparkles, User, Eye,
-  Zap, CheckCircle, LayoutGrid,
+  Zap, CheckCircle, LayoutGrid, Settings2, Bot, Database, Wrench, Palette, Package,
+  SearchX, type LucideIcon,
 } from 'lucide-react';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { Select } from '../common/Select';
+import { MarketLoadError } from '../market/MarketLoadError';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { buildImportMemberMessage } from '../../utils/workflowImport';
@@ -78,13 +80,13 @@ type InstallState = 'not-installed' | 'installed' | 'update-available';
  * 分类元数据。生成器侧白名单只有 automation/agent/data/devops/creative，
  * 非法值已归入 other，所以这里只需补 other 兜底，不必再容错别的值。
  */
-const CATEGORY_META: Record<string, { name: string; icon: string; color: string }> = {
-  automation: { name: '自动化办公', icon: '⚙️', color: '#3B82F6' },
-  agent:      { name: 'Agent 协作', icon: '🤖', color: '#8B5CF6' },
-  data:       { name: '数据处理',   icon: '📊', color: '#10B981' },
-  devops:     { name: '研发效能',   icon: '🛠️', color: '#F59E0B' },
-  creative:   { name: '内容创作',   icon: '🎨', color: '#EC4899' },
-  other:      { name: '其他',       icon: '📦', color: '#6B7280' },
+const CATEGORY_META: Record<string, { name: string; icon: LucideIcon; color: string }> = {
+  automation: { name: '自动化办公', icon: Settings2, color: '#3B82F6' },
+  agent:      { name: 'Agent 协作', icon: Bot,       color: '#8B5CF6' },
+  data:       { name: '数据处理',   icon: Database,  color: '#10B981' },
+  devops:     { name: '研发效能',   icon: Wrench,    color: '#F59E0B' },
+  creative:   { name: '内容创作',   icon: Palette,   color: '#EC4899' },
+  other:      { name: '其他',       icon: Package,   color: '#6B7280' },
 };
 
 const categoryMeta = (id: string) => CATEGORY_META[id] || CATEGORY_META.other;
@@ -226,6 +228,7 @@ function TemplateCardGrid({
   onOpenDetail: (t: WorkflowTemplate) => void;
 }) {
   const cat = categoryMeta(t.category);
+  const CategoryIcon = cat.icon;
 
   return (
     <div
@@ -254,8 +257,8 @@ function TemplateCardGrid({
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <div className="flex items-center justify-center shrink-0"
-              style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: `${cat.color}18`, fontSize: 16 }}>
-              {cat.icon}
+              style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: `${cat.color}18`, color: cat.color }}>
+              <CategoryIcon size={15} />
             </div>
             <div className="min-w-0">
               <div className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }} title={t.name}>
@@ -335,6 +338,7 @@ function TemplateCardList({
   onOpenDetail: (t: WorkflowTemplate) => void;
 }) {
   const cat = categoryMeta(t.category);
+  const CategoryIcon = cat.icon;
 
   return (
     <div className="rounded-lg overflow-hidden"
@@ -346,8 +350,8 @@ function TemplateCardList({
       <div className="flex items-center gap-3 px-3 py-2">
         {/* 分类图标 */}
         <div className="shrink-0 flex items-center justify-center rounded-lg"
-          style={{ width: 48, height: 48, backgroundColor: `${cat.color}18`, fontSize: 24 }}>
-          {cat.icon}
+          style={{ width: 48, height: 48, backgroundColor: `${cat.color}18`, color: cat.color }}>
+          <CategoryIcon size={22} />
         </div>
 
         {/* 信息 */}
@@ -409,16 +413,33 @@ function TemplateDetailDialog({
   onInstall: (t: WorkflowTemplate) => void;
 }) {
   const cat = categoryMeta(template.category);
+  const CategoryIcon = cat.icon;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   return createPortal((
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`工作流模板详情：${template.name}`}
     >
       <div
-        className="w-[680px] max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
-        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}
+        className="max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
+        style={{
+          width: 'min(680px, calc(100vw - 32px))',
+          backgroundColor: 'var(--bg-primary)',
+          border: '1px solid var(--border)',
+          overflow: 'hidden',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -430,8 +451,8 @@ function TemplateDetailDialog({
         >
           <div className="flex items-start gap-3 min-w-0 flex-1">
             <div className="shrink-0 rounded-lg flex items-center justify-center"
-              style={{ width: 52, height: 52, backgroundColor: `${cat.color}22`, fontSize: 28 }}>
-              {cat.icon}
+              style={{ width: 52, height: 52, backgroundColor: `${cat.color}22`, color: cat.color }}>
+              <CategoryIcon size={26} />
             </div>
             <div className="min-w-0">
               <h3 className="text-base font-medium" style={{ color: 'var(--text-primary)' }}>{template.name}</h3>
@@ -445,7 +466,9 @@ function TemplateDetailDialog({
               <div className="flex items-center gap-2 mt-2 flex-wrap">
                 <span className="text-[10px] px-2 py-0.5 rounded-full"
                   style={{ color: cat.color, backgroundColor: `${cat.color}18` }}>
-                  {cat.icon} {cat.name}
+                  <span className="inline-flex items-center gap-1">
+                    <CategoryIcon size={9} /> {cat.name}
+                  </span>
                 </span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
@@ -741,7 +764,7 @@ export const WorkflowTemplateMarket: React.FC<{
            这里**不画下边框**：搜索框就在这一行里，下方直接是内容（分类栏 + 结果区），
            再补一条横线只是把搜索行与内容割开，属于冗余线条 —— 分隔交给留白与面板圆角。
            px-3：与下方筛选抽屉同一左右内边距，两个圆角控件不会一个贴边、一个内缩。 */}
-      <div className="shrink-0 px-3 py-1.5 flex items-center gap-2">
+      <div className="pd-market-toolbar">
         {/* Tab 组 */}
         <div className="flex items-center rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-field)' }}>
           {[
@@ -781,13 +804,7 @@ export const WorkflowTemplateMarket: React.FC<{
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索模板名称 / 标签 / 作者 / 描述..."
-            className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
-            style={{
-              height: 28, /* 对齐同行 Select(size=sm) 与 Tab 组 */
-              backgroundColor: 'var(--bg-field)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
+            className="pd-market-search"
           />
         </div>
 
@@ -922,7 +939,7 @@ export const WorkflowTemplateMarket: React.FC<{
       {/* ── 主体：左侧分类 + 右侧网格/列表（gap-2：靠缝 + 底色差分区，不画竖线） ── */}
       <div className="flex-1 flex min-h-0 gap-2">
         {/* 左：分类列表（单层，带计数；只列有模板的分类） */}
-        <div className="w-56 shrink-0 h-full overflow-y-auto pd-scroll-stable rounded-lg"
+        <div className="w-48 shrink-0 h-full overflow-y-auto pd-scroll-stable rounded-lg"
           style={{ backgroundColor: 'var(--bg-side)' }}>
           <div className="px-3 py-3 space-y-0.5">
             <div className="text-[10px] mb-1.5 mt-2" style={{ color: 'var(--text-tertiary)' }}>
@@ -938,7 +955,7 @@ export const WorkflowTemplateMarket: React.FC<{
                 fontWeight: activeCategory === 'all' ? 500 : 400,
               }}>
               <span className="flex items-center gap-1.5 min-w-0">
-                <span className="shrink-0">📦</span>
+                <Package size={12} className="shrink-0" />
                 <span className="truncate">全部模板</span>
               </span>
               <span className="text-[9px] shrink-0"
@@ -949,6 +966,7 @@ export const WorkflowTemplateMarket: React.FC<{
 
             {sidebarCategories.map(cat => {
               const active = activeCategory === cat.id;
+              const CategoryIcon = cat.icon;
               return (
                 <button
                   key={cat.id}
@@ -960,7 +978,7 @@ export const WorkflowTemplateMarket: React.FC<{
                     fontWeight: active ? 500 : 400,
                   }}>
                   <span className="flex items-center gap-1.5 min-w-0">
-                    <span className="shrink-0">{cat.icon}</span>
+                    <CategoryIcon size={12} className="shrink-0" />
                     <span className="truncate">{cat.name}</span>
                   </span>
                   <span className="text-[9px] shrink-0"
@@ -992,21 +1010,14 @@ export const WorkflowTemplateMarket: React.FC<{
                 <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>正在获取模板索引…</div>
               </div>
             ) : loadError ? (
-              <div className="h-full flex flex-col items-center justify-center gap-2 py-12">
-                <div style={{ fontSize: 40 }}>📡</div>
-                <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  模板索引获取失败：{loadError}
-                </div>
-                <button
-                  onClick={handleRefresh}
-                  className="pd-btn mt-2 px-3 py-1.5 rounded text-[11px]"
-                  style={{ color: 'var(--accent)' }}>
-                  重试
-                </button>
-              </div>
+              <MarketLoadError
+                error={loadError}
+                fallbackTitle="模板市场加载失败"
+                onRetry={() => { void handleRefresh(); }}
+              />
             ) : filtered.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center gap-2 py-12">
-                <div style={{ fontSize: 40 }}>🗂️</div>
+                <SearchX size={32} style={{ color: 'var(--text-tertiary)', opacity: 0.4 }} />
                 <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                   {searchQuery
                     ? `没有找到“${searchQuery}”相关模板`

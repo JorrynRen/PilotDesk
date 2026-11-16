@@ -1,3 +1,5 @@
+import { useId } from 'react';
+
 /**
  * 账号头像渲染（与平台内置头像目录对齐，见 docs/avatar-api.md）。
  *
@@ -30,7 +32,7 @@ interface AvatarPreset {
 }
 
 /** 顺序与平台目录一致：暖色 → 冷色 */
-export const AVATAR_PRESETS: readonly AvatarPreset[] = [
+const AVATAR_PRESETS: readonly AvatarPreset[] = [
   { id: 'dawn', label: '晨光', from: '#FB923C', to: '#BE123C', motif: 'sun' },
   { id: 'ember', label: '余烬', from: '#F59E0B', to: '#9A3412', motif: 'diamond' },
   { id: 'bloom', label: '花影', from: '#F472B6', to: '#9D174D', motif: 'bloom' },
@@ -52,7 +54,7 @@ function hashString(value: string): number {
 }
 
 /** 头像首字母：昵称优先，其次邮箱，均无则用问号占位。 */
-export function avatarInitial(nickname?: string | null, email?: string | null): string {
+function avatarInitial(nickname?: string | null, email?: string | null): string {
   const source = (nickname || email || '').trim();
   return source ? source.charAt(0).toUpperCase() : '?';
 }
@@ -123,10 +125,13 @@ export function AccountAvatar({
   radius = 8,
   className = '',
 }: Props) {
+  // 同一页面会同时挂载多个顶栏（主工作台隐藏、资产页可见）。
+  // SVG 的渐变 id 是文档级作用域，必须逐实例唯一，否则可见头像会引用隐藏节点的渐变而丢失底色。
+  const instanceId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const preset = AVATAR_PRESETS.find((p) => p.id === avatarId);
 
   if (preset) {
-    const gradientId = `pd-avatar-${preset.id}`;
+    const gradientId = `pd-avatar-${preset.id}-${instanceId}`;
     return (
       <span
         className={`shrink-0 overflow-hidden select-none ${className}`}

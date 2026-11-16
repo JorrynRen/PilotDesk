@@ -7,12 +7,13 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Mic, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useVoiceInputStore, hasVoiceOverride } from '../../stores/voiceInputStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { Select } from '../common/Select';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { SettingsButton, SettingsSection } from './index';
 
 export function VoiceInputSettings() {
   const { providers, fetchProviders } = useApiProviderStore();
@@ -81,27 +82,49 @@ export function VoiceInputSettings() {
   };
 
   return (
-    <div className="space-y-4">
-      <div
-        className="rounded-lg px-3 py-2.5 text-[11px] leading-relaxed"
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
-      >
-        <div className="flex items-center gap-1.5 mb-1" style={{ color: 'var(--text-primary)' }}>
-          <Mic size={12} />
-          <span className="text-xs font-medium">语音输入（输入框麦克风按钮）</span>
-        </div>
-        默认用<b>当前会话所选的模型</b>转写（调用提供商的
-        <code className="px-1 mx-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>/audio/transcriptions</code>
-        接口）。会话模型不一定提供该接口 —— 若你常用的会话模型调不通，可以在这里指定一个专用转写模型
-        （例如 <code className="px-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>whisper-1</code>）。
-        留空则跟随会话模型。
-      </div>
+    <div className="settings-page-stack">
+      <SettingsSection
+        title="语音输入"
+        description={
+          <>
+            <span className="block">
+              输入框麦克风按钮默认使用当前会话模型调用 /audio/transcriptions。若该模型不支持转写，可在此指定专用模型；留空则继续跟随会话模型。
+            </span>
+            <span className="block mt-1">
+              常用转写模型例如 <code className="px-1 rounded bg-[var(--bg-field)]">whisper-1</code>。
+              只有当前会话模型或这里指定的模型提供转写接口时，语音输入才可用。
+            </span>
+          </>
+        }
+        bodyless
+      />
 
-      <section>
-        <h3 className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>专用转写模型</h3>
+      <SettingsSection
+        title="专用转写模型"
+        description="此选择是可选覆盖，不会改变普通对话使用的模型。"
+        actions={
+          <>
+            <SettingsButton
+              variant="primary"
+              onClick={() => void handleSave()}
+              disabled={saving || !providerId || !model || !dirty}
+              icon={saving ? <Loader2 size={12} className="animate-spin" /> : undefined}
+            >
+              保存
+            </SettingsButton>
+            <SettingsButton
+              onClick={() => void handleClear()}
+              disabled={saving || !hasVoiceOverride(config)}
+              title="清除后语音输入改用当前会话所选模型"
+            >
+              改为跟随会话模型
+            </SettingsButton>
+          </>
+        }
+      >
         <div className="space-y-3">
           <div>
-            <label className="block text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>提供商</label>
+            <label className="pd-settings-field-label">提供商</label>
             <Select
               value={providerId}
               onChange={(v) => { setProviderId(v); setModel(''); }}
@@ -122,7 +145,7 @@ export function VoiceInputSettings() {
           </div>
 
           <div>
-            <label className="block text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>转写模型</label>
+            <label className="pd-settings-field-label">转写模型</label>
             <Select
               value={model}
               onChange={setModel}
@@ -140,42 +163,11 @@ export function VoiceInputSettings() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => void handleSave()}
-              disabled={saving || !providerId || !model || !dirty}
-              className="pd-btn px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"
-              style={{
-                backgroundColor: 'var(--accent)',
-                color: '#fff',
-                border: 'none',
-                opacity: saving || !providerId || !model || !dirty ? 0.6 : 1,
-                cursor: saving || !providerId || !model || !dirty ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {saving && <Loader2 size={12} className="animate-spin" />}
-              保存
-            </button>
-            <button
-              onClick={() => void handleClear()}
-              disabled={saving || !hasVoiceOverride(config)}
-              className="pd-btn px-3 py-1.5 rounded-lg text-xs"
-              style={{
-                backgroundColor: 'var(--bg-field)',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border)',
-                opacity: saving || !hasVoiceOverride(config) ? 0.6 : 1,
-              }}
-              title="清除后语音输入改用当前会话所选模型"
-            >
-              改为跟随会话模型
-            </button>
-            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+          <div className="pd-settings-note">
               {hasVoiceOverride(config) ? `当前：${config.model}` : '当前：跟随会话模型'}
-            </span>
           </div>
         </div>
-      </section>
+      </SettingsSection>
     </div>
   );
 }

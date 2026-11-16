@@ -34,22 +34,11 @@ pub fn save_attachments(
     items: Vec<AttachmentInput>,
 ) -> Result<Vec<Attachment>, AppError> {
     let conn = state.get_conn()?;
-
-    let cwd: Option<String> = conn
-        .query_row(
-            "SELECT cwd FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .ok()
-        .flatten();
-
-    let dir = resolve_attachments_dir(&conn, cwd.as_deref(), &session_id);
+    let dir = resolve_session_attachments_dir(&conn, &session_id)?;
     save_attachments_to_dir(&dir, &items)
 }
 
-/// 群聊附件落盘：目录为 `<工作目录>/attachments/<room_id>`。
-/// 群聊没有 sessions 记录，故 cwd 回退全局工作区。
+/// 群聊附件落盘：目录为 `<项目主目录>/attachments/<room_id>`；未归属项目时回退全局工作区。
 #[tauri::command]
 pub fn groupchat_save_attachments(
     state: State<'_, DbState>,
@@ -57,8 +46,38 @@ pub fn groupchat_save_attachments(
     items: Vec<AttachmentInput>,
 ) -> Result<Vec<Attachment>, AppError> {
     let conn = state.get_conn()?;
-    let dir = resolve_attachments_dir(&conn, None, &room_id);
+    let dir = resolve_groupchat_attachments_dir(&conn, &room_id)?;
     save_attachments_to_dir(&dir, &items)
+}
+
+/// 会话附件目录必须消费与会话运行相同的动态工作根。
+pub(crate) fn resolve_session_attachments_dir(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    let context = crate::commands::projects::resolve_workspace_context(
+        conn,
+        crate::commands::projects::WorkspaceOwner::session(session_id),
+    )?;
+    Ok(resolve_attachments_dir(
+        &context.workspace.work_root,
+        session_id,
+    ))
+}
+
+/// 圆桌附件没有独立工作根，统一跟随项目主目录；产物目录不参与附件落点。
+fn resolve_groupchat_attachments_dir(
+    conn: &rusqlite::Connection,
+    room_id: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    let context = crate::commands::projects::resolve_workspace_context(
+        conn,
+        crate::commands::projects::WorkspaceOwner::room(room_id),
+    )?;
+    Ok(resolve_attachments_dir(
+        &context.workspace.work_root,
+        room_id,
+    ))
 }
 
 fn save_attachments_to_dir(
@@ -75,7 +94,10 @@ fn save_attachments_to_dir(
             .unwrap_or_default()
             .as_millis();
         let unique_name = format!("{}-{}", ts, clean_name);
-        let dest = dir.join(&unique_name);
+        let dest = crate::utils::paths::normalize_absolute_path(
+            &dir.join(&unique_name).to_string_lossy(),
+            "",
+        );
 
         if let Some(src) = item.path.as_deref().filter(|s| !s.is_empty()) {
             std::fs::copy(src, &dest)
@@ -122,17 +144,7 @@ pub fn delete_attachment(
     path: String,
 ) -> Result<(), AppError> {
     let conn = state.get_conn()?;
-
-    let cwd: Option<String> = conn
-        .query_row(
-            "SELECT cwd FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .ok()
-        .flatten();
-
-    let dir = resolve_attachments_dir(&conn, cwd.as_deref(), &session_id);
+    let dir = resolve_session_attachments_dir(&conn, &session_id)?;
     let target = std::path::PathBuf::from(&path);
 
     // 安全校验：目标必须直接位于该会话的附件目录内
@@ -200,6 +212,87 @@ fn guess_mime(name: &str) -> &'static str {
             "text/plain"
         }
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+
+    fn setup() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES ('p1', 'Project', '', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_directories
+                (id, project_id, path, is_primary, sort_order, created_at, updated_at)
+             VALUES ('d1', 'p1', 'D:\\Primary', 1, 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn project_session_attachments_follow_dynamic_work_root() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO sessions
+                (id, agent_type, title, created_at, updated_at, project_id)
+             VALUES ('s1', 'api', 'Session', 1, 1, 'p1')",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_session_attachments_dir(&conn, "s1").unwrap(),
+            PathBuf::from("D:\\Primary").join("attachments").join("s1")
+        );
+    }
+
+    #[test]
+    fn imported_host_session_attachments_use_host_resume_root() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO sessions
+                (id, agent_type, title, host_resume_cwd, created_at, updated_at, project_id)
+             VALUES ('s1', 'api', 'Session', 'E:\\HostResume', 1, 1, 'p1')",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_session_attachments_dir(&conn, "s1").unwrap(),
+            PathBuf::from("E:\\HostResume")
+                .join("attachments")
+                .join("s1")
+        );
+    }
+
+    #[test]
+    fn project_room_attachments_follow_primary_not_output_dir() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO groupchat_rooms
+                (id, title, topic, status, strategy, max_rounds, max_parallel,
+                 created_at, updated_at, project_id)
+             VALUES ('r1', 'Room', '', 'idle', 'round_robin', 0, 2, 1, 1, 'p1')",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_groupchat_attachments_dir(&conn, "r1").unwrap(),
+            PathBuf::from("D:\\Primary").join("attachments").join("r1")
+        );
     }
 }
 

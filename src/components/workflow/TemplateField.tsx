@@ -166,6 +166,8 @@ export const TemplateField: React.FC<TemplateFieldProps> = ({
         <>
           <div onClick={() => setPickerOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 99 }} />
           <div
+            role="menu"
+            className="pd-menu"
             style={{
               position: 'fixed',
               left: pickerPos.x + dragOffset.x,
@@ -176,14 +178,11 @@ export const TemplateField: React.FC<TemplateFieldProps> = ({
               maxHeight: 250,
               display: 'flex',
               flexDirection: 'column',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border)',
-              background: 'var(--bg-secondary)',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
               overflow: 'hidden',
             }}
           >
             <div
+              className="pd-menu-label"
               onMouseDown={(event) => {
                 const startX = event.clientX;
                 const startY = event.clientY;
@@ -199,11 +198,6 @@ export const TemplateField: React.FC<TemplateFieldProps> = ({
                 document.addEventListener('mouseup', handleMouseUp);
               }}
               style={{
-                padding: '6px 8px',
-                fontSize: 'var(--fs-11)',
-                color: 'var(--text-secondary)',
-                fontWeight: 600,
-                borderBottom: '1px solid var(--border)',
                 textAlign: 'center',
                 cursor: 'grab',
                 userSelect: 'none',
@@ -212,7 +206,7 @@ export const TemplateField: React.FC<TemplateFieldProps> = ({
             >
               请选择变量…
             </div>
-            <div style={{ overflow: 'auto', flex: 1 }}>
+            <div className="pd-menu-list" style={{ overflow: 'auto', flex: 1 }}>
               {!hasOptions ? (
                 <div style={{ padding: '10px 12px', fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)' }}>
                   暂无可用变量：先在节点的「输入映射」里定义参数名，再回到这里引用。
@@ -221,17 +215,16 @@ export const TemplateField: React.FC<TemplateFieldProps> = ({
                 renderedGroups.map((group, groupIndex) => (
                   <div key={`${group.group}-${groupIndex}`}>
                     {group.group && (
-                      <div style={{ padding: '3px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
+                      <div className="pd-menu-label">
                         {group.group}
                       </div>
                     )}
                     {group.options.map((option) => (
                       <div
                         key={option.value}
+                        role="menuitem"
                         onClick={() => insertVariable(option.value)}
-                        style={{ padding: '5px 8px 5px 16px', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 'var(--fs-11)', borderBottom: '1px solid var(--border)' }}
-                        onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                        onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+                        className="pd-menu-item"
                       >
                         {option.label}
                       </div>

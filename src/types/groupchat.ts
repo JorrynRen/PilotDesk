@@ -21,8 +21,8 @@ export interface GroupChatRoom {
   updatedAt: number;
   goalNotes?: string;
   allowAutoCli?: number;
-  /** 房间统一产物目录（绝对路径；空=运行时回退 <工作目录>/outputs/<房间标题>/） */
-  outputDir?: string;
+  /** 工作归属项目；缺省表示未归入项目 */
+  projectId?: string;
   /**
    * 以下三个是**派生字段**：后端只在房间列表（`list_rooms`）里读时聚合，房间详情/创建路径不返回。
    *   currentRound  当前**讨论段**（最近一条用户指令之后）的轮次——与运行时口径一致，
@@ -230,8 +230,8 @@ export interface CreateGroupChatRoomInput {
   directorId: string;
   /** 是否允许主持人自动补人时添加 CLI 参与者（1=允许，0=禁止） */
   allowAutoCli: number;
-  /** 房间统一产物目录（绝对路径；缺省空=运行时回退 <工作目录>/outputs/<房间标题>/） */
-  outputDir?: string;
+  /** 工作归属项目；缺省表示未归入项目 */
+  projectId?: string;
   /** 同层任务执行并行上限（1-4，缺省 2；仅影响执行阶段，讨论仍按顺序） */
   maxParallel?: number;
 }
@@ -247,6 +247,5 @@ export type GroupChatEvent =
   | { roomId: string; type: 'role_updated'; participantId: string; role: string }
   | { roomId: string; type: 'task_updated'; task: GroupChatTask }
   | { roomId: string; type: 'participant_updated' }
-  | { roomId: string; type: 'output_dir_updated'; outputDir: string }
   | { roomId: string; type: 'room_updated'; topic: string }
   | { roomId: string; type: 'finished' };

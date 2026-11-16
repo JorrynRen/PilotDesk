@@ -214,7 +214,12 @@ impl MarketEntry {
                 );
                 return None;
             }
-            (LifecycleKind::Binary, String::new(), Vec::new(), BTreeMap::new())
+            (
+                LifecycleKind::Binary,
+                String::new(),
+                Vec::new(),
+                BTreeMap::new(),
+            )
         } else {
             // ACP 协议已预留远程传输（Streamable HTTP 仍是草案），官方目录将来可能出现
             // 没有本地可执行物的条目（如新增 `http` / `remote` 分发键）。这类当前无法承载，
@@ -469,9 +474,7 @@ async fn load_entries(category: Option<&str>) -> Result<Vec<MarketEntry>, AppErr
     let mut entries: Vec<MarketEntry> = Vec::new();
 
     if want_acp {
-        let registry = registry::load(false)
-            .await
-            .map_err(AppError::Network)?;
+        let registry = registry::load(false).await.map_err(AppError::Network)?;
         entries.extend(
             registry
                 .agents
@@ -508,9 +511,11 @@ async fn load_entries(category: Option<&str>) -> Result<Vec<MarketEntry>, AppErr
     }
 
     entries.sort_by(|a, b| {
-        a.category
-            .cmp(&b.category)
-            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+        a.category.cmp(&b.category).then_with(|| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        })
     });
     Ok(entries)
 }
@@ -549,15 +554,11 @@ pub async fn agent_market_list(
     Ok(entries
         .iter()
         .map(|e| {
-            e.to_market_agent(
-                installed
-                    .get(&e.agent_type)
-                    .unwrap_or(&InstalledInfo {
-                        exists: false,
-                        installed_version: None,
-                        pkg_status: None,
-                    }),
-            )
+            e.to_market_agent(installed.get(&e.agent_type).unwrap_or(&InstalledInfo {
+                exists: false,
+                installed_version: None,
+                pkg_status: None,
+            }))
         })
         .collect())
 }
@@ -590,7 +591,9 @@ pub async fn agent_market_acquire(
     let icon = match (&entry.icon_url, &entry.icon) {
         // 预置自带的本地图标直接沿用（与 CLI 的存储约定一致）
         (None, Some(local)) if local.starts_with("file:") => Some(local.clone()),
-        (Some(url), _) => download_icon(&entry.agent_type, url).await.or(entry.icon.clone()),
+        (Some(url), _) => download_icon(&entry.agent_type, url)
+            .await
+            .or(entry.icon.clone()),
         (None, other) => other.clone(),
     };
 
@@ -623,7 +626,9 @@ pub async fn agent_market_acquire(
         output_filter_regex: preset.as_ref().and_then(|p| p.output_filter_regex.clone()),
         supports_session_continuity: preset.as_ref().and_then(|p| p.supports_session_continuity),
         session_id_source: preset.as_ref().and_then(|p| p.session_id_source.clone()),
-        session_id_event_type: preset.as_ref().and_then(|p| p.session_id_event_type.clone()),
+        session_id_event_type: preset
+            .as_ref()
+            .and_then(|p| p.session_id_event_type.clone()),
         session_id_field: preset.as_ref().and_then(|p| p.session_id_field.clone()),
         resume_arg_template: preset.as_ref().and_then(|p| p.resume_arg_template.clone()),
         skills_dir: preset.as_ref().and_then(|p| p.skills_dir.clone()),
@@ -669,12 +674,23 @@ pub(crate) async fn install_binary(
     version: Option<&str>,
     allow_unverified: bool,
 ) -> Result<(), AppError> {
-    let result =
-        install_binary_inner(app, state, agent_type, display_name, spec, version, allow_unverified)
-            .await;
+    let result = install_binary_inner(
+        app,
+        state,
+        agent_type,
+        display_name,
+        spec,
+        version,
+        allow_unverified,
+    )
+    .await;
     if let Err(err) = &result {
         let msg = format!("安装失败: {}", err);
-        let _ = set_pkg_state(state, agent_type, PkgState::failed(msg.clone(), crate::utils::now()));
+        let _ = set_pkg_state(
+            state,
+            agent_type,
+            PkgState::failed(msg.clone(), crate::utils::now()),
+        );
         let _ = app.emit(
             "install-progress",
             json!({
@@ -720,7 +736,11 @@ async fn install_binary_inner(
         json!({ "agent": agent_type, "message": "正在校验安装包...", "progress": 55 }),
     );
     // 完整性来源优先级：registry 的 sha256 → 厂商随包发布的 .sha256 / checksums.txt → 用户显式确认后不校验
-    let published = artifact.sha256.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let published = artifact
+        .sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let (expected, integrity) = match published {
         Some(sha) => (Some(sha.to_string()), "sha256"),
         None => match fetch_published_checksum(&artifact.archive).await {
@@ -926,16 +946,12 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, AppError> {
         .user_agent("PilotDesk-AgentMarket/1.0")
         .build()
         .map_err(|e| AppError::External(format!("创建下载客户端失败: {}", e)))?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| {
-            AppError::External(format!(
-                "下载安装包失败（网络或代理不可用）：{}。可改用官方文档手工安装",
-                e
-            ))
-        })?;
+    let resp = client.get(url).send().await.map_err(|e| {
+        AppError::External(format!(
+            "下载安装包失败（网络或代理不可用）：{}。可改用官方文档手工安装",
+            e
+        ))
+    })?;
     if !resp.status().is_success() {
         return Err(AppError::External(format!(
             "下载安装包失败: HTTP {}（可改用官方文档手工安装）",
@@ -1000,7 +1016,9 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), AppError> {
         }
         total = total.saturating_add(entry.size());
         if total > ARTIFACT_MAX_EXTRACT_BYTES {
-            return Err(AppError::External("安装包解压后体积过大，已中止".to_string()));
+            return Err(AppError::External(
+                "安装包解压后体积过大，已中止".to_string(),
+            ));
         }
         let out_path = dest.join(&rel);
         if let Some(parent) = out_path.parent() {
@@ -1159,7 +1177,11 @@ async fn run_install(
     if let Err(e) = result {
         drop(mgr);
         let msg = format!("安装失败: {}", e);
-        set_pkg_state(state, agent_type, PkgState::failed(msg.clone(), crate::utils::now()))?;
+        set_pkg_state(
+            state,
+            agent_type,
+            PkgState::failed(msg.clone(), crate::utils::now()),
+        )?;
         let _ = app.emit(
             "install-progress",
             json!({
@@ -1371,12 +1393,14 @@ pub async fn agent_market_install(
     // 历史手工配置没有规格时按同名预置接管（先写回本地再安装）
     let spec = match config.lifecycle.clone() {
         Some(spec) => spec,
-        None => adopt_preset_spec(&state, &agent_type, &transport).await?.ok_or_else(|| {
-            AppError::Config(format!(
-                "『{}』没有生命周期规格，市集中也没有同名可安装预置",
-                agent_type
-            ))
-        })?,
+        None => adopt_preset_spec(&state, &agent_type, &transport)
+            .await?
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "『{}』没有生命周期规格，市集中也没有同名可安装预置",
+                    agent_type
+                ))
+            })?,
     };
     spec.supported().map_err(AppError::Config)?;
 
@@ -1431,9 +1455,10 @@ pub async fn agent_market_update(
         .collect();
     let entry = match candidates.iter().position(|e| e.transport == transport) {
         Some(pos) => candidates.remove(pos),
-        None => candidates.into_iter().next().ok_or_else(|| {
-            AppError::NotFound(format!("市场中未找到 Agent「{}」", agent_type))
-        })?,
+        None => candidates
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::NotFound(format!("市场中未找到 Agent「{}」", agent_type)))?,
     };
     if entry.registry_version.is_none() && entry.source != SOURCE_PRESET {
         return Err(AppError::InvalidInput(
@@ -1727,7 +1752,8 @@ mod tests {
         };
         let obj = parse_bin_map(&spec, r#"{"codex-acp":"bin/codex-acp.js"}"#);
         assert_eq!(
-            obj.get("@agentclientprotocol/codex-acp").map(|s| s.as_str()),
+            obj.get("@agentclientprotocol/codex-acp")
+                .map(|s| s.as_str()),
             Some("codex-acp")
         );
         let single = parse_bin_map(&spec, r#""./cli.js""#);
@@ -1757,7 +1783,10 @@ mod tests {
         assert_eq!(e.category, "acp");
         assert_eq!(e.lifecycle.kind, LifecycleKind::Npm);
         assert_eq!(e.lifecycle.packages[0].package, "demo-acp@1.0.0");
-        assert_eq!(e.lifecycle.packages[0].env.get("A").map(|s| s.as_str()), Some("1"));
+        assert_eq!(
+            e.lifecycle.packages[0].env.get("A").map(|s| s.as_str()),
+            Some("1")
+        );
         assert!(e.lifecycle.supported().is_ok());
         assert!(e.icon_url.is_some());
     }

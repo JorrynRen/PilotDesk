@@ -10,7 +10,6 @@
 //! - 危险命令检查按扩展名限定（bat/cmd/ps1），避免普通代码/文档误伤（有审批兜底）
 //! - 文件历史记录/diff 事件由 `FileHistoryService` 提供（经 ToolEnv 统一注入，会话/群聊共用）
 
-use crate::tools::deps::expand_user_path;
 use crate::tools::history::FileHistoryService;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
@@ -78,14 +77,7 @@ impl ToolHandler for WriteFileTool {
         let content = arguments["content"].as_str().ok_or("缺少 content 参数")?;
 
         // 路径预处理：展开 ~ 和 %USERPROFILE%
-        let expanded = expand_user_path(raw_path);
-
-        let file_path = std::path::Path::new(&expanded);
-        let abs_path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            std::path::Path::new(&self.cwd).join(&expanded)
-        };
+        let mut abs_path = crate::utils::paths::normalize_absolute_path(raw_path, &self.cwd);
 
         // ── 权限规则安全检查：风险路径拦截（路径子策略决定 deny 是否生效，无限制模式放行）──
         if let Some(rules) = &self.rules {
@@ -133,6 +125,10 @@ impl ToolHandler for WriteFileTool {
                 }
             }
         }
+        // Parent creation can resolve junctions/symlinks. Re-normalize before taking
+        // the history snapshot so the persisted path is the actual write target.
+        abs_path =
+            crate::utils::paths::normalize_absolute_path(&abs_path.to_string_lossy(), &self.cwd);
 
         let existed_before = abs_path.exists();
         let old_content = if existed_before {
@@ -153,7 +149,10 @@ impl ToolHandler for WriteFileTool {
                     );
                     history.emit_diff(&abs_path.to_string_lossy(), &old_content, content);
                 }
-                Ok(format!("文件已成功写入: {}", abs_path.display()))
+                Ok(format!(
+                    "文件已成功写入: {}",
+                    crate::utils::paths::path_display(&abs_path)
+                ))
             }
             Err(e) => {
                 let hint = match e.kind() {

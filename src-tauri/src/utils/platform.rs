@@ -124,7 +124,9 @@ pub async fn post_json_with_status<B: serde::Serialize, T: serde::de::Deserializ
     body: &B,
     token: Option<&str>,
 ) -> Result<T, PlatformError> {
-    let mut req = http_client().post(format!("{}{}", api_base(), path)).json(body);
+    let mut req = http_client()
+        .post(format!("{}{}", api_base(), path))
+        .json(body);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -137,7 +139,9 @@ pub async fn put_json_with_status<B: serde::Serialize, T: serde::de::Deserialize
     body: &B,
     token: Option<&str>,
 ) -> Result<T, PlatformError> {
-    let mut req = http_client().put(format!("{}{}", api_base(), path)).json(body);
+    let mut req = http_client()
+        .put(format!("{}{}", api_base(), path))
+        .json(body);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -189,7 +193,9 @@ pub async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     body: &B,
     token: Option<&str>,
 ) -> Result<T, AppError> {
-    let mut req = http_client().post(format!("{}{}", api_base(), path)).json(body);
+    let mut req = http_client()
+        .post(format!("{}{}", api_base(), path))
+        .json(body);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }

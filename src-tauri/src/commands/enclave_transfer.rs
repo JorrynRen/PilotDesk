@@ -9,9 +9,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::enclave::host;
-use crate::enclave::transfer::{
-    self, ExportOutcome, ImportOutcome, LanOfferOutcome, TransferView,
-};
+use crate::enclave::transfer::{self, ExportOutcome, ImportOutcome, LanOfferOutcome, TransferView};
 use crate::enclave::EnclaveState;
 
 #[tauri::command]
@@ -30,9 +28,9 @@ pub fn enclave_transfer_export(
     out_path: Option<String>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<ExportOutcome, String> {
-    state.store.with_conn(|c| {
-        transfer::export_package(c, &org_id, out_path.as_deref(), &passphrase)
-    })
+    state
+        .store
+        .with_conn(|c| transfer::export_package(c, &org_id, out_path.as_deref(), &passphrase))
 }
 
 /// 导入加密迁移包（接收方必须是该组织成员）。成功后记录为 `verified`。
@@ -61,10 +59,9 @@ pub async fn enclave_transfer_advance(
 ) -> Result<TransferView, String> {
     let cur = state.store.with_conn(|c| transfer::get(c, &transfer_id))?;
     if to_phase == transfer::PHASE_COMPLETED && cur.phase == transfer::PHASE_VERIFIED {
-        let role =
-            state
-                .store
-                .with_conn(|c| crate::enclave::authz::role_for_org(c, &cur.org_id))?;
+        let role = state
+            .store
+            .with_conn(|c| crate::enclave::authz::role_for_org(c, &cur.org_id))?;
         if role != Some(crate::enclave::authz::Role::Owner) {
             return Err("云端所有权尚未转移（本机还不是组织所有者），请先刷新治理快照".to_string());
         }
@@ -76,12 +73,13 @@ pub async fn enclave_transfer_advance(
                 .map_err(|_| "转移记录缺少有效的受让人账号".to_string())?;
             let token = crate::commands::org_common::require_token(db.inner()).await?;
             let path = format!("/api/v1/organizations/{}/transfer", cur.org_id);
-            let transferred = crate::utils::platform::post_json_with_status::<_, serde_json::Value>(
-                &path,
-                &serde_json::json!({ "toUserId": to_user_id }),
-                Some(&token),
-            )
-            .await;
+            let transferred =
+                crate::utils::platform::post_json_with_status::<_, serde_json::Value>(
+                    &path,
+                    &serde_json::json!({ "toUserId": to_user_id }),
+                    Some(&token),
+                )
+                .await;
             if let Err(e) = transferred {
                 // 幂等兜底：请求可能已在平台生效（超时后重试 / 网页端已转让），以详情中的 owner 为准
                 let detail_path = format!("/api/v1/organizations/{}", cur.org_id);
@@ -187,8 +185,7 @@ pub async fn enclave_transfer_lan_reject(
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TransferView, String> {
-    let data =
-        host::reject_lan_transfer(state.inner(), db.inner(), &org_id, &transfer_id).await?;
+    let data = host::reject_lan_transfer(state.inner(), db.inner(), &org_id, &transfer_id).await?;
     serde_json::from_value(data).map_err(|e| format!("解析拒绝结果失败：{}", e))
 }
 
@@ -209,29 +206,24 @@ pub async fn enclave_transfer_lan_accept(
     let expected_hash = accepted["packageHash"].as_str().unwrap_or("").to_string();
 
     let dest = std::env::temp_dir().join(format!("pilotdesk-lan-{}.pdesk", transfer_id));
-    let actual_hash = match host::download_lan_package(
-        state.inner(),
-        db.inner(),
-        &org_id,
-        &transfer_id,
-        &dest,
-    )
-    .await
-    {
-        Ok(h) => h,
-        Err(e) => {
-            let _ = std::fs::remove_file(&dest);
-            return Err(e);
-        }
-    };
+    let actual_hash =
+        match host::download_lan_package(state.inner(), db.inner(), &org_id, &transfer_id, &dest)
+            .await
+        {
+            Ok(h) => h,
+            Err(e) => {
+                let _ = std::fs::remove_file(&dest);
+                return Err(e);
+            }
+        };
     if !expected_hash.is_empty() && actual_hash != expected_hash {
         let _ = std::fs::remove_file(&dest);
         return Err("迁移包校验失败（哈希不一致），已中止".to_string());
     }
 
-    let imported = state.store.with_conn(|c| {
-        transfer::import_package(c, dest.to_string_lossy().as_ref(), &passphrase)
-    });
+    let imported = state
+        .store
+        .with_conn(|c| transfer::import_package(c, dest.to_string_lossy().as_ref(), &passphrase));
     let _ = std::fs::remove_file(&dest);
     let outcome = imported?;
 

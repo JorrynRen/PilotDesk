@@ -314,7 +314,7 @@ function TrendColumns({
   });
 
   return (
-    <div className="flex items-stretch gap-px" style={{ height }}>
+    <div className="pd-usage-chart-surface flex items-stretch gap-px" style={{ height }}>
       {items.map((it) => {
         // 折叠后的长空档：一截虚线段 —— 表明"这里没数据"，又不像是有数据的柱
         if (!it.bucket) {
@@ -802,7 +802,6 @@ export function UsageStats() {
       unlistenersRef.current = [];
       document.removeEventListener('visibilitychange', onVisibility);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 点击外部关闭维度下拉
@@ -1040,25 +1039,20 @@ export function UsageStats() {
                   </button>
                   {dimMenuOpen && (
                     <div
-                      className="absolute left-0 top-full mt-1 z-20 min-w-[104px] py-1 rounded-md"
-                      style={{
-                        background: 'var(--bg-secondary)',
-                        border: '1px solid var(--border)',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
-                      }}
+                      role="menu"
+                      className="pd-menu absolute left-0 top-full mt-1 z-20 min-w-[104px]"
                     >
                       {DIMENSION_ORDER.map((key) => (
                         <button
                           key={key}
+                          type="button"
+                          role="menuitem"
                           onClick={() => {
                             setDimension(key);
                             setDimMenuOpen(false);
                           }}
-                          className="w-full text-left px-2 py-1 text-xs"
-                          style={{
-                            color: dimension === key ? 'var(--accent)' : 'var(--text-secondary)',
-                            background: dimension === key ? 'var(--accent-light)' : 'transparent',
-                          }}
+                          className="pd-menu-item"
+                          data-active={dimension === key ? 'true' : undefined}
                         >
                           {DIMENSION_META[key].label}
                         </button>
@@ -1120,112 +1114,132 @@ export function UsageStats() {
           >
             {/* 量这张卡的宽度：桶长按可用列数选，宽屏更细、窄屏更粗（见 pickGranularity） */}
             <div ref={trendWrapRef}>
-              {trendItems.length === 0 ? (
-                <div className="text-xs py-3" style={{ color: 'var(--text-tertiary)' }}>
-                  该区间没有用量记录，换个区间（或看「全部」）试试。
-                </div>
-              ) : (
-                <>
-              {/* 两张图各自成卡：标题、坐标轴、图例都收在自己的卡里 ——
-                  原来两图只有一行小字区分，读者不知道哪根柱属于哪张图 */}
-              <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+              {/* 两张图各自成卡。图表画布始终渲染：没有数据时也保留区域和网格，
+                  避免趋势模块在空区间中突然缩成一行提示。 */}
+              <div className="pd-usage-trend-card">
                 <div className="flex items-baseline justify-between gap-2 mb-2">
                   <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>用量趋势</span>
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    输入 Token 构成（{granularityLabel}） · 柱高按峰值归一（峰值 {fmt(trendPeak)}）
+                    {trendItems.length === 0
+                      ? '输入 Token 构成 · 所选区间暂无数据'
+                      : `输入 Token 构成（${granularityLabel}） · 柱高按峰值归一（峰值 ${fmt(trendPeak)}）`}
                   </span>
                 </div>
-                <TrendColumns
-                  items={trendItems}
-                  max={trendPeak}
-                  height={96}
-                  mode="stack"
-                  selectedKey={trendSelItem?.key ?? null}
-                  onSelect={toggleTrendSel}
-                  titleOf={inputTitle}
-                  gapTitle={gapTitle}
-                />
-                <div className="flex items-center justify-between text-[10px] mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
-                  <span>{trendAxisFrom}</span>
-                  <span>{trendAxisTo}</span>
-                </div>
-                {/* 图例：同一主色的深浅阶梯，颜色本身不带语义，含义靠这里给 */}
-                <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2">
-                  {[
-                    { label: '缓存命中读取', color: SEG_READ },
-                    { label: '未命中输入', color: SEG_PROMPT },
-                    { label: '缓存写入', color: SEG_WRITE },
-                  ].map((s) => (
-                    <span key={s.label} className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                      <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color }} />
-                      {s.label}
-                    </span>
-                  ))}
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>输入 = 三桶之和（不含输出）</span>
-                </div>
-              </div>
-
-              <div className="rounded-lg px-3 py-2.5 mt-2.5" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                <div className="flex items-baseline justify-between gap-2 mb-2">
-                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>缓存命中趋势</span>
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    缓存命中率（{granularityLabel}） · 浅色底轨 = 100%，填充高度 = 命中率 · 窗口内 {fmtRate(t?.cacheHitRate ?? 0)}
-                  </span>
-                </div>
-                <TrendColumns
-                  items={trendItems}
-                  max={100}
-                  height={56}
-                  mode="gauge"
-                  selectedKey={trendSelItem?.key ?? null}
-                  onSelect={toggleTrendSel}
-                  titleOf={rateTitle}
-                  gapTitle={gapTitle}
-                />
-                <div className="flex items-center justify-between text-[10px] mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
-                  <span>{trendAxisFrom}</span>
-                  <span>{trendAxisTo}</span>
-                </div>
-                {/* 刻度与"空白"的说明：底轨本身就是 100% 参照，这里只需点明空白的含义 */}
-                <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  <span className="flex items-center gap-1">
-                    <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: 'var(--bg-tertiary)' }} />
-                    底轨 100%
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: 'var(--accent)' }} />
-                    命中率
-                  </span>
-                  <span>空白 = 该时段无用量</span>
-                </div>
-              </div>
-
-              {/* 读数条：位置固定在块底部（不随选中变化跳动），两张图共用 ——
-                  两图是同一日期轴，选中一列即可同时给出该时段的全部口径。 */}
-              <div
-                className="rounded-lg px-3 py-2 mt-2.5 text-[11px] flex items-center flex-wrap gap-x-3 gap-y-1"
-                // minHeight：提示语与明细长度不同，固定一个下限避免选中时整块高度跳动
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', minHeight: 34 }}
-              >
-                {!trendSelItem ? (
-                  <span style={{ color: 'var(--text-tertiary)' }}>点选上图中任意柱子，这里显示该时段的明细（再点一次取消）</span>
-                ) : !trendSelItem.bucket ? (
-                  <span>{trendSelItem.key} 起连续 {gapSpanLabel(trendSelItem.gap, trendGranularity)} 无用量</span>
+                {trendItems.length === 0 ? (
+                  <div
+                    className="pd-usage-chart-surface flex items-center justify-center text-[10px]"
+                    style={{ height: 96, color: 'var(--text-tertiary)' }}
+                  >
+                    暂无用量时间序列
+                  </div>
                 ) : (
                   <>
-                    <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
-                      {trendSelItem.bucket.key}{bucketScope}
-                    </span>
-                    <span>输入 {fmt(trendSelItem.bucket.input)}</span>
-                    <span style={{ color: 'var(--text-tertiary)' }}>
-                      缓存命中 {fmt(trendSelItem.bucket.read)} · 未命中 {fmt(trendSelItem.bucket.prompt)} · 写入 {fmt(trendSelItem.bucket.write)}
-                    </span>
-                    <span>缓存命中率 {fmtRate(trendSelItem.bucket.hitRate)}</span>
-                    {trendSelItem.bucket.days > 1 && <span style={{ color: 'var(--text-tertiary)' }}>{trendSelItem.bucket.days} 天合计</span>}
+                    <TrendColumns
+                      items={trendItems}
+                      max={trendPeak}
+                      height={96}
+                      mode="stack"
+                      selectedKey={trendSelItem?.key ?? null}
+                      onSelect={toggleTrendSel}
+                      titleOf={inputTitle}
+                      gapTitle={gapTitle}
+                    />
+                    <div className="flex items-center justify-between text-[10px] mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                      <span>{trendAxisFrom}</span>
+                      <span>{trendAxisTo}</span>
+                    </div>
+                    {/* 图例：同一主色的深浅阶梯，颜色本身不带语义，含义靠这里给 */}
+                    <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2">
+                      {[
+                        { label: '缓存命中读取', color: SEG_READ },
+                        { label: '未命中输入', color: SEG_PROMPT },
+                        { label: '缓存写入', color: SEG_WRITE },
+                      ].map((s) => (
+                        <span key={s.label} className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color }} />
+                          {s.label}
+                        </span>
+                      ))}
+                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>输入 = 三桶之和（不含输出）</span>
+                    </div>
                   </>
                 )}
               </div>
-                </>
+
+              <div className="pd-usage-trend-card pd-usage-trend-card-spaced">
+                <div className="flex items-baseline justify-between gap-2 mb-2">
+                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>缓存命中趋势</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    {trendItems.length === 0
+                      ? '缓存命中率 · 所选区间暂无数据'
+                      : `缓存命中率（${granularityLabel}） · 浅色底轨 = 100%，填充高度 = 命中率 · 窗口内 ${fmtRate(t?.cacheHitRate ?? 0)}`}
+                  </span>
+                </div>
+                {trendItems.length === 0 ? (
+                  <div
+                    className="pd-usage-chart-surface flex items-center justify-center text-[10px]"
+                    style={{ height: 56, color: 'var(--text-tertiary)' }}
+                  >
+                    暂无缓存命中时间序列
+                  </div>
+                ) : (
+                  <>
+                    <TrendColumns
+                      items={trendItems}
+                      max={100}
+                      height={56}
+                      mode="gauge"
+                      selectedKey={trendSelItem?.key ?? null}
+                      onSelect={toggleTrendSel}
+                      titleOf={rateTitle}
+                      gapTitle={gapTitle}
+                    />
+                    <div className="flex items-center justify-between text-[10px] mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                      <span>{trendAxisFrom}</span>
+                      <span>{trendAxisTo}</span>
+                    </div>
+                    {/* 刻度与"空白"的说明：底轨本身就是 100% 参照，这里只需点明空白的含义 */}
+                    <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      <span className="flex items-center gap-1">
+                        <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: 'var(--bg-tertiary)' }} />
+                        底轨 100%
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: 'var(--accent)' }} />
+                        命中率
+                      </span>
+                      <span>空白 = 该时段无用量</span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {trendItems.length > 0 && (
+                /* 读数条：位置固定在块底部（不随选中变化跳动），两张图共用 ——
+                   两图是同一日期轴，选中一列即可同时给出该时段的全部口径。 */
+                <div
+                  className="rounded-lg px-3 py-2 mt-2.5 text-[11px] flex items-center flex-wrap gap-x-3 gap-y-1"
+                  // minHeight：提示语与明细长度不同，固定一个下限避免选中时整块高度跳动
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', minHeight: 34 }}
+                >
+                  {!trendSelItem ? (
+                    <span style={{ color: 'var(--text-tertiary)' }}>点选上图中任意柱子，这里显示该时段的明细（再点一次取消）</span>
+                  ) : !trendSelItem.bucket ? (
+                    <span>{trendSelItem.key} 起连续 {gapSpanLabel(trendSelItem.gap, trendGranularity)} 无用量</span>
+                  ) : (
+                    <>
+                      <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                        {trendSelItem.bucket.key}{bucketScope}
+                      </span>
+                      <span>输入 {fmt(trendSelItem.bucket.input)}</span>
+                      <span style={{ color: 'var(--text-tertiary)' }}>
+                        缓存命中 {fmt(trendSelItem.bucket.read)} · 未命中 {fmt(trendSelItem.bucket.prompt)} · 写入 {fmt(trendSelItem.bucket.write)}
+                      </span>
+                      <span>缓存命中率 {fmtRate(trendSelItem.bucket.hitRate)}</span>
+                      {trendSelItem.bucket.days > 1 && <span style={{ color: 'var(--text-tertiary)' }}>{trendSelItem.bucket.days} 天合计</span>}
+                    </>
+                  )}
+                </div>
               )}
             </div>
           </Block>

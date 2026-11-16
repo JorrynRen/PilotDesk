@@ -41,7 +41,14 @@ pub struct CreateOrUpdateProvider {
     pub api_endpoint: String,
     pub api_key: Option<String>,
     pub models: Vec<String>,
+    /// 可选模型备注。共享连接导入时用于恢复 Provider 的模型说明；
+    /// 普通编辑不传时沿用现有备注，避免清空圆桌选模型所需的信息。
+    #[serde(default)]
+    pub model_notes: Option<HashMap<String, String>>,
     pub api_format: Option<String>,
+    /// 显式信任域。共享连接导入时写 `cloud`；普通 Provider 留空时按地址启发式判断。
+    #[serde(default)]
+    pub trust_domain: Option<String>,
     pub sort_order: Option<i64>,
 }
 
@@ -101,13 +108,13 @@ fn parse_model_entries(models_json: &str) -> Vec<(String, String)> {
 struct ConnParams {
     base_url: String,
     api_format: String,
+    trust_domain: Option<String>,
     models_json: String,
 }
 
 /// 解析 `agents.conn`（JSON）：缺字段一律回退空串 / `[]`，坏 JSON 不 panic。
 fn parse_conn(conn_json: &str) -> ConnParams {
-    let v: serde_json::Value =
-        serde_json::from_str(conn_json).unwrap_or(serde_json::Value::Null);
+    let v: serde_json::Value = serde_json::from_str(conn_json).unwrap_or(serde_json::Value::Null);
     ConnParams {
         base_url: v
             .get("baseUrl")
@@ -119,6 +126,11 @@ fn parse_conn(conn_json: &str) -> ConnParams {
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .to_string(),
+        trust_domain: v
+            .get("trustDomain")
+            .and_then(|x| x.as_str())
+            .and_then(crate::enclave::gate::TrustDomain::parse)
+            .map(|domain| domain.as_str().to_string()),
         models_json: v
             .get("models")
             .map(|m| m.to_string())
@@ -140,8 +152,7 @@ pub fn provider_trust_domain(
             |r| r.get(0),
         )
         .unwrap_or_default();
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
     let explicit = value
         .get("trustDomain")
         .and_then(|x| x.as_str())
@@ -153,17 +164,25 @@ pub fn provider_trust_domain(
 }
 
 /// 由连接参数组装 `agents.conn` JSON（models 为对象数组 `[{name,note}]`）。
-fn build_conn_json(base_url: &str, api_format: &str, entries: &[(String, String)]) -> String {
+fn build_conn_json(
+    base_url: &str,
+    api_format: &str,
+    trust_domain: Option<&str>,
+    entries: &[(String, String)],
+) -> String {
     let models: Vec<serde_json::Value> = entries
         .iter()
         .map(|(n, note)| serde_json::json!({ "name": n, "note": note }))
         .collect();
-    serde_json::json!({
+    let mut conn = serde_json::json!({
         "baseUrl": base_url,
         "apiFormat": api_format,
         "models": models,
-    })
-    .to_string()
+    });
+    if let Some(trust_domain) = trust_domain {
+        conn["trustDomain"] = serde_json::Value::String(trust_domain.to_string());
+    }
+    conn.to_string()
 }
 
 /// 由密文计算脱敏掩码与是否已配置：Key 字符数 > 8 → 前 4 + `****` + 后 4，否则 `****`。
@@ -328,9 +347,13 @@ pub fn upsert_api_provider(
         .models
         .iter()
         .map(|name| {
+            let imported_note = data.model_notes.as_ref().and_then(|notes| notes.get(name));
             (
                 name.clone(),
-                existing_notes.get(name).cloned().unwrap_or_default(),
+                imported_note
+                    .cloned()
+                    .or_else(|| existing_notes.get(name).cloned())
+                    .unwrap_or_default(),
             )
         })
         .collect();
@@ -339,7 +362,37 @@ pub fn upsert_api_provider(
         .api_format
         .clone()
         .unwrap_or_else(|| "openai".to_string());
-    let conn_json = build_conn_json(&data.api_endpoint, &api_format, &entries);
+    let existing_conn: Option<String> = conn
+        .query_row(
+            "SELECT COALESCE(conn, '') FROM agents WHERE agent_type = ?1",
+            params![agent_type],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let existing_trust_domain = existing_conn
+        .as_deref()
+        .map(parse_conn)
+        .and_then(|params| params.trust_domain);
+    let trust_domain = match data.trust_domain.as_deref() {
+        Some(raw) => Some(
+            crate::enclave::gate::TrustDomain::parse(raw)
+                .ok_or_else(|| {
+                    AppError::InvalidInput(format!(
+                        "未知 Provider 信任域: {}（仅支持 cloud / internal）",
+                        raw
+                    ))
+                })?
+                .as_str()
+                .to_string(),
+        ),
+        None => existing_trust_domain,
+    };
+    let conn_json = build_conn_json(
+        &data.api_endpoint,
+        &api_format,
+        trust_domain.as_deref(),
+        &entries,
+    );
 
     // 密钥：仅在显式传入非空 Key 时写入凭据表（加密存密文）；
     // Key 为空表示"不修改"，保留原凭据行——掩码/keySet 均由密文在读取时现算。
@@ -377,7 +430,10 @@ pub fn delete_api_provider(conn: &rusqlite::Connection, id: &str) -> Result<(), 
         "DELETE FROM agent_secrets WHERE id = (SELECT secret_ref FROM agents WHERE agent_type = ?1)",
         params![agent_type],
     )?;
-    conn.execute("DELETE FROM agents WHERE agent_type = ?1", params![agent_type])?;
+    conn.execute(
+        "DELETE FROM agents WHERE agent_type = ?1",
+        params![agent_type],
+    )?;
     Ok(())
 }
 
@@ -405,9 +461,7 @@ pub fn get_model_notes(
         "SELECT agent_type, COALESCE(conn, '') FROM agents \
          WHERE transport = 'http' AND agent_type LIKE 'api:%'",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-    })?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
     let mut map: HashMap<String, HashMap<String, String>> = HashMap::new();
     for r in rows {
         let (agent_type, conn_json) = r?;
@@ -444,7 +498,12 @@ pub fn set_model_notes(
                 None => entries.push((name.clone(), note.clone())),
             }
         }
-        let new_conn = build_conn_json(&cp.base_url, &cp.api_format, &entries);
+        let new_conn = build_conn_json(
+            &cp.base_url,
+            &cp.api_format,
+            cp.trust_domain.as_deref(),
+            &entries,
+        );
         conn.execute(
             "UPDATE agents SET conn = ?1, updated_at = ?2 WHERE agent_type = ?3",
             params![new_conn, now, agent_type_of(pid)],
@@ -516,7 +575,9 @@ mod tests {
             api_endpoint: "https://api.example.com/v1".to_string(),
             api_key: key.map(|s| s.to_string()),
             models: vec!["m-a".to_string(), "m-b".to_string()],
+            model_notes: None,
             api_format: Some("openai".to_string()),
+            trust_domain: None,
             sort_order: Some(3),
         }
     }
@@ -660,5 +721,56 @@ mod tests {
             .unwrap();
         assert_eq!(nagent, 0);
         assert_eq!(nsec, 0);
+    }
+
+    #[test]
+    fn explicit_trust_domain_is_validated_and_preserved_on_edit() {
+        use crate::enclave::gate::TrustDomain;
+
+        let conn = mem_conn();
+        let mut provider = payload("shared", None);
+        provider.trust_domain = Some("cloud".to_string());
+        upsert_api_provider(&conn, &provider).unwrap();
+        assert_eq!(provider_trust_domain(&conn, "shared"), TrustDomain::Cloud);
+
+        provider.trust_domain = None;
+        provider.name = "共享模型".to_string();
+        upsert_api_provider(&conn, &provider).unwrap();
+        assert_eq!(
+            provider_trust_domain(&conn, "shared"),
+            TrustDomain::Cloud,
+            "普通编辑不得清掉共享连接显式写入的信任域"
+        );
+
+        provider.trust_domain = Some("invalid".to_string());
+        assert!(upsert_api_provider(&conn, &provider).is_err());
+    }
+
+    #[test]
+    fn model_notes_are_imported_and_preserved_on_regular_edit() {
+        let conn = mem_conn();
+        let mut provider = payload("shared", None);
+        provider.model_notes = Some(HashMap::from([
+            ("m-a".to_string(), "适合长上下文任务".to_string()),
+            ("m-b".to_string(), "适合快速问答".to_string()),
+        ]));
+        upsert_api_provider(&conn, &provider).unwrap();
+
+        let (_, models) = get_provider_format_and_models(&conn, "shared").unwrap();
+        assert_eq!(
+            models,
+            vec![
+                ("m-a".to_string(), "适合长上下文任务".to_string()),
+                ("m-b".to_string(), "适合快速问答".to_string()),
+            ]
+        );
+
+        provider.name = "共享模型（改名）".to_string();
+        provider.model_notes = None;
+        upsert_api_provider(&conn, &provider).unwrap();
+
+        let (_, models) = get_provider_format_and_models(&conn, "shared").unwrap();
+        assert_eq!(models[0].1, "适合长上下文任务");
+        assert_eq!(models[1].1, "适合快速问答");
     }
 }

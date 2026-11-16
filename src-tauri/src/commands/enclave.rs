@@ -154,9 +154,7 @@ pub async fn enclave_host_claim(
         takeover.unwrap_or(false),
     )
     .await?;
-    let host = reg
-        .host
-        .ok_or_else(|| "平台未返回主机信息".to_string())?;
+    let host = reg.host.ok_or_else(|| "平台未返回主机信息".to_string())?;
     if !reg.claimed {
         return Err(format!(
             "该组织已由「{}」登记为主机；换机请使用「从旧主机接管」",
@@ -202,16 +200,10 @@ pub async fn enclave_host_takeover_force(
     if role != Some(crate::enclave::authz::Role::Owner) {
         return Err("仅组织所有者可接管主机".to_string());
     }
-    let reg = crate::enclave::host::register_with_platform(
-        db.inner(),
-        state.inner(),
-        &org_id,
-        true,
-    )
-    .await?;
-    let host = reg
-        .host
-        .ok_or_else(|| "平台未返回主机信息".to_string())?;
+    let reg =
+        crate::enclave::host::register_with_platform(db.inner(), state.inner(), &org_id, true)
+            .await?;
+    let host = reg.host.ok_or_else(|| "平台未返回主机信息".to_string())?;
     if !reg.claimed {
         return Err("主机登记未生效".to_string());
     }
@@ -224,7 +216,9 @@ pub async fn enclave_host_takeover_force(
 pub fn enclave_cache_info(
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::host::CacheInfoView, String> {
-    state.store.with_conn(|c| Ok(crate::enclave::host::cache_info(c)))
+    state
+        .store
+        .with_conn(|c| Ok(crate::enclave::host::cache_info(c)))
 }
 
 /// 调整本机文件缓存上限（单位 MB；后端按 256 MB ~ 100 GB 夹取并立即淘汰）。
@@ -374,9 +368,10 @@ pub async fn enclave_online_members(
         .store
         .with_conn(|c| crate::enclave::authz::role_for_org(c, &org_id))?;
     match role {
-        Some(crate::enclave::authz::Role::Owner) => {
-            Ok(crate::enclave::host::online_member_ids(state.inner(), &org_id))
-        }
+        Some(crate::enclave::authz::Role::Owner) => Ok(crate::enclave::host::online_member_ids(
+            state.inner(),
+            &org_id,
+        )),
         Some(_) => {
             // `org.online` 是主机协议方法而不是 RPC 命令，必须直接按方法名发；
             // 套 `call_host_without_token` 会被主机拒绝为「未知的飞地命令」。
@@ -523,9 +518,9 @@ pub fn enclave_backup_config_set(
     keep: i64,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::backup::BackupStatusView, String> {
-    state.store.with_conn(|c| {
-        crate::enclave::backup::set_config(c, enabled, interval_hours, keep)
-    })
+    state
+        .store
+        .with_conn(|c| crate::enclave::backup::set_config(c, enabled, interval_hours, keep))
 }
 
 /// 立即备份一次（阻塞线程池执行，避免卡住 UI）。
@@ -534,9 +529,12 @@ pub async fn enclave_backup_now(
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::backup::BackupInfo, String> {
     let st = state.inner().clone();
-    tokio::task::spawn_blocking(move || st.store.with_conn(|c| crate::enclave::backup::run_backup(c)))
-        .await
-        .map_err(|e| format!("备份线程异常：{}", e))?
+    tokio::task::spawn_blocking(move || {
+        st.store
+            .with_conn(|c| crate::enclave::backup::run_backup(c))
+    })
+    .await
+    .map_err(|e| format!("备份线程异常：{}", e))?
 }
 
 /// 读策略 / 应急变更审计流水（按时间倒序）。

@@ -3,6 +3,7 @@ import { Wrench } from 'lucide-react';
 import type { ThinkingChainStep } from '../layout/MainPanel';
 import { collapseBlankLines } from './markdownText';
 import { ApprovalCard } from '../confirmation/ApprovalCard';
+import { stripVerbatimPathsInText } from '../../utils/path';
 
 interface ThinkingChainProps {
   steps: ThinkingChainStep[];
@@ -309,12 +310,12 @@ export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys, se
                         } catch { /* 回退原文 */ }
                       }
                       // 结果：完整显示（不截断），避免"信息不全"。
-                      const resultText = collapseBlankLines(t.result ?? '');
+                      const resultText = stripVerbatimPathsInText(collapseBlankLines(t.result ?? ''));
                       return (
                         <>
                           {displayArgs && (
                             <div className="text-[10px] break-all whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
-                              参数：{displayArgs}
+                              参数：{stripVerbatimPathsInText(displayArgs)}
                             </div>
                           )}
                           {t.result !== undefined && (

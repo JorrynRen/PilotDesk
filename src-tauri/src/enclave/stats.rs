@@ -155,10 +155,8 @@ pub fn team_stats(
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取成员统计失败：{}", e))?;
 
-    let mut by_user: HashMap<String, MemberStat> = rows
-        .into_iter()
-        .map(|m| (m.user_id.clone(), m))
-        .collect();
+    let mut by_user: HashMap<String, MemberStat> =
+        rows.into_iter().map(|m| (m.user_id.clone(), m)).collect();
     let mut members: Vec<MemberStat> = roster
         .into_iter()
         .map(|user_id| {
@@ -324,7 +322,11 @@ mod tests {
         assert_eq!(s.completed_tasks.len(), 1, "周期内只有 t1 完成");
         assert_eq!(s.completed_tasks[0].task_id, "t1");
         assert!(s.completed_tasks[0].has_output, "t1 的产出已沉淀进组织库");
-        assert_eq!(s.members.len(), 4, "成员列表以名册为准，没有任务的成员也要出现");
+        assert_eq!(
+            s.members.len(),
+            4,
+            "成员列表以名册为准，没有任务的成员也要出现"
+        );
         // 4 没有任何任务，仍应出现在列表里且计数为 0
         let m4 = s.members.iter().find(|m| m.user_id == "4").unwrap();
         assert_eq!(m4.completed, 0);
@@ -332,7 +334,10 @@ mod tests {
         assert_eq!(m4.submitted, 0);
         assert_eq!(m4.overdue, 0);
         assert!(s.members.iter().any(|m| m.user_id == "1"), "主机也应出现");
-        assert!(!s.members.iter().any(|m| m.user_id == "9"), "已移出成员不应出现");
+        assert!(
+            !s.members.iter().any(|m| m.user_id == "9"),
+            "已移出成员不应出现"
+        );
         let m2 = s.members.iter().find(|m| m.user_id == "2").unwrap();
         assert_eq!(m2.completed, 1);
         // started_at=1000，completed_at=1720 → 720s = 0.2h

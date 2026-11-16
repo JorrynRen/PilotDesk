@@ -63,19 +63,12 @@ export function SearchSettings() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <div>
-          <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-            联网搜索
-          </h3>
-          <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-            配置 API Agent 的 search_web / fetch_web 工具所使用搜索后端
-          </p>
-        </div>
-      </div>
-
-      <SettingsSection title="搜索后端">
+    <div className="settings-page-stack">
+      <SettingsSection
+        title="联网搜索"
+        description="配置 API Agent 的 search_web / fetch_web 工具所使用的搜索后端。"
+      >
+        <label className="pd-settings-field-label">搜索后端</label>
         <Select
           value={config.provider}
           onChange={(v) =>
@@ -84,68 +77,50 @@ export function SearchSettings() {
           options={PROVIDERS.map((p) => ({ value: p.value, label: p.label }))}
           className="w-full"
         />
-        <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>
+        <p className="pd-settings-note mt-2">
           默认使用 Bing 中国版（无需 API Key），在国内可直连；如遇反爬限制会自动降级到本机无头浏览器。
         </p>
       </SettingsSection>
 
-      {/* API Key 是可选的附加配置，与上一段拉开一档：容器 space-y-4 的 16px
-          加上这里的 8px = 24px，对齐其他设置页的段间距（space-y-6） */}
-      <div className="pt-2">
-        <SettingsSection
-          title="API Key（可选）"
-          description="仅当切换为 Tavily 或 Bing API 后端时需要填写。留空则相关后端不可用。"
-        >
-          <div className="space-y-3">
-            <div>
-              <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                Tavily API Key
-              </label>
-              <input
-                type="password"
-                value={config.tavilyApiKey}
-                onChange={(e) => setConfig((prev) => ({ ...prev, tavilyApiKey: e.target.value }))}
-                placeholder="tvly-..."
-                className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
-                style={{
-                  backgroundColor: 'var(--bg-field)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border)',
-                }}
-              />
-            </div>
-            <div>
-              <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                Bing Web Search API Key
-              </label>
-              <input
-                type="password"
-                value={config.bingApiKey}
-                onChange={(e) => setConfig((prev) => ({ ...prev, bingApiKey: e.target.value }))}
-                placeholder="Azure 订阅密钥（Ocp-Apim-Subscription-Key）"
-                className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
-                style={{
-                  backgroundColor: 'var(--bg-field)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border)',
-                }}
-              />
-            </div>
+      <SettingsSection
+        title="API Key（可选）"
+        description="仅当切换为 Tavily 或 Bing API 后端时需要填写。留空则相关后端不可用。"
+        actions={
+          <SettingsButton
+            variant="primary"
+            onClick={handleSave}
+            icon={saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+            disabled={saving}
+          >
+            保存
+          </SettingsButton>
+        }
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="pd-settings-field-label">Tavily API Key</label>
+            <input
+              type="password"
+              value={config.tavilyApiKey}
+              onChange={(e) => setConfig((prev) => ({ ...prev, tavilyApiKey: e.target.value }))}
+              placeholder="tvly-..."
+              className="pd-settings-input w-full"
+            />
           </div>
-        </SettingsSection>
-      </div>
+          <div>
+            <label className="pd-settings-field-label">Bing Web Search API Key</label>
+            <input
+              type="password"
+              value={config.bingApiKey}
+              onChange={(e) => setConfig((prev) => ({ ...prev, bingApiKey: e.target.value }))}
+              placeholder="Azure 订阅密钥（Ocp-Apim-Subscription-Key）"
+              className="pd-settings-input w-full"
+            />
+          </div>
+        </div>
+      </SettingsSection>
 
-      <div className="flex items-center justify-end">
-        <SettingsButton
-          onClick={handleSave}
-          icon={saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-          disabled={saving}
-        >
-          保存
-        </SettingsButton>
-      </div>
-
-      <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+      <p className="pd-settings-note px-1">
         API Key 保存在本地 SQLite 数据库，不会上传。保存后将在下一次 API Agent 会话时生效。
       </p>
     </div>

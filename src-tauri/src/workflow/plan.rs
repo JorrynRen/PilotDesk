@@ -350,6 +350,7 @@ pub fn build_definition(plan: &PlanGraph) -> Result<WorkflowDefinition, String> 
         created_at: now,
         updated_at: now,
         enabled: true,
+        project_id: None,
     })
 }
 

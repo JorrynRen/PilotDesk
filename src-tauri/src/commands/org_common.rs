@@ -1,5 +1,5 @@
-//! 组织类平台调用共享辅助：组织共享空间（`org_share`）/ 组织共享凭据（`org_credentials`）
-//! / 飞地治理快照（`enclave::snapshot`）共用同一套令牌获取与错误映射口径。
+//! 组织类平台调用共享辅助：组织共享空间（`org_share`）/ 飞地治理快照
+//! （`enclave::snapshot`）共用同一套令牌获取与错误映射口径。
 //!
 //! 平台侧接口（全部 `requireAuth`，产品端用 Bearer）令牌均复用 [`current_access_token`]
 //! （读 `account_tokens` + 自动续期）；未登录时返回明确中文提示。
@@ -8,7 +8,7 @@ use crate::commands::account::current_access_token;
 use crate::utils::platform;
 
 /// 取一个可用的 Bearer 令牌；未登录 / 续期失败给出明确中文提示。
-/// 供组织共享空间与组织共享凭据（`org_credentials`）复用。
+/// 供组织共享空间与飞地治理快照复用。
 pub(crate) async fn require_token(state: &crate::DbState) -> Result<String, String> {
     match current_access_token(state).await {
         Ok(Some(token)) => Ok(token),

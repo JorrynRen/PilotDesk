@@ -1,9 +1,9 @@
-//! 组织共享空间（团队版）：把本地工作流共享到组织、从组织导入工作流。
+//! 组织共享空间（团队版）：把本地工作流共享到组织，从组织导入工作流与灵感。
 //!
 //! 这是「组织共享空间」在产品端的入口。平台侧接口（全部 `requireAuth`，产品端用 Bearer）：
 //!   GET  /api/v1/organizations/mine                         我所属的组织
-//!   GET  /api/v1/organizations/:id/resources?kind=workflow   组织的共享工作流列表
-//!   POST /api/v1/organizations/:id/resources                 新建 / 覆盖共享资源（按工作流稳定 ID upsert；
+//!   GET  /api/v1/organizations/:id/resources?kind=...        组织的共享资源列表
+//!   POST /api/v1/organizations/:id/resources                 新建 / 覆盖共享资源（按资源稳定 ID upsert；
 //!                                                            内容有改动且未带 overwrite → 409 冲突）
 //!   GET  /api/v1/organizations/:id/resources/:resourceId     取单条（带 payload）
 //!
@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::commands::inspiration::{import_market_json_with_conn, InspirationImportResult};
 use crate::commands::org_common::{map_platform_error, require_token};
 use crate::commands::workflow::{
     build_workflow_export_json, import_workflow_from_json_with_conn, ImportMemberOutcome,
@@ -27,6 +28,8 @@ pub struct MyOrg {
     pub role: String,
     pub plan_key: String,
     pub plan_expires_at: Option<String>,
+    /// 平台按组织档位与到期时间解析后的受限能力集合。
+    pub capabilities: Vec<String>,
     pub seats: i64,
     pub member_count: i64,
     pub status: String,
@@ -42,6 +45,20 @@ pub struct SharedWorkflow {
     pub creator_label: String,
     pub updated_at: String,
     /// 版本（覆盖次数）：新建为 1，每次覆盖 +1
+    pub revision: i64,
+}
+
+/// 共享灵感列表项（不含完整 payload，避免列表传输大对象）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedInspiration {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    pub tags: Vec<String>,
+    pub creator_label: String,
+    pub updated_at: String,
     pub revision: i64,
 }
 
@@ -87,10 +104,10 @@ pub struct ShareConflictInfo {
     pub updated_at: String,
 }
 
-/// 从组织导入入参
+/// 从组织导入资源入参
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ImportWorkflowInput {
+pub struct ImportResourceInput {
     pub org_id: i64,
     pub resource_id: i64,
 }
@@ -128,6 +145,8 @@ struct OrgRow {
     plan_key: String,
     #[serde(default)]
     plan_expires_at: Option<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
     #[serde(default)]
     seats: i64,
     #[serde(default)]
@@ -183,6 +202,8 @@ struct ConflictExisting {
 struct ResourceRow {
     id: i64,
     #[serde(default)]
+    kind: String,
+    #[serde(default)]
     name: String,
     #[serde(default)]
     description: String,
@@ -198,6 +219,18 @@ struct ResourceRow {
     revision: i64,
 }
 
+#[derive(Deserialize, Default)]
+struct InspirationResourcePayload {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    icon: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
 // ── 公共辅助 ────────────────────────────────────────────────────
 
 fn to_shared_workflow(row: ResourceRow) -> SharedWorkflow {
@@ -205,6 +238,34 @@ fn to_shared_workflow(row: ResourceRow) -> SharedWorkflow {
         id: row.id,
         name: row.name,
         description: row.description,
+        creator_label: row.creator_label,
+        updated_at: row.updated_at,
+        revision: row.revision,
+    }
+}
+
+fn to_shared_inspiration(row: ResourceRow) -> SharedInspiration {
+    let payload =
+        serde_json::from_str::<InspirationResourcePayload>(&row.payload).unwrap_or_default();
+    let content_excerpt: String = payload.content.trim().chars().take(140).collect();
+    SharedInspiration {
+        id: row.id,
+        name: if payload.title.trim().is_empty() {
+            row.name
+        } else {
+            payload.title
+        },
+        description: if row.description.trim().is_empty() {
+            content_excerpt
+        } else {
+            row.description
+        },
+        icon: if payload.icon.trim().is_empty() {
+            "💡".to_string()
+        } else {
+            payload.icon
+        },
+        tags: payload.tags,
         creator_label: row.creator_label,
         updated_at: row.updated_at,
         revision: row.revision,
@@ -250,6 +311,7 @@ pub async fn org_list_mine(state: State<'_, crate::DbState>) -> Result<Vec<MyOrg
             role: o.role,
             plan_key: o.plan_key,
             plan_expires_at: o.plan_expires_at,
+            capabilities: o.capabilities,
             seats: o.seats,
             member_count: o.member_count,
             status: o.status,
@@ -269,6 +331,23 @@ pub async fn org_list_shared_workflows(
         .await
         .map_err(map_platform_error)?;
     Ok(resp.items.into_iter().map(to_shared_workflow).collect())
+}
+
+/// 某组织的共享灵感列表（不含完整 payload）。
+#[tauri::command]
+pub async fn org_list_shared_inspirations(
+    org_id: i64,
+    state: State<'_, crate::DbState>,
+) -> Result<Vec<SharedInspiration>, String> {
+    let token = require_token(state.inner()).await?;
+    let path = format!(
+        "/api/v1/organizations/{}/resources?kind=inspiration",
+        org_id
+    );
+    let resp: ResourcesResp = platform::get_json_with_status(&path, Some(&token))
+        .await
+        .map_err(map_platform_error)?;
+    Ok(resp.items.into_iter().map(to_shared_inspiration).collect())
 }
 
 /// 把本地工作流共享到组织：复用导出逻辑打包「主工作流 + 全部子工作流」（新版捆绑格式），
@@ -357,7 +436,7 @@ pub async fn org_share_workflow(
 /// 从组织导入共享工作流：取资源详情（带 payload）→ 复用导入逻辑新建本地工作流。
 #[tauri::command]
 pub async fn org_import_workflow(
-    input: ImportWorkflowInput,
+    input: ImportResourceInput,
     state: State<'_, crate::DbState>,
 ) -> Result<ImportedWorkflow, String> {
     let token = require_token(state.inner()).await?;
@@ -370,6 +449,9 @@ pub async fn org_import_workflow(
         .map_err(map_platform_error)?;
 
     let resource = resp.resource;
+    if !resource.kind.is_empty() && resource.kind != "workflow" {
+        return Err("该组织资源不是工作流，无法导入".to_string());
+    }
     if resource.payload.trim().is_empty() {
         return Err("共享工作流内容为空，无法导入".to_string());
     }
@@ -385,4 +467,33 @@ pub async fn org_import_workflow(
         subflow_count: outcome.subflow_count,
         members: outcome.members,
     })
+}
+
+/// 从组织导入共享灵感：取资源详情（带 payload）→ 复用市场灵感导入逻辑。
+#[tauri::command]
+pub async fn org_import_inspiration(
+    input: ImportResourceInput,
+    state: State<'_, crate::DbState>,
+) -> Result<InspirationImportResult, String> {
+    let token = require_token(state.inner()).await?;
+    let path = format!(
+        "/api/v1/organizations/{}/resources/{}",
+        input.org_id, input.resource_id
+    );
+    let resp: ResourceResp = platform::get_json_with_status(&path, Some(&token))
+        .await
+        .map_err(map_platform_error)?;
+
+    let resource = resp.resource;
+    if resource.kind != "inspiration" {
+        return Err("该组织资源不是灵感，无法导入".to_string());
+    }
+    if resource.payload.trim().is_empty() {
+        return Err("共享灵感内容为空，无法导入".to_string());
+    }
+
+    let mut conn = state
+        .get_conn()
+        .map_err(|e| format!("数据库连接失败：{}", e))?;
+    import_market_json_with_conn(&mut conn, &resource.payload)
 }

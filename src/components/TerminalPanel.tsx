@@ -19,6 +19,25 @@ const TERMINAL_THEMES = {
     black: '#45475a', red: '#f38ba8', green: '#a6e3a1',
     yellow: '#f9e2af', blue: '#89b4fa', magenta: '#f5c2e7',
     cyan: '#94e2d5', white: '#bac2de',
+    ui: {
+      text: '#D9E0F7',
+      muted: '#A6ADC8',
+      subtle: '#9096AD',
+      border: 'rgba(205,214,244,0.14)',
+      surface: 'rgba(205,214,244,0.055)',
+      surfaceStrong: 'rgba(205,214,244,0.11)',
+      chrome: 'rgba(17,17,27,0.34)',
+      hover: 'rgba(205,214,244,0.08)',
+      active: 'rgba(137,180,250,0.16)',
+      accent: '#89B4FA',
+      accentText: '#11111B',
+      accentSoft: 'rgba(137,180,250,0.17)',
+      shadow: 'rgba(17,17,27,0.32)',
+      success: '#A6E3A1',
+      danger: '#F38BA8',
+      warning: '#F9E2AF',
+      info: '#89B4FA',
+    },
   },
   'One Dark': {
     background: '#282c34',
@@ -29,6 +48,25 @@ const TERMINAL_THEMES = {
     black: '#282c34', red: '#e06c75', green: '#98c379',
     yellow: '#e5c07b', blue: '#61afef', magenta: '#c678dd',
     cyan: '#56b6c2', white: '#abb2bf',
+    ui: {
+      text: '#D7DAE0',
+      muted: '#ABB2BF',
+      subtle: '#8D949E',
+      border: 'rgba(171,178,191,0.16)',
+      surface: 'rgba(171,178,191,0.055)',
+      surfaceStrong: 'rgba(171,178,191,0.11)',
+      chrome: 'rgba(16,19,24,0.36)',
+      hover: 'rgba(171,178,191,0.08)',
+      active: 'rgba(97,175,239,0.16)',
+      accent: '#61AFEF',
+      accentText: '#11151A',
+      accentSoft: 'rgba(97,175,239,0.17)',
+      shadow: 'rgba(10,12,16,0.34)',
+      success: '#98C379',
+      danger: '#E06C75',
+      warning: '#E5C07B',
+      info: '#61AFEF',
+    },
   },
   'Dracula': {
     background: '#282a36',
@@ -39,6 +77,25 @@ const TERMINAL_THEMES = {
     black: '#21222c', red: '#ff5555', green: '#50fa7b',
     yellow: '#f1fa8c', blue: '#bd93f9', magenta: '#ff79c6',
     cyan: '#8be9fd', white: '#f8f8f2',
+    ui: {
+      text: '#F8F8F2',
+      muted: '#C8C8D1',
+      subtle: '#9697AD',
+      border: 'rgba(248,248,242,0.15)',
+      surface: 'rgba(248,248,242,0.055)',
+      surfaceStrong: 'rgba(248,248,242,0.11)',
+      chrome: 'rgba(17,18,25,0.34)',
+      hover: 'rgba(248,248,242,0.08)',
+      active: 'rgba(189,147,249,0.17)',
+      accent: '#BD93F9',
+      accentText: '#1D1E27',
+      accentSoft: 'rgba(189,147,249,0.18)',
+      shadow: 'rgba(15,16,22,0.34)',
+      success: '#50FA7B',
+      danger: '#FF5555',
+      warning: '#F1FA8C',
+      info: '#8BE9FD',
+    },
   },
   'Solarized Dark': {
     background: '#002b36',
@@ -49,6 +106,25 @@ const TERMINAL_THEMES = {
     black: '#073642', red: '#dc322f', green: '#859900',
     yellow: '#b58900', blue: '#268bd2', magenta: '#d33682',
     cyan: '#2aa198', white: '#eee8d5',
+    ui: {
+      text: '#EEE8D5',
+      muted: '#93A1A1',
+      subtle: '#7C969E',
+      border: 'rgba(147,161,161,0.18)',
+      surface: 'rgba(238,232,213,0.05)',
+      surfaceStrong: 'rgba(238,232,213,0.1)',
+      chrome: 'rgba(0,20,27,0.42)',
+      hover: 'rgba(238,232,213,0.07)',
+      active: 'rgba(42,161,152,0.18)',
+      accent: '#2AA198',
+      accentText: '#002B36',
+      accentSoft: 'rgba(42,161,152,0.18)',
+      shadow: 'rgba(0,20,27,0.36)',
+      success: '#859900',
+      danger: '#DC322F',
+      warning: '#B58900',
+      info: '#268BD2',
+    },
   },
   'Light': {
     background: '#fafafa',
@@ -59,6 +135,25 @@ const TERMINAL_THEMES = {
     black: '#383a42', red: '#e45649', green: '#50a14f',
     yellow: '#c18401', blue: '#4078f2', magenta: '#a626a4',
     cyan: '#0184bc', white: '#383a42',
+    ui: {
+      text: '#2F333B',
+      muted: '#5F6673',
+      subtle: '#6B7280',
+      border: 'rgba(47,51,59,0.14)',
+      surface: 'rgba(47,51,59,0.045)',
+      surfaceStrong: 'rgba(47,51,59,0.085)',
+      chrome: 'rgba(47,51,59,0.045)',
+      hover: 'rgba(47,51,59,0.06)',
+      active: 'rgba(64,120,242,0.12)',
+      accent: '#4078F2',
+      accentText: '#FFFFFF',
+      accentSoft: 'rgba(64,120,242,0.12)',
+      shadow: 'rgba(47,51,59,0.1)',
+      success: '#2F7D32',
+      danger: '#C62828',
+      warning: '#9A6700',
+      info: '#2F65A7',
+    },
   },
   'Blue': {
     background: '#0a1628',
@@ -69,10 +164,56 @@ const TERMINAL_THEMES = {
     black: '#0a1628', red: '#ff6b6b', green: '#51cf66',
     yellow: '#ffd43b', blue: '#54a0ff', magenta: '#cc5de8',
     cyan: '#20c997', white: '#c8d6e5',
+    ui: {
+      text: '#D5E3F2',
+      muted: '#9FB3C8',
+      subtle: '#738BA4',
+      border: 'rgba(200,214,229,0.14)',
+      surface: 'rgba(200,214,229,0.055)',
+      surfaceStrong: 'rgba(200,214,229,0.11)',
+      chrome: 'rgba(4,13,26,0.44)',
+      hover: 'rgba(200,214,229,0.08)',
+      active: 'rgba(84,160,255,0.17)',
+      accent: '#54A0FF',
+      accentText: '#07121F',
+      accentSoft: 'rgba(84,160,255,0.17)',
+      shadow: 'rgba(2,8,18,0.4)',
+      success: '#51CF66',
+      danger: '#FF6B6B',
+      warning: '#FFD43B',
+      info: '#54A0FF',
+    },
   },
 };
 
 const THEME_NAMES = Object.keys(TERMINAL_THEMES) as (keyof typeof TERMINAL_THEMES)[];
+const utf8Encoder = new TextEncoder();
+
+function terminalStyle(name: string): React.CSSProperties {
+  const theme = TERMINAL_THEMES[name as keyof typeof TERMINAL_THEMES] ?? TERMINAL_THEMES['Catppuccin Dark'];
+  return {
+    '--terminal-bg': theme.background,
+    '--terminal-text': theme.ui.text,
+    '--terminal-muted': theme.ui.muted,
+    '--terminal-subtle': theme.ui.subtle,
+    '--terminal-border': theme.ui.border,
+    '--terminal-surface': theme.ui.surface,
+    '--terminal-surface-strong': theme.ui.surfaceStrong,
+    '--terminal-chrome': theme.ui.chrome,
+    '--terminal-hover': theme.ui.hover,
+    '--terminal-active': theme.ui.active,
+    '--terminal-accent': theme.ui.accent,
+    '--terminal-accent-text': theme.ui.accentText,
+    '--terminal-accent-soft': theme.ui.accentSoft,
+    '--terminal-shadow': theme.ui.shadow,
+    '--terminal-success': theme.ui.success,
+    '--terminal-danger': theme.ui.danger,
+    '--terminal-warning': theme.ui.warning,
+    '--terminal-info': theme.ui.info,
+    background: theme.background,
+    color: theme.ui.text,
+  } as React.CSSProperties;
+}
 
 const SHELL_OPTIONS = [
   { value: 'powershell', label: 'PowerShell' },
@@ -86,12 +227,12 @@ interface TerminalPanelProps {
 }
 
 // ── Main Component ──
-// Design principle: this component has ZERO awareness of visibility / mode switching.
-// It is always mounted. The parent controls display via CSS.
-// The only "auto" behavior is: create a terminal when no tabs exist and container has size.
+// The panel stays mounted so terminal sessions survive view switches.
+// Global shortcuts still need to ignore input while another workbench mode is visible.
 
 export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   const {
+    viewMode,
     terminalTabs, setTerminalTabs,
     activeTerminalTabId, setActiveTerminalTabId,
     terminalShellType, setTerminalShellType,
@@ -101,10 +242,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   const [showShellMenu, setShowShellMenu] = useState(false);
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [terminalDims, setTerminalDims] = useState<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
-  // 终端后端配置仅写入、当前 UI 未读取展示
-  const [, setConsoleConfig] = useState<{ consoleType: string; bufferSize: number; maxLines: number | null } | null>(null);
-  // Terminal cols/rows are FIXED at creation time — never changed by resize.
-  // Initial size is measured from the container to fill the content area exactly.
 
   // ── Helpers ──
 
@@ -125,68 +262,40 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   // Tauri event listener unlisten functions: tabId -> UnlistenFn[]
   const unlistenRefs = useRef<Map<string, UnlistenFn[]>>(new Map());
-  // Guard against ResizeObserver triggering createTerminal while one is in-flight
+  // Guard against keyboard/button double-submit while a session is being created.
   const creatingRef = useRef(false);
-  const observerRef = useRef<ResizeObserver | null>(null);
+  const mountedRef = useRef(true);
+  // Monotonic sequence per mounted terminal panel, so closing an earlier tab
+  // never makes a later tab reuse its display name.
+  const tabSequenceRef = useRef(0);
   // Ref to scale wrapper div — tab divs must be appended here, not to containerRef
   const scaleWrapperRef = useRef<HTMLDivElement>(null);
-  // Store the pixel dimensions of the initial terminal render (for layout sizing)
-  const terminalOrigSizeRef = useRef<{ w: number; h: number } | null>(null);
-  // Session metadata: createdAt + alive status
-  const sessionMetaRef = useRef<Map<string, { createdAt: number; alive: boolean }>>(new Map());
+  // Session metadata: creation time, exit time, and live status.
+  const sessionMetaRef = useRef<Map<string, { createdAt: number; exitedAt?: number; alive: boolean }>>(new Map());
   // Byte counters for transfer tracking
   const bytesTrackerRef = useRef<Map<string, { rx: number; tx: number }>>(new Map());
-  // Previous snapshot for rate calculation (1s interval)
-  // Transmission state machine: idle | sending | waiting | receiving
-  const txStateRef = useRef<Map<string, { state: 'idle' | 'sending' | 'waiting' | 'receiving'; lastRxTime: number }>>(new Map());
 
   // ── 1s 轮询状态 ──
-  // 声明位置须早于 setupTerminalListeners / createTerminal：它们的回调会写这些 state，
-  // 而 react-hooks/immutability 不允许引用"声明在后的变量"。
-  const [, setTick] = useState(0); // 仅用于触发重渲染（吞吐 / 耗时展示）
   const [displayUptime, setDisplayUptime] = useState(0);
   const [displayAlive, setDisplayAlive] = useState(true);
-  const [displayBufferLines, setDisplayBufferLines] = useState(0);
-  const [displayTxState, setDisplayTxState] = useState<'idle' | 'sending' | 'waiting' | 'receiving'>('idle');
   // Per-second throughput: poll reads + resets counters, displays last-second values
   const [displaySecRx, setDisplaySecRx] = useState(0);
   const [displaySecTx, setDisplaySecTx] = useState(0);
 
-  // Mirror tabs count in a ref for closeTerminal (avoids stale closure)
-  const tabsCountRef = useRef(terminalTabs.length);
-  useEffect(() => {
-    tabsCountRef.current = terminalTabs.length;
-  }, [terminalTabs.length]);
-
   // ── Setup event listeners ──
-  // 声明在 createTerminal 之前：createTerminal 的依赖数组会引用它，且其回调要写上面的轮询 state。
 
   const setupTerminalListeners = useCallback((tabId: string, term: Terminal): Promise<void> => {
     const unlistens: UnlistenFn[] = [];
-
-    // Listen for terminal://created to capture pid
-    const p_created = listen<{ session_id: string; pid: number }>('terminal://created', (event) => {
-      if (event.payload.session_id === tabId) {
-        setTerminalTabs(prev => prev.map(t => t.id === tabId ? { ...t, pid: event.payload.pid } : t));
-      }
-    }).then(fn => unlistens.push(fn));
+    // Register the container before awaiting listeners. If the tab is closed while
+    // listen() is still resolving, the final ownership check below removes them.
+    unlistenRefs.current.set(tabId, unlistens);
 
     const p1 = listen<string>(`terminal://output/${tabId}`, (event) => {
       const payload = event.payload;
       if (payload) {
         const tracker = bytesTrackerRef.current.get(tabId);
         if (tracker) {
-          tracker.rx += payload.length;
-          setDisplaySecRx(tracker.rx);
-          setTick(t => t + 1);
-        }
-        // Update tx state machine
-        const txState = txStateRef.current.get(tabId);
-        if (txState) {
-          if (txState.state === 'sending' || txState.state === 'waiting') {
-            txState.state = 'receiving';
-          }
-          txState.lastRxTime = Date.now();
+          tracker.rx += utf8Encoder.encode(payload).byteLength;
         }
       }
       term.write(payload);
@@ -197,7 +306,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     const p2 = listen<{ session_id: string }>('terminal://exited', (event) => {
       if (event.payload?.session_id === tabId) {
         const meta = sessionMetaRef.current.get(tabId);
-        if (meta) meta.alive = false;
+        if (meta) {
+          meta.alive = false;
+          meta.exitedAt ??= Date.now();
+        }
         term.writeln('\r\n\x1b[90m[Process exited]\x1b[0m');
       }
     }).then((fn) => { unlistens.push(fn); });
@@ -205,21 +317,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     term.onData((data) => {
       const tracker = bytesTrackerRef.current.get(tabId);
       if (tracker) {
-        tracker.tx += data.length;
-        setDisplaySecTx(tracker.tx);
-        setTick(t => t + 1);
-      }
-      // Detect Enter key to start tx state machine (only from idle state)
-      if (data === '\r') {
-        const txState = txStateRef.current.get(tabId);
-        if (txState && txState.state === 'idle') {
-          txState.state = 'sending';
-          // After 150ms, if still sending, transition to waiting
-          setTimeout(() => {
-            const s = txStateRef.current.get(tabId);
-            if (s && s.state === 'sending') s.state = 'waiting';
-          }, 150);
-        }
+        tracker.tx += utf8Encoder.encode(data).byteLength;
       }
       invoke('terminal_write', {
         sessionId: tabId,
@@ -229,16 +327,21 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       });
     });
 
-    unlistenRefs.current.set(tabId, unlistens);
-    return Promise.all([p_created, p1, p2]).then(() => {
+    return Promise.allSettled([p1, p2]).then((results) => {
       // 注册期间该标签页就被关掉的话，unlistens 已从 ref 摘除（数组对象本身还在），
       // 关标签那条路径遍历的是当时已 resolve 的项——这里补一次反注册，
       // 避免监听器跟着已关闭的终端残留。
       if (unlistenRefs.current.get(tabId) !== unlistens) {
         unlistens.forEach((fn) => fn());
       }
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) {
+        unlistens.forEach((fn) => fn());
+        unlistenRefs.current.delete(tabId);
+        throw failed.reason;
+      }
     });
-  }, [setTerminalTabs]);
+  }, []);
 
   // ── Create terminal ──
 
@@ -253,21 +356,34 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       console.error('[Terminal] Scale wrapper not ready');
       return;
     }
+    const container = containerRef.current;
+    if (!container) {
+      console.error('[Terminal] Container not ready');
+      return;
+    }
+    // Fit against the visible viewport. The ResizeObserver below keeps each active
+    // terminal aligned when the window or either side panel changes width.
+    const availableWidth = Math.max(320, container.clientWidth - 16);
+    const availableHeight = Math.max(180, container.clientHeight - 24);
+
     // Create tab div first (placeholder id, will be updated after ConPTY creation)
     const tabDiv = document.createElement('div');
-    tabDiv.style.cssText = '';
+    tabDiv.style.width = '100%';
+    tabDiv.style.height = `${availableHeight}px`;
     scaleWrapper.querySelectorAll('[id^="xterm-tab-"]').forEach((el) => {
       (el as HTMLElement).style.display = 'none';
     });
     tabDiv.style.display = 'block';
+    scaleWrapper.style.width = `${availableWidth}px`;
+    scaleWrapper.style.height = `${availableHeight}px`;
     scaleWrapper.appendChild(tabDiv);
 
-    // Create xterm with placeholder cols (80), rows fixed at 150
+    // FitAddon measures tabDiv, which now matches the visible terminal viewport.
     const term = new Terminal({
       theme: TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES],
       fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
       fontSize: 14, lineHeight: 1.2,
-      cols: 80, rows: 150,
+      cols: 80, rows: 24,
       cursorBlink: true, cursorStyle: 'bar',
       scrollback: 50000, allowProposedApi: true, convertEol: false,
     });
@@ -278,41 +394,21 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     // Fit to actual container (rAF ensures layout complete)
     await new Promise(r => requestAnimationFrame(r));
     fitAddon.fit();
-    // Reset scrollable-element padding + make viewport scrollbar overlay
-    const scrollableEl = tabDiv.querySelector('.xterm-scrollable-element') as HTMLElement | null;
-    if (scrollableEl) {
-      scrollableEl.style.paddingRight = '0';
-    }
-    const viewport = tabDiv.querySelector('.xterm-viewport') as HTMLElement | null;
-    if (viewport) {
-      viewport.style.overflowY = 'overlay';
-    }
-    // Force xterm-screen (and child canvases) to viewport's content width
-    const screen = tabDiv.querySelector('.xterm-screen') as HTMLElement | null;
-    if (screen && viewport) {
-      const w = viewport.clientWidth;
-      screen.style.setProperty('width', w + 'px', 'important');
-      screen.style.setProperty('max-width', w + 'px', 'important');
-      const canvases = screen.querySelectorAll('canvas');
-      canvases.forEach(c => {
-        (c as HTMLElement).style.setProperty('width', w + 'px', 'important');
-      });
-    }
-    const dims = { cols: term.cols, rows: 150 };
+    const dims = { cols: term.cols, rows: term.rows };
 
     // 2. Create backend ConPTY session at the fitted size
     let sessionId: string;
     let shellType: string;
-    let initialData = "";
+    let pid: number | undefined;
     try {
-      const result = await invoke<{ session_id: string; shell_type: string; initial_data?: string }>('terminal_create', {
+      const result = await invoke<{ session_id: string; shell_type: string; pid?: number }>('terminal_create', {
         shellType: terminalShellType,
         cols: dims.cols,
         rows: dims.rows,
       });
       sessionId = result.session_id;
       shellType = result.shell_type;
-      initialData = result.initial_data || '';
+      pid = result.pid;
     } catch (err) {
       console.error('[Terminal] Failed to create session:', err);
       // 创建失败时清理刚挂载的 xterm DOM，避免空输入块残留覆盖后续欢迎页按钮
@@ -330,55 +426,66 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     // Initialize session metadata and byte tracking
     sessionMetaRef.current.set(sessionId, { createdAt: Date.now(), alive: true });
     bytesTrackerRef.current.set(sessionId, { rx: 0, tx: 0 });
-    txStateRef.current.set(sessionId, { state: 'idle', lastRxTime: Date.now() });
-
-    // Measure the rendered terminal pixel size and store for layout
-    const screenEl = tabDiv.querySelector('.xterm-screen') as HTMLElement | null;
-    const renderedH = screenEl?.offsetHeight || tabDiv.offsetHeight;
-    terminalOrigSizeRef.current = { w: 0, h: renderedH };
-    // Size the scaleWrapper to match terminal height, bottom-aligned in scrollable container
-    if (scaleWrapper) {
-      scaleWrapper.style.height = renderedH + 'px';
-      scaleWrapper.style.marginTop = 'auto';
-    }
-
-
-
-    // Write banner data that was synchronously read from ConPTY pipe in Rust.
-    // This guarantees CMD/PowerShell banner is displayed immediately.
-    if (initialData) {
-      term.write(initialData);
-    }
-
-    // 5. Add tab to state
-    const tab: import('../TerminalManager').TerminalTabData = {
-      id: sessionId,
-      shellType,
-      title: shellType.toUpperCase(),
+    const abandonSession = () => {
+      const unlistens = unlistenRefs.current.get(sessionId) ?? [];
+      unlistens.forEach((fn) => fn());
+      unlistenRefs.current.delete(sessionId);
+      sessionMetaRef.current.delete(sessionId);
+      bytesTrackerRef.current.delete(sessionId);
+      terminalRef.current.delete(sessionId);
+      try {
+        term.dispose();
+      } catch { /* ignore */ }
+      tabDiv.remove();
+      void invoke('terminal_close', { sessionId }).catch(() => {});
     };
-    setTerminalTabs((prev) => [...prev, tab]);
-    setActiveTerminalTabId(sessionId);
-    setTerminalDims({ cols: dims.cols, rows: dims.rows });
 
-    // 6. Register event listeners (await to ensure they're ready before read loop)
-    await setupTerminalListeners(sessionId, term);
+    if (!mountedRef.current) {
+      abandonSession();
+      return;
+    }
 
-    // 7. Start backend read loop (await to ensure read_loop is running before any resize)
+    // 5. Register listeners before attaching the backend read loop, then expose
+    // the tab only after attach succeeds. This prevents a visible tab from being
+    // closed while its listener/session setup is still in flight.
+    try {
+      await setupTerminalListeners(sessionId, term);
+    } catch (err) {
+      console.error('[Terminal] Listener setup failed:', err);
+      abandonSession();
+      return;
+    }
+    if (!mountedRef.current) {
+      abandonSession();
+      return;
+    }
+
     try {
       await invoke('terminal_attach', { sessionId });
     } catch (err) {
       console.error('[Terminal] Attach failed:', err);
+      abandonSession();
+      return;
+    }
+    if (!mountedRef.current) {
+      abandonSession();
+      return;
     }
 
+    // 6. Add tab to state
+    tabSequenceRef.current += 1;
+    const shellLabel = shellType === 'powershell' || shellType === 'pwsh' ? 'PowerShell' : 'CMD';
+    const tab: import('../TerminalManager').TerminalTabData = {
+      id: sessionId,
+      shellType,
+      title: `${shellLabel} ${tabSequenceRef.current}`,
+      pid,
+    };
+    setTerminalTabs((prev) => [...prev, tab]);
+    setActiveTerminalTabId(sessionId);
+    setTerminalDims({ cols: dims.cols, rows: dims.rows });
     term.focus();
 
-    // Post-creation: re-enable ResizeObserver after a short delay
-    // to allow shell to output banner before any resize can occur.
-    setTimeout(() => {
-      if (observerRef.current && containerRef.current) {
-        observerRef.current.observe(containerRef.current);
-      }
-    }, 500);
     } finally {
       creatingRef.current = false;
     }
@@ -387,7 +494,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   // ── Close terminal tab ──
   //    Uses functional state updates to avoid stale closure issues with activeTerminalTabId.
 
-  const closeTerminal = useCallback(async (tabId: string, event?: React.MouseEvent) => {
+  const closeTerminal = useCallback((tabId: string, event?: React.MouseEvent) => {
     if (event) event.stopPropagation();
 
     const entry = terminalRef.current.get(tabId);
@@ -402,49 +509,31 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       unlistenRefs.current.delete(tabId);
     }
 
-    try {
-      await invoke('terminal_close', { sessionId: tabId });
-    } catch (err) {
+    void invoke('terminal_close', { sessionId: tabId }).catch((err) => {
       console.error('[Terminal] Failed to close session:', err);
-    }
+    });
 
     // Clean up tracking refs
     sessionMetaRef.current.delete(tabId);
     bytesTrackerRef.current.delete(tabId);
-    txStateRef.current.delete(tabId);
 
     const tabDiv = document.getElementById(`xterm-tab-${tabId}`);
     if (tabDiv?.parentNode) {
       tabDiv.parentNode.removeChild(tabDiv);
     }
 
-    // 最后一个终端关闭后：重置 scaleWrapper 尺寸并清掉可能残留的终端容器。
-    // 否则其固定高度残留会以透明空块覆盖在「默认引导页」之上，导致页面按钮全部无法点击。
-    if (tabsCountRef.current === 1) {
-      const wrapper = scaleWrapperRef.current;
-      if (wrapper) {
-        wrapper.style.height = '';
-        wrapper.style.marginTop = '';
-        wrapper.querySelectorAll('[id^="xterm-tab-"]').forEach((el) => el.remove());
-      }
+    // 最后一个终端关闭后重置尺寸，避免透明容器覆盖默认引导页。
+    const wrapper = scaleWrapperRef.current;
+    if (wrapper && wrapper.querySelectorAll('[id^="xterm-tab-"]').length === 0) {
+      wrapper.style.width = '';
+      wrapper.style.height = '';
+      wrapper.style.marginTop = '';
     }
 
-    // Use functional update to read latest state — avoids stale closure on activeTerminalTabId
-    setTerminalTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId);
-      // Check against current activeTerminalTabId via functional setter
-      setActiveTerminalTabId((currentActive) => {
-        if (currentActive === tabId) {
-          const newActiveId = next.length > 0 ? next[next.length - 1].id : null;
-          return newActiveId;
-        }
-        return currentActive;
-      });
-      return next;
-    });
-  }, [setTerminalTabs, setActiveTerminalTabId]);
+    setTerminalTabs((prev) => prev.filter((t) => t.id !== tabId));
+  }, [setTerminalTabs]);
 
-  // ── Tab switch: CSS display toggle + focus only (NO fit ever) ──
+  // ── Tab switch: show the selected xterm, then let the resize effect fit it ──
 
   useEffect(() => {
     const container = containerRef.current;
@@ -459,12 +548,21 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     const entry = terminalRef.current.get(activeTerminalTabId);
     if (entry) {
       entry.term.focus();
-      const tabDims = entry.fitAddon.proposeDimensions();
-      if (tabDims?.cols && tabDims?.rows) {
-        setTerminalDims({ cols: tabDims.cols, rows: tabDims.rows });
-      }
+      setTerminalDims({ cols: entry.term.cols, rows: entry.term.rows });
     }
   }, [activeTerminalTabId]);
+
+  // Keep the selection valid when the active tab disappears. This is kept
+  // outside the terminalTabs updater so the updater stays pure.
+  useEffect(() => {
+    if (
+      activeTerminalTabId
+      && terminalTabs.some((tab) => tab.id === activeTerminalTabId)
+    ) {
+      return;
+    }
+    setActiveTerminalTabId(terminalTabs[terminalTabs.length - 1]?.id ?? null);
+  }, [activeTerminalTabId, setActiveTerminalTabId, terminalTabs]);
 
   // ── 注入桥注册：把「向当前活跃终端输入点注入文本」能力暴露给外部组件（如灵感面板） ──
   useEffect(() => {
@@ -480,86 +578,112 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     }
     // terminalTabs 参与依赖：创建/关闭 tab 后以最新 terminalRef 重算活跃注入目标
   }, [activeTerminalTabId, terminalTabs]);
-  // 组件卸载（如进入 /settings 独立路由）时清空，避免注入器指向已销毁实例
-  useEffect(() => () => registerTerminalInjector(null), []);
 
-  // ── ResizeObserver: track container size (NO auto-create) ──
-  //    Terminal cols/rows are FIXED at creation time — never changed.
-  //    No fit/resize on container change — avoids xterm reflow vs ConPTY VT redraw conflicts.
-  //    ✦ 重要：终端模式切换后不会自动创建默认终端 tab，
-  //       由用户手动点击「新建终端」或 Ctrl+Shift+T 创建（与空态首页 CTA 一致）。
-
+  // ── Resize the active terminal when the available panel area changes ──
   useEffect(() => {
+    if (viewMode !== 'terminal' || !activeTerminalTabId) return;
+
     const container = containerRef.current;
-    if (!container) return;
+    const wrapper = scaleWrapperRef.current;
+    const entry = terminalRef.current.get(activeTerminalTabId);
+    if (!container || !wrapper || !entry) return;
 
-    const observer = new ResizeObserver(() => {
-      // 仅用于当前活动终端尺寸检测；无终端时保持空态（不自动创建）
-    });
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const fit = () => {
+      if (!container.isConnected || container.clientWidth <= 0 || container.clientHeight <= 0) return;
 
-    observerRef.current = observer;
-    observer.observe(container);
-    return () => {
-      observer.disconnect();
-      observerRef.current = null;
+      const availableWidth = Math.max(320, container.clientWidth - 16);
+      const availableHeight = Math.max(180, container.clientHeight - 24);
+      const activeDiv = document.getElementById(`xterm-tab-${activeTerminalTabId}`);
+      if (!activeDiv) return;
+
+      wrapper.style.width = `${availableWidth}px`;
+      wrapper.style.height = `${availableHeight}px`;
+      activeDiv.style.width = '100%';
+      activeDiv.style.height = `${availableHeight}px`;
+
+      const previousCols = entry.term.cols;
+      const previousRows = entry.term.rows;
+      try {
+        entry.fitAddon.fit();
+      } catch (err) {
+        console.error('[Terminal] Fit failed:', err);
+        return;
+      }
+
+      const screen = activeDiv.querySelector('.xterm-screen') as HTMLElement | null;
+      const renderedHeight = screen?.offsetHeight || availableHeight;
+      wrapper.style.height = `${renderedHeight}px`;
+      activeDiv.style.height = `${renderedHeight}px`;
+
+      const cols = entry.term.cols;
+      const rows = entry.term.rows;
+      if (cols !== previousCols || rows !== previousRows) {
+        setTerminalDims({ cols, rows });
+        void invoke('terminal_resize', { sessionId: activeTerminalTabId, cols, rows }).catch((err) => {
+          console.error('[Terminal] Resize failed:', err);
+        });
+      }
     };
-  }, [createTerminal]);
+    const scheduleFit = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(fit, 80);
+    };
 
-  // ── 1s poll: direct state updates from refs (recursive setTimeout, no setInterval) ──
-  //    （轮询用到的 state 声明在文件上方，供 setupTerminalListeners 的回调共用）
+    const observer = new ResizeObserver(scheduleFit);
+    observer.observe(container);
+    scheduleFit();
+
+    return () => {
+      window.clearTimeout(resizeTimer);
+      observer.disconnect();
+    };
+  }, [activeTerminalTabId, viewMode]);
+
+  // ── 1s poll: refs own the hot-path counters; React updates only once per second ──
   useEffect(() => {
     let running = true;
     const poll = () => {
       if (!running) return;
       const activeId = activeTerminalTabId;
-      if (activeId) {
+
+      let activeRx = 0;
+      let activeTx = 0;
+      bytesTrackerRef.current.forEach((tracker, tabId) => {
+        if (tabId === activeId) {
+          activeRx = tracker.rx;
+          activeTx = tracker.tx;
+        }
+        tracker.rx = 0;
+        tracker.tx = 0;
+      });
+      // The panel stays mounted outside terminal mode to preserve sessions.
+      // Avoid forcing a React render every second while it is hidden.
+      if (viewMode === 'terminal') {
+        setDisplaySecRx(activeRx);
+        setDisplaySecTx(activeTx);
+      }
+
+      if (activeId && viewMode === 'terminal') {
         const meta = sessionMetaRef.current.get(activeId);
-        const tracker = bytesTrackerRef.current.get(activeId);
-        const entry = terminalRef.current.get(activeId);
-        const txState = txStateRef.current.get(activeId);
         if (meta) {
           setDisplayAlive(meta.alive);
-          setDisplayUptime(Math.floor((Date.now() - meta.createdAt) / 1000));
-        }
-        if (tracker) {
-          setDisplaySecRx(tracker.rx);
-          setDisplaySecTx(tracker.tx);
-          tracker.rx = 0;
-          tracker.tx = 0;
-        }
-        setTick(t => t + 1);
-        if (entry) {
-          // baseY (scrollback lines) + cursorY (current line within viewport) + 1 = actual used lines
-          setDisplayBufferLines(entry.term.buffer.active.baseY + entry.term.buffer.active.cursorY + 1);
-        }
-        if (txState) {
-          if (txState.state === 'receiving' && Date.now() - txState.lastRxTime > 500) {
-            txState.state = 'idle';
-          }
-          setDisplayTxState(txState.state);
+          setDisplayUptime(
+            Math.floor(((meta.exitedAt ?? Date.now()) - meta.createdAt) / 1000),
+          );
         }
       }
       setTimeout(poll, 1000);
     };
     poll();
     return () => { running = false; };
-  }, [activeTerminalTabId]);
-
-  // ── Load console config ──
-  useEffect(() => {
-    invoke<Record<string, unknown>>('terminal_get_config').then((cfg) => {
-      setConsoleConfig({
-        consoleType: cfg.console_type as string,
-        bufferSize: cfg.buffer_size as number,
-        maxLines: cfg.max_lines as number | null,
-      });
-    }).catch(() => {});
-  }, []);
+  }, [activeTerminalTabId, viewMode]);
 
   // ── Keyboard shortcut: Ctrl+Shift+T ──
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (viewMode !== 'terminal') return;
       if (e.ctrlKey && e.shiftKey && e.key === 'T') {
         e.preventDefault();
         createTerminal();
@@ -567,7 +691,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [createTerminal]);
+  }, [createTerminal, viewMode]);
 
   // ── Theme update ──
 
@@ -578,31 +702,62 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     });
   }, [terminalTheme]);
 
-  // ── No cleanup on unmount: terminals persist because component is always mounted ──
+  // Route changes (for example, opening Settings) unmount this panel. Close the
+  // backend sessions instead of leaving shells alive with no xterm attached.
+  useEffect(() => {
+    const terminals = terminalRef.current;
+    const listenerMap = unlistenRefs.current;
+    const sessionMeta = sessionMetaRef.current;
+    const byteTrackers = bytesTrackerRef.current;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      registerTerminalInjector(null);
+
+      terminals.forEach(({ term }) => {
+        try {
+          term.dispose();
+        } catch { /* ignore */ }
+      });
+      terminals.clear();
+
+      listenerMap.forEach((unlistens) => {
+        unlistens.forEach((fn) => fn());
+      });
+      listenerMap.clear();
+
+      const sessionIds = Array.from(sessionMeta.keys());
+      sessionMeta.clear();
+      byteTrackers.clear();
+      sessionIds.forEach((sessionId) => {
+        void invoke('terminal_close', { sessionId }).catch(() => {});
+      });
+
+      setTerminalTabs([]);
+      setActiveTerminalTabId(null);
+    };
+  }, [setActiveTerminalTabId, setTerminalTabs]);
 
   // ── JSX ──
 
   const activeTab = terminalTabs.find((t) => t.id === activeTerminalTabId);
+  const activeTheme = TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES] ?? TERMINAL_THEMES['Catppuccin Dark'];
 
   return (
-    <div className="h-full flex flex-col" style={{ background: TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES].background }}>
+    <div className="terminal-shell h-full flex flex-col" style={terminalStyle(terminalTheme)}>
       {/* Tab bar */}
       <div
-        className="flex items-center h-9 shrink-0 px-1 gap-1"
-        style={{
-          borderBottom: '1px solid rgba(255,255,255,0.1)',
-          background: 'rgba(0,0,0,0.2)',
-        }}
+        className="terminal-chrome flex items-center h-9 shrink-0 px-1 gap-1"
       >
         {/* Shell selector + New button */}
         <div className="flex items-center gap-1 mr-2">
           <div className="relative">
             <button
+              type="button"
               onClick={() => setShowShellMenu(!showShellMenu)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors"
-              style={{ color: 'rgba(255,255,255,0.7)' }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              className="terminal-toolbar-button flex items-center gap-1 px-2 py-1 rounded text-xs"
+              aria-label="选择终端类型"
+              aria-expanded={showShellMenu}
             >
               {terminalShellType === 'powershell' ? (
                 <Command className="w-3.5 h-3.5" />
@@ -616,23 +771,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowShellMenu(false)} />
                 <div
-                  className="absolute top-full left-0 mt-1 z-20 rounded-md shadow-lg py-1 min-w-[140px]"
-                  style={{
-                    background: '#2a2a3a',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                  }}
+                  role="menu"
+                  className="terminal-popover absolute top-full left-0 mt-1 z-20 min-w-[140px]"
                 >
                   {SHELL_OPTIONS.map((opt) => (
                     <button
+                      type="button"
                       key={opt.value}
                       onClick={() => {
                         setTerminalShellType(opt.value);
                         setShowShellMenu(false);
                       }}
-                      className="w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center gap-2"
-                      style={{ color: 'rgba(255,255,255,0.8)' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      className="pd-menu-item terminal-menu-item"
+                      data-active={opt.value === terminalShellType ? 'true' : undefined}
                     >
                       {opt.value === 'powershell' ? (
                         <Command className="w-3.5 h-3.5 shrink-0 opacity-80" />
@@ -641,7 +792,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
                       )}
                       {opt.label}
                       {opt.value === terminalShellType && (
-                        <span className="text-[10px] ml-auto" style={{ color: 'rgba(255,255,255,0.4)' }}>active</span>
+                        <span className="terminal-menu-state text-[10px] ml-auto">active</span>
                       )}
                     </button>
                   ))}
@@ -650,12 +801,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
             )}
           </div>
           <button
+            type="button"
             onClick={() => createTerminal()}
-            className="flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors"
-            style={{ color: 'rgba(255,255,255,0.7)' }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            className="terminal-toolbar-button flex items-center gap-1 px-2 py-1 text-xs rounded"
             title="New Terminal (Ctrl+Shift+T)"
+            aria-label="新建终端"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -666,29 +816,26 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
           {terminalTabs.map((tab) => (
             <div
               key={tab.id}
+              role="tab"
+              tabIndex={0}
+              aria-selected={tab.id === activeTerminalTabId}
               onClick={() => setActiveTerminalTabId(tab.id)}
-              className={`
-                flex items-center gap-1 px-3 py-1 text-xs cursor-pointer rounded transition-colors shrink-0
-              `}
-              style={{
-                background: tab.id === activeTerminalTabId ? 'rgba(255,255,255,0.15)' : 'transparent',
-                color: tab.id === activeTerminalTabId ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)',
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  setActiveTerminalTabId(tab.id);
+                }
               }}
-              onMouseEnter={(e) => {
-                if (tab.id !== activeTerminalTabId) (e.currentTarget.style.background = 'rgba(255,255,255,0.08)');
-              }}
-              onMouseLeave={(e) => {
-                if (tab.id !== activeTerminalTabId) (e.currentTarget.style.background = 'transparent');
-              }}
+              className="terminal-tab flex items-center gap-1 px-3 py-1 text-xs rounded shrink-0"
+              data-active={tab.id === activeTerminalTabId}
             >
               <Monitor className="w-3 h-3 shrink-0" />
               <span className="truncate max-w-[100px]">{tab.title}</span>
               <button
+                type="button"
                 onClick={(e) => closeTerminal(tab.id, e)}
-                className="ml-1 p-0.5 rounded transition-colors shrink-0"
-                style={{ color: 'rgba(255,255,255,0.5)' }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.9)')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
+                className="terminal-tab-close ml-1 p-0.5 rounded shrink-0"
+                aria-label={`关闭 ${tab.title} 标签页`}
               >
                 <X className="w-3 h-3" />
               </button>
@@ -699,12 +846,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
         {/* Theme picker */}
         <div className="relative">
           <button
+            type="button"
             onClick={() => setShowThemeMenu(!showThemeMenu)}
-            className="flex items-center p-1 rounded transition-colors"
-            style={{ color: 'rgba(255,255,255,0.5)' }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            className="terminal-toolbar-button flex items-center p-1 rounded"
             title="Theme"
+            aria-label="选择终端主题"
+            aria-expanded={showThemeMenu}
           >
             <Palette className="w-3.5 h-3.5" />
           </button>
@@ -712,23 +859,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowThemeMenu(false)} />
               <div
-                className="absolute top-full right-0 mt-1 z-20 rounded-md shadow-lg py-1 min-w-[160px]"
-                style={{
-                  background: '#2a2a3a',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                }}
+                role="menu"
+                className="terminal-popover absolute top-full right-0 mt-1 z-20 min-w-[160px]"
               >
                 {THEME_NAMES.map((name) => (
                   <button
+                    type="button"
                     key={name}
                     onClick={() => {
                       setTerminalTheme(name);
                       setShowThemeMenu(false);
                     }}
-                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
-                    style={{ color: 'rgba(255,255,255,0.8)' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    className="pd-menu-item terminal-menu-item"
+                    data-active={name === terminalTheme ? 'true' : undefined}
                   >
                     <span
                       className="w-3 h-3 rounded-full shrink-0 border"
@@ -739,7 +882,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
                     />
                     {name}
                     {name === terminalTheme && (
-                      <span className="text-[10px] ml-auto" style={{ color: 'rgba(255,255,255,0.4)' }}>active</span>
+                      <span className="terminal-menu-state text-[10px] ml-auto">active</span>
                     )}
                   </button>
                 ))}
@@ -750,109 +893,75 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       </div>
 
       {/* Terminal content area — scrollable parent for oversized terminal; xterm handles scrollback internally */}
-      <div className="flex-1 relative overflow-x-hidden overflow-y-auto terminal-viewport-area" style={{ background: TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES].background }}>
+      <div
+        className="terminal-viewport-area flex-1 relative overflow-hidden"
+        style={{ background: activeTheme.background }}
+      >
         {/* Empty state — Terminal 欢迎首页：零状态不自动创建终端，由用户手动发起 */}
         {terminalTabs.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center p-6 overflow-y-auto">
-            <div className="w-full max-w-xl flex flex-col items-center gap-7 text-center" style={{ color: 'rgba(255,255,255,0.85)' }}>
+          <div className="terminal-empty-state absolute inset-0 flex justify-center p-5 overflow-y-auto">
+            <div className="terminal-empty-content w-full max-w-xl flex flex-col items-center gap-4 my-auto text-center">
               {/* Logo / Title */}
-              <div className="flex flex-col items-center gap-3">
-                <div
-                  className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg"
-                  style={{
-                    background: 'linear-gradient(135deg, #5B7FFF 0%, #8B5CF6 100%)',
-                    boxShadow: '0 8px 24px rgba(91,127,255,0.35)',
-                  }}
-                >
-                  <TerminalIcon className="w-8 h-8 text-white" strokeWidth={2} />
+              <div className="flex flex-col items-center gap-2.5">
+                <div className="terminal-empty-logo w-14 h-14 rounded-2xl flex items-center justify-center">
+                  <TerminalIcon className="w-7 h-7" strokeWidth={2} />
                 </div>
                 <div className="flex flex-col items-center gap-1">
-                  <h2 className="text-xl font-semibold tracking-tight">虚拟终端</h2>
-                  <p className="text-xs opacity-60" style={{ color: 'rgba(255,255,255,0.55)' }}>
-                    请手动创建一个终端标签页以开始使用
+                  <h2 className="terminal-empty-title text-xl font-semibold tracking-tight">虚拟终端</h2>
+                  <p className="terminal-empty-description text-xs">
+                    选择终端类型并创建标签页，即可开始执行命令
                   </p>
                 </div>
               </div>
 
-              {/* Primary CTA + Secondary shell picker */}
-              <div className="flex flex-col items-center gap-3">
-                <button
-                  onClick={() => createTerminal()}
-                  className="group inline-flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-sm text-white transition-all active:scale-[.98]"
-                  style={{
-                    background: 'linear-gradient(135deg, #5B7FFF 0%, #8B5CF6 100%)',
-                    boxShadow: '0 4px 14px rgba(91,127,255,0.4)',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.filter = 'brightness(1.08)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.filter = 'brightness(1)')}
-                  title="新建终端 (Ctrl + Shift + T)"
-                >
-                  <Plus className="w-4 h-4" />
-                  新建终端
-                </button>
+              {/* Primary CTA and default shell stay on one compact action row. */}
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => createTerminal()}
+                    className="terminal-primary-button group h-10 shrink-0 inline-flex items-center gap-2 px-5 rounded-lg font-medium text-sm whitespace-nowrap active:scale-[.98]"
+                    title="新建终端 (Ctrl + Shift + T)"
+                  >
+                    <Plus className="w-4 h-4" />
+                    新建终端
+                  </button>
 
-                {/* Shell 快捷选择：仅切换默认终端类型（与顶部 Toolbar 同步），新建由上方 CTA/快捷键发起 */}
-                <div className="flex items-center gap-1.5 p-1 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <span className="text-[10px] opacity-50 px-1.5 pr-2">使用</span>
-                  {SHELL_OPTIONS.map((s) => (
-                    <button
-                      key={s.value}
-                      onClick={() => setTerminalShellType(s.value as 'powershell' | 'cmd')}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all"
-                      style={{
-                        background: terminalShellType === s.value ? 'rgba(255,255,255,0.12)' : 'transparent',
-                        color: terminalShellType === s.value ? '#fff' : 'rgba(255,255,255,0.55)',
-                        fontWeight: terminalShellType === s.value ? 600 : 500,
-                      }}
-                      onMouseEnter={(e) => { if (terminalShellType !== s.value) e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
-                      onMouseLeave={(e) => { if (terminalShellType !== s.value) e.currentTarget.style.background = 'transparent'; }}
-                      title={`选择默认终端类型：${s.label}`}
-                    >
-                      {s.value === 'powershell' ? <Command className="w-3 h-3" /> : <TerminalIcon className="w-3 h-3" />}
-                      {s.label}
-                    </button>
-                  ))}
+                  <div className="terminal-segmented h-10 shrink-0 flex items-center gap-1.5 p-1 rounded-lg">
+                    <span className="terminal-empty-label text-[10px] px-1.5 pr-1">使用</span>
+                    {SHELL_OPTIONS.map((s) => (
+                      <button
+                        type="button"
+                        key={s.value}
+                        onClick={() => setTerminalShellType(s.value as 'powershell' | 'cmd')}
+                        className="terminal-segment h-full inline-flex items-center gap-1.5 px-2.5 rounded-md text-xs whitespace-nowrap"
+                        data-active={terminalShellType === s.value}
+                        title={`选择默认终端类型：${s.label}`}
+                      >
+                        {s.value === 'powershell' ? <Command className="w-3 h-3" /> : <TerminalIcon className="w-3 h-3" />}
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="terminal-shortcut-hint inline-flex items-center gap-1.5 text-[10px]">
+                  <Keyboard className="terminal-empty-label w-3 h-3" />
+                  <kbd className="terminal-kbd px-1 py-0.5 rounded border">Ctrl</kbd>
+                  <span className="terminal-empty-label">+</span>
+                  <kbd className="terminal-kbd px-1 py-0.5 rounded border">Shift</kbd>
+                  <span className="terminal-empty-label">+</span>
+                  <kbd className="terminal-kbd px-1 py-0.5 rounded border">T</kbd>
+                  <span className="terminal-empty-label ml-1">新建标签页</span>
                 </div>
               </div>
 
-              {/* Divider */}
-              <div className="w-full flex items-center gap-3">
-                <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
-                <span className="text-[10px] opacity-40 uppercase tracking-wider">或使用快捷键</span>
-                <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
-              </div>
-
-              {/* Keyboard shortcut hint */}
-              <div
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg"
-                style={{
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  fontFamily: 'Cascadia Code, Consolas, monospace',
-                  fontSize: 12,
-                }}
-              >
-                <Keyboard className="w-3.5 h-3.5 opacity-60" />
-                <kbd className="px-1.5 py-0.5 rounded border text-[10px]" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }}>Ctrl</kbd>
-                <span className="opacity-30">+</span>
-                <kbd className="px-1.5 py-0.5 rounded border text-[10px]" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }}>Shift</kbd>
-                <span className="opacity-30">+</span>
-                <kbd className="px-1.5 py-0.5 rounded border text-[10px]" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }}>T</kbd>
-                <span className="opacity-50 ml-1 text-[11px]">新建终端</span>
-              </div>
-
               {/* Info cards: 主题 + 说明 */}
-              <div className="grid grid-cols-2 gap-3 w-full mt-1">
-                <div
-                  className="p-3 rounded-xl text-left"
-                  style={{
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                  }}
-                >
+              <div className="grid grid-cols-2 gap-3 w-full">
+                <div className="terminal-info-card p-3 rounded-lg text-left">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <Palette className="w-3.5 h-3.5 opacity-60" />
-                    <span className="text-xs font-medium">主题</span>
+                    <Palette className="terminal-empty-label w-3.5 h-3.5" />
+                    <span className="terminal-card-title text-xs font-medium">主题</span>
                   </div>
                   {/* 与右上角主题下拉同一数据源（THEME_NAMES 全量） */}
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -860,34 +969,29 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
                       const active = terminalTheme === name;
                       return (
                         <button
+                          type="button"
                           key={name}
                           onClick={() => setTerminalTheme(name)}
                           className="w-6 h-6 rounded-md border transition-transform hover:scale-110"
                           style={{
                             background: TERMINAL_THEMES[name].background,
-                            borderColor: active ? '#5B7FFF' : 'rgba(255,255,255,0.1)',
-                            boxShadow: active ? '0 0 0 2px rgba(91,127,255,0.3)' : 'none',
+                            borderColor: active ? activeTheme.ui.accent : activeTheme.ui.border,
+                            boxShadow: active ? `0 0 0 2px ${activeTheme.ui.accentSoft}` : 'none',
                           }}
                           title={`切换到 ${name}`}
+                          aria-label={`切换到 ${name} 主题`}
                         />
                       );
                     })}
                   </div>
                 </div>
-                <div
-                  className="p-3 rounded-xl text-left"
-                  style={{
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                  }}
-                >
+                <div className="terminal-info-card p-3 rounded-lg text-left">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <Sparkles className="w-3.5 h-3.5 opacity-60" />
-                    <span className="text-xs font-medium">提示</span>
+                    <Sparkles className="terminal-empty-label w-3.5 h-3.5" />
+                    <span className="terminal-card-title text-xs font-medium">提示</span>
                   </div>
-                  <p className="text-[11px] leading-relaxed opacity-55">
-                    终端会话创建后尺寸固定，不会随面板拉伸重新排版；
-                    可随时在标签栏「+」新建更多会话并行使用。
+                  <p className="terminal-card-copy text-[11px] leading-relaxed">
+                    每个标签页都是独立会话，可并行运行不同任务；关闭标签页会结束对应会话。
                   </p>
                 </div>
               </div>
@@ -909,52 +1013,24 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
 
       {/* Status bar — connection, shell, dims, scrollback, tab, transfer */}
       {activeTab && (
-        <div
-          className="flex items-center h-6 shrink-0 px-3 gap-3"
-          style={{
-            borderTop: '1px solid rgba(255,255,255,0.1)',
-            background: 'rgba(0,0,0,0.2)',
-            color: 'rgba(255,255,255,0.5)',
-            fontSize: '11px',
-            fontFamily: 'Cascadia Code, Consolas, monospace',
-          }}
-        >
+        <div className="terminal-statusbar terminal-chrome flex items-center h-6 shrink-0 px-3 gap-2.5 overflow-hidden whitespace-nowrap">
           {/* Connection status + uptime */}
-          <span style={{ color: displayAlive ? '#10B981' : '#EF4444' }}>
+          <span style={{ color: displayAlive ? 'var(--terminal-success)' : 'var(--terminal-danger)' }}>
             {displayAlive ? 'Live' : 'Exit'}
           </span>
-          {displayUptime > 0 && <span className="text-[10px] opacity-70">{formatUptime(displayUptime)}</span>}
-          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-          {/* Shell type */}
-          <span>{activeTab.shellType === 'powershell' ? 'PowerShell' : 'CMD'}</span>
-          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          {displayUptime > 0 && <span className="terminal-status-muted text-[10px]">{formatUptime(displayUptime)}</span>}
+          <span className="terminal-status-divider">|</span>
           {/* Dimensions */}
           <span>{terminalDims.cols} x {terminalDims.rows}</span>
-          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-          {/* Buffer lines — actual line count from xterm buffer */}
-          <span title="Buffer lines">{displayBufferLines} lines</span>
-          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-          {/* Tab index */}
-          <span>Tab {terminalTabs.findIndex(t => t.id === activeTerminalTabId) + 1}/{terminalTabs.length}</span>
-          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-          {/* Transfer info: cumulative bytes + real-time state */}
-          <span title="Data transmission">
-            {'↑'} {formatBytes(displaySecTx)} {'↓'} {formatBytes(displaySecRx)}
+          <span className="terminal-status-divider">|</span>
+          {/* Per-second transfer volume */}
+          <span title="每秒发送数据量">
+            {'↑'} {formatBytes(displaySecTx)}/s
           </span>
-          <span
-            style={{
-              color: displayTxState === 'receiving' ? '#60A5FA' :
-                     displayTxState === 'waiting' ? '#FBBF24' :
-                     displayTxState === 'sending' ? '#F59E0B' :
-                     'rgba(255,255,255,0.5)',
-            }}
-          >
-            {displayTxState === 'idle' && '已就绪'}
-            {displayTxState === 'sending' && '发送中...'}
-            {displayTxState === 'waiting' && '等待回传...'}
-            {displayTxState === 'receiving' && <span>回传中</span>}
+          <span title="每秒接收数据量">
+            {'↓'} {formatBytes(displaySecRx)}/s
           </span>
-          <span className="ml-auto">{terminalTheme}</span>
+          <span className="terminal-status-theme">{terminalTheme}</span>
         </div>
       )}
     </div>

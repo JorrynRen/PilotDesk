@@ -41,8 +41,11 @@ pub struct AgentTurnOptions {
     pub cancel_token: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// 持久化权限规则（命令 deny/risky/allow + 模式策略；None 时用默认空规则 = 全部走兜底策略）。
     pub permission_rules: Option<PermissionRules>,
-    /// 工作区目录（工作区内路径免审批；会话传 session.cwd，群聊传房间 cwd）。
+    /// 当前运行工作根（工作区内路径免审批；会话按项目主目录/全局工作空间解析，
+    /// 群聊使用房间工作根）。
     pub workspace: Option<String>,
+    /// 全部运行时安全根（当前 cwd / 产物目录 + 项目主目录与关联目录）。
+    pub workspace_roots: Vec<String>,
     /// 会话安全模式（严格/标准/宽松/无限制；None 默认标准）。
     pub security_mode: Option<SecurityMode>,
     /// 用量归因的 provider id（群聊工具分支注入；None → AgentLoop 回退查 `sessions.api_provider`）。
@@ -65,6 +68,7 @@ impl Default for AgentTurnOptions {
             cancel_token: None,
             permission_rules: None,
             workspace: None,
+            workspace_roots: Vec::new(),
             security_mode: None,
             usage_provider: None,
             usage_scope: None,
@@ -103,6 +107,9 @@ pub async fn run_agent_turn(
     }
     if options.workspace.is_some() {
         agent_loop = agent_loop.with_workspace(options.workspace);
+    }
+    if !options.workspace_roots.is_empty() {
+        agent_loop = agent_loop.with_workspace_roots(options.workspace_roots);
     }
     if let Some(mode) = options.security_mode {
         agent_loop = agent_loop.with_security_mode(mode);

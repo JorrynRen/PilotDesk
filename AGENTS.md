@@ -1,4 +1,4 @@
-# Project Memory (MEMORY.md)
+# Project Instructions & Memory (AGENTS.md)
 
 ## 项目概述
 - **项目名称**: PilotDesk

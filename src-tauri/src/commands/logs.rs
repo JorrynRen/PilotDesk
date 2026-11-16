@@ -432,7 +432,12 @@ mod tests {
     #[test]
     fn attaches_continuation_lines_to_previous_entry() {
         let lines = vec![
-            line("2026-10-28T11:29:06.727+08:00", "ERROR", "pilotdesk_lib::x", "失败"),
+            line(
+                "2026-10-28T11:29:06.727+08:00",
+                "ERROR",
+                "pilotdesk_lib::x",
+                "失败",
+            ),
             "    at foo::bar (x.rs:1)".to_string(),
         ];
         let entries = parse_lines(&lines);
@@ -442,7 +447,8 @@ mod tests {
 
     #[test]
     fn sanitizes_secrets_and_user_paths() {
-        let raw = "Authorization: Bearer abc12345 api_key=secret1 C:\\Users\\alice\\x sk-1234567890";
+        let raw =
+            "Authorization: Bearer abc12345 api_key=secret1 C:\\Users\\alice\\x sk-1234567890";
         let out = sanitize(raw);
         assert!(!out.contains("abc12345"));
         assert!(!out.contains("secret1"));
@@ -486,4 +492,3 @@ mod tests {
         assert!(!q.matches(&info_session));
     }
 }
-

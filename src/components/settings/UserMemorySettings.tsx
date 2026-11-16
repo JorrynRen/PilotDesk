@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { FilePlus2, Loader2, Save } from 'lucide-react';
 import { SettingsSection, SettingsButton } from './index';
 import {
   getUserPreferences,
@@ -7,10 +8,11 @@ import {
   type ProjectMemoryInfo,
 } from '../../types';
 import { errorMessage } from '../../utils/errorMessage';
+import { normalizeDisplayPath } from '../../utils/path';
 
 const MAX_CHARS = 12000;
 
-/** 设置路由「记忆管理」→ 用户偏好：统一配置根下的 USER.md（随每次会话注入模型上下文） */
+/** 设置路由「记忆管理」→ 用户偏好：统一配置根下的 USER.md（随 PilotDesk API 会话注入） */
 export function UserMemorySettings() {
   const [loaded, setLoaded] = useState<ProjectMemoryInfo | null>(null);
   const [draft, setDraft] = useState('');
@@ -61,11 +63,31 @@ export function UserMemorySettings() {
   };
 
   return (
-    <SettingsSection title="用户偏好（USER.md）">
-      <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>
-        全局用户级偏好文件，位于统一配置根，会随每次对话注入模型上下文。填写跨项目的通用偏好（语言/框架、沟通风格、常用命令、命名习惯等）。
-      </p>
-
+    <SettingsSection
+      title="用户偏好（USER.md）"
+      description="全局用户级偏好，会随 PilotDesk API 会话注入模型上下文。CLI/ACP 宿主会话由宿主自行处理。适合填写跨项目的语言、框架、沟通风格与命名习惯。"
+      actions={
+        <>
+          <SettingsButton
+            onClick={handleSave}
+            variant="primary"
+            disabled={saving || !dirty || overLimit}
+            icon={saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+          >
+            {saving ? '保存中…' : '保存'}
+          </SettingsButton>
+          {!loaded?.exists && (
+            <SettingsButton
+              onClick={handleTemplate}
+              disabled={saving}
+              icon={<FilePlus2 size={12} />}
+            >
+              使用模板创建
+            </SettingsButton>
+          )}
+        </>
+      }
+    >
       <div className="space-y-3">
         <div>
           <div className="flex items-center justify-between mb-1">
@@ -94,20 +116,12 @@ export function UserMemorySettings() {
         {error && <div className="text-xs" style={{ color: 'var(--danger, #EF4444)' }}>{error}</div>}
 
         <div className="flex flex-wrap items-center gap-2">
-          <SettingsButton onClick={handleSave} disabled={saving || !dirty || overLimit}>
-            {saving ? '保存中…' : '保存'}
-          </SettingsButton>
-          {!loaded?.exists && (
-            <SettingsButton onClick={handleTemplate} disabled={saving}>
-              使用模板创建
-            </SettingsButton>
-          )}
           {dirty && !overLimit && (
-            <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>有未保存修改</span>
+            <span className="pd-settings-note">有未保存修改</span>
           )}
           {loaded && (
-            <span className="text-[11px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
-              记忆根：{loaded.root}
+            <span className="pd-settings-note min-w-0 truncate">
+              记忆根：{normalizeDisplayPath(loaded.root)}
               {!loaded.exists && '（尚未创建 USER.md，保存后自动创建）'}
             </span>
           )}

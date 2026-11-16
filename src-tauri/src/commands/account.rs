@@ -273,7 +273,10 @@ async fn accept_callback(
     let (message, ok) = if let Some(err) = params.get("error") {
         (format!("授权未完成：{}", err), false)
     } else if params.get("state").map(String::as_str) != Some(expected_state) {
-        ("state 校验失败，请回到 PilotDesk 重新登录。".to_string(), false)
+        (
+            "state 校验失败，请回到 PilotDesk 重新登录。".to_string(),
+            false,
+        )
     } else {
         (
             "授权成功，可以关闭此页面并回到 PilotDesk。".to_string(),
@@ -310,12 +313,12 @@ background:#0b1020;color:#e8ecf8\"><p style=\"font-size:15px\">{}</p></body></ht
 // ── 令牌续期 ────────────────────────────────────────────────────
 
 /// 保证拿到一个可用的 access token：快过期就先刷新
-async fn ensure_access(
-    state: &crate::DbState,
-    tokens: &StoredTokens,
-) -> Result<String, AppError> {
+async fn ensure_access(state: &crate::DbState, tokens: &StoredTokens) -> Result<String, AppError> {
     let fresh = chrono::DateTime::parse_from_rfc3339(&tokens.access_expires_at)
-        .map(|exp| exp.with_timezone(&chrono::Utc) > chrono::Utc::now() + chrono::Duration::seconds(ACCESS_SKEW_SECS))
+        .map(|exp| {
+            exp.with_timezone(&chrono::Utc)
+                > chrono::Utc::now() + chrono::Duration::seconds(ACCESS_SKEW_SECS)
+        })
         .unwrap_or(false);
     if fresh {
         return Ok(tokens.access_token.clone());
@@ -378,10 +381,14 @@ pub(crate) async fn current_access_token(
 }
 
 /// 拉账号资料 + 会员权益，组装成前端视图
-async fn fetch_view(state: &crate::DbState, tokens: &StoredTokens) -> Result<AccountView, AppError> {
+async fn fetch_view(
+    state: &crate::DbState,
+    tokens: &StoredTokens,
+) -> Result<AccountView, AppError> {
     let access = ensure_access(state, tokens).await?;
     let me: MeResp = platform::get_json("/api/v1/me", Some(&access)).await?;
-    let ent: EntitlementsResp = platform::get_json("/api/v1/me/entitlements", Some(&access)).await?;
+    let ent: EntitlementsResp =
+        platform::get_json("/api/v1/me/entitlements", Some(&access)).await?;
     Ok(AccountView {
         email: me.user.email,
         nickname: me.user.nickname,
@@ -578,7 +585,10 @@ pub async fn account_status(
         // 平台不可达（离线 / 后端没起）：宽限期内按「上次已知权益」放行，避免断网即锁功能
         Err(AppError::Network(msg)) => {
             log::warn!("[Account] 平台不可达，尝试离线缓存：{}", msg);
-            Ok(state.get_conn().ok().and_then(|c| load_cache_within_grace(&c)))
+            Ok(state
+                .get_conn()
+                .ok()
+                .and_then(|c| load_cache_within_grace(&c)))
         }
         // 鉴权类失败（refresh 已失效并清掉本地令牌）：按未登录处理，不用缓存糊弄
         Err(e) => {
@@ -630,12 +640,10 @@ pub async fn account_logout(
 
     // 飞地：清掉本机登录身份。组织/成员快照按 viewer 绑定失效，但身份必须显式清空，
     // 否则退出后本地命令仍会以上一个账号的 actor 执行。
-    enclave
-        .store
-        .with_conn(|c| {
-            c.execute("DELETE FROM local_identity", [])
-                .map(|_| ())
-                .map_err(|e| format!("清理飞地登录身份失败：{}", e))
-        })?;
+    enclave.store.with_conn(|c| {
+        c.execute("DELETE FROM local_identity", [])
+            .map(|_| ())
+            .map_err(|e| format!("清理飞地登录身份失败：{}", e))
+    })?;
     Ok(())
 }

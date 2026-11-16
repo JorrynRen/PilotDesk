@@ -1,7 +1,7 @@
 /**
  * 设置 · 账号：登录平台账号，查看会员等级与已解锁能力。
  *
- * 未登录 = 免费档：受限功能（如工作流批量导出）的入口会隐藏，这里给出登录入口。
+ * 本地功能不设限；未登录时只隐藏依赖平台账号的云服务入口，并给出登录入口。
  */
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -10,14 +10,20 @@ import { ChevronRight, Cloud, Loader2, LogIn, LogOut, UploadCloud } from 'lucide
 import { AccountAvatar } from '../common/AccountAvatar';
 import { PlanBadge } from '../common/PlanBadge';
 import { Select } from '../common/Select';
+import { UpgradePrompt } from '../common/UpgradePrompt';
 import { CAP_CLOUD_SYNC, capabilityLabel, hasCapability, useAccountStore } from '../../stores/accountStore';
 import { useCloudSyncStore } from '../../stores/cloudSyncStore';
-import { expiryText } from '../../utils/planText';
+import { cloudSyncEntitlementLabel, expiryText } from '../../utils/planText';
+import { nextUpgradeOffer } from '../../utils/upgradeOffers';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { confirmDialog } from '../../stores/confirmStore';
 import type { HostStatusView } from '../../types/enclave';
-import { SettingsButton, SettingsCard, SettingsSection } from './index';
+import {
+  type OrganizationSummary,
+  orgSupportsUsageBoard,
+} from '../../utils/orgSharedSpace';
+import { SettingsButton, SettingsCard, SettingsSection, SettingsToggle } from './index';
 
 /** 「向组织上报用量」开关设置键（与后端 `commands/usage.rs::USAGE_REPORT_ENABLED_KEY` 一致） */
 const USAGE_REPORT_ENABLED_KEY = 'usage_report_enabled';
@@ -58,18 +64,30 @@ function roleLabel(role: string): string {
 
 /** 账号设置页 props */
 interface AccountSettingsProps {
-  /** 打开「我的云同步」一级 tab（由设置页传入；不传则不显示该入口） */
+  /** 打开「个人云同步」一级 tab（由设置页传入；不传则不显示该入口） */
   onOpenCloudSync?: () => void;
 }
 
 export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
-  const { account, loaded, loggingIn, error, login, logout, cancelLogin, openPlatform } =
-    useAccountStore();
-  // 云同步状态：只读缓存（账号 tab 不主动请求）；由「我的云同步」tab 拉取后写入
+  const {
+    account,
+    loaded,
+    loggingIn,
+    error,
+    login,
+    logout,
+    cancelLogin,
+    openPlatform,
+    openOrganization,
+    openUpgrade,
+  } = useAccountStore();
+  // 个人云同步状态：只读缓存（账号 tab 不主动请求）；由「个人云同步」tab 拉取后写入
   const cloudStatus = useCloudSyncStore((s) => s.status);
 
-  // 组织来源：升级 / 续费与账户信息都指到平台的组织页
+  // 组织来源：升级 / 续费必须带上当前组织，避免误买个人团队版。
   const fromOrganization = account?.source === 'organization';
+  const sourceOrganization =
+    account?.source === 'organization' ? account.organization : null;
   // 未登录时连「组织」都无从谈知：上报开关与「立即上报」一律不可用，避免点了才报错
   const canReport = !!account;
 
@@ -116,7 +134,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
   };
 
   // ── 上报目标组织：列出「在用组织」，保存后用所选组织上报（空 = 自动取第一个）──
-  const [orgOptions, setOrgOptions] = useState<{ id: number; name: string }[] | null>(null);
+  const [orgOptions, setOrgOptions] = useState<OrganizationSummary[] | null>(null);
   const [reportOrgId, setReportOrgId] = useState('');
   const [orgFallbackHint, setOrgFallbackHint] = useState('');
 
@@ -126,31 +144,40 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
   //   故「未登录」与「无在用组织（或组织信息取不到）」时，开关与按钮一律不可用。
   const orgReady = orgOptions !== null;
   const hasOrg = !!orgOptions && orgOptions.length > 0;
-  const canReportNow = canReport && hasOrg;
+  const reportableOrgs = orgOptions?.filter(orgSupportsUsageBoard) ?? [];
+  const hasReportableOrg = reportableOrgs.length > 0;
+  const canReportNow = canReport && hasReportableOrg;
 
   useEffect(() => {
-    if (!account) return; // 未登录不做组织选择（渲染处也用 account 兜底，避免展示过期选项）
+    // 账号切换 / 退出时先清空旧组织能力，避免重新拉取期间沿用上一个账号的可上报状态。
+    setOrgOptions(null);
+    setReportOrgId('');
+    setOrgFallbackHint('');
+    if (!account) return;
     let alive = true;
     (async () => {
       try {
         const [orgs, savedRaw] = await Promise.all([
-          invoke<{ id: number; name: string }[]>('org_list_mine'),
+          invoke<OrganizationSummary[]>('org_list_mine'),
           invoke<string | null>('get_app_setting', { key: REPORT_ORG_ID_KEY }),
         ]);
         if (!alive) return;
         setOrgOptions(orgs);
+        const eligibleOrgs = orgs.filter(orgSupportsUsageBoard);
         const saved = (savedRaw ?? '').trim();
-        if (saved && orgs.some((o) => String(o.id) === saved)) {
-          // 配置的组织仍在在用列表 → 沿用
+        if (saved && eligibleOrgs.some((o) => String(o.id) === saved)) {
+          // 配置的组织仍具备团队用量看板能力 → 沿用
           setReportOrgId(saved);
           setOrgFallbackHint('');
         } else {
-          // 未配置 / 配置已失效（不再是成员或已解散）→ 回退第一个在用组织并提示
+          // 未配置 / 配置已失效或不再具备团队能力 → 回退第一个可用组织并提示
           setReportOrgId('');
           if (saved) {
-            const first = orgs[0];
+            const first = eligibleOrgs[0];
             setOrgFallbackHint(
-              `原选择的组织已失效，已回退到第一个在用组织${first ? `（${first.name}）` : ''}`,
+              first
+                ? `原选择的组织已失效或未开通团队用量看板，已回退到第一个可用组织（${first.name}）`
+                : '原选择的组织已失效或未开通团队用量看板，当前没有可接收上报的组织',
             );
           } else {
             setOrgFallbackHint('');
@@ -241,19 +268,44 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
     await logout();
   };
 
-  // 云同步能力门控：仅专业版/团队版可用（账号 tab 只读此判据做入口文案，不请求状态）
+  // 个人云同步能力门控：仅专业版/团队版可用（账号 tab 只读此判据做入口文案，不请求状态）
   const canCloudSync = hasCapability(account, CAP_CLOUD_SYNC);
-  // 「云同步」入口文案：仅用能力（account）与缓存状态（cloudStatus），不发起任何请求
+  // 个人先考虑个人云同步与远程发起，再考虑优先在线服务和团队治理。
+  const upgradeOffer = account ? nextUpgradeOffer(account.capabilities) : null;
+  const openRecommendedUpgrade = () => {
+    if (fromOrganization) {
+      if (sourceOrganization) {
+        void openOrganization({
+          organizationId: sourceOrganization.id,
+          capability: upgradeOffer?.capability,
+          source: 'account-settings',
+        });
+      } else {
+        void openPlatform('organizations');
+      }
+      return;
+    }
+    if (!upgradeOffer) {
+      void openPlatform('upgrade');
+      return;
+    }
+    void openUpgrade({
+      plan: upgradeOffer.plan,
+      capability: upgradeOffer.capability,
+      source: 'account-settings',
+    });
+  };
+  // 「个人云同步」入口文案：仅用能力（account）与缓存状态（cloudStatus），不发起任何请求
   const cloudEntryText = !canCloudSync
-    ? '云同步：专业版功能，当前等级不含此能力'
+    ? '个人云同步：专业版可解锁工作流跨设备同步'
     : cloudStatus === null
-      ? '云同步：去查看与设置'
+      ? '个人云同步：去查看与设置'
       : cloudStatus.enabled
-        ? `云同步：已开启${cloudStatus.lastAt ? ` · 上次同步 ${cloudStatus.lastAt}` : ''}`
-        : '云同步：已关闭';
+        ? `个人云同步：已开启${cloudStatus.lastAt ? ` · 上次同步 ${cloudStatus.lastAt}` : ''}`
+        : '个人云同步：已关闭';
 
   return (
-    <div className="space-y-6">
+    <div className="settings-page-stack">
       <SettingsSection
         title="平台账号"
         description="登录后可使用会员功能。登录会打开系统浏览器，密码只在平台页面输入，本软件不保存你的密码。"
@@ -316,20 +368,14 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
       {/* 向组织上报用量：默认开启；仅上报聚合数字，不含任何对话内容或提示词 */}
       <SettingsSection
         title="向组织上报用量"
-        description="仅上报聚合数字（模型、调用次数、token 数），不包含对话内容或提示词；同一组织内成员的上报汇总为团队用量看板。"
+        description="仅上报聚合数字（模型、调用次数、token 数），不包含对话内容或提示词；只有已开通团队用量看板的组织可以接收成员上报。"
       >
         <SettingsCard>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => void toggleReport()}
+            <SettingsToggle
+              checked={reportEnabled}
+              onChange={() => void toggleReport()}
               disabled={loadingReportEnabled || !canReportNow}
-              className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
-              style={{
-                width: 36,
-                height: 20,
-                backgroundColor: reportEnabled ? '#22c55e' : 'var(--bg-field)',
-                border: '1px solid var(--border)',
-              }}
               title={
                 !canReport
                   ? '需先登录平台账号后才能向组织上报用量'
@@ -337,19 +383,20 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                     ? '正在读取组织信息（或读取失败），暂不可上报'
                     : !hasOrg
                       ? '当前账号没有在用组织，向组织上报无归属目标'
+                      : !hasReportableOrg
+                        ? '当前组织未开通团队用量看板，无法上报用量'
                       : reportEnabled
                         ? '点击关闭'
                         : '点击开启'
               }
-            >
-              <div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-                style={{ left: reportEnabled ? '18px' : '2px' }}
-              />
-            </button>
+            />
             <span
               className="text-xs"
-              style={{ color: canReportNow && reportEnabled ? '#22c55e' : 'var(--text-tertiary)' }}
+              style={{
+                color: canReportNow && reportEnabled
+                  ? 'var(--status-success)'
+                  : 'var(--text-tertiary)',
+              }}
             >
               {loadingReportEnabled
                 ? '读取中…'
@@ -359,6 +406,8 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                     ? '组织信息不可用'
                     : !hasOrg
                       ? '未加入组织'
+                      : !hasReportableOrg
+                        ? '组织未开通团队用量看板'
                       : reportEnabled
                         ? '已开启'
                         : '已关闭'}
@@ -367,7 +416,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
         </SettingsCard>
 
         {/* 上报目标组织：多组织时消除「取第一个」的顺序依赖；空 = 自动取第一个在用组织 */}
-        {account && orgOptions && orgOptions.length > 0 && (
+        {account && reportableOrgs.length > 0 && (
           <div className="mt-3">
             <div className="text-[11px] mb-1" style={{ color: 'var(--text-secondary)' }}>
               上报到的组织
@@ -375,10 +424,10 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
             <Select
               value={reportOrgId}
               onChange={(v) => void changeReportOrg(v)}
-              placeholder="自动（第一个在用组织）"
+              placeholder="自动（第一个可用组织）"
               options={[
-                { value: '', label: '自动（第一个在用组织）' },
-                ...orgOptions.map((o) => ({ value: String(o.id), label: o.name })),
+                { value: '', label: '自动（第一个可用组织）' },
+                ...reportableOrgs.map((o) => ({ value: String(o.id), label: o.name })),
               ]}
               className="w-full"
             />
@@ -409,6 +458,8 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                   ? '正在读取组织信息（或读取失败），暂不可上报'
                   : !hasOrg
                     ? '当前账号没有在用组织，向组织上报无归属目标'
+                    : !hasReportableOrg
+                      ? '当前组织未开通团队用量看板，无法上报用量'
                     : reportEnabled
                       ? '立即上报当天用量'
                       : '已关闭上报'
@@ -422,7 +473,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
         </div>
       </SettingsSection>
 
-      {/* 云同步入口：切到「我的云同步」一级 tab；此处只读缓存状态，不主动请求（懒加载） */}
+      {/* 个人云同步入口：切到「个人云同步」一级 tab；此处只读缓存状态，不主动请求（懒加载） */}
       {onOpenCloudSync && (
         <button
           onClick={onOpenCloudSync}
@@ -451,13 +502,29 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
               </SettingsButton>
               <SettingsButton
                 variant="primary"
-                onClick={() => void openPlatform(fromOrganization ? 'organizations' : 'upgrade')}
+                onClick={openRecommendedUpgrade}
               >
-                {fromOrganization ? '组织与订阅' : '升级 / 续费'}
+                {fromOrganization
+                  ? '组织与订阅'
+                  : upgradeOffer
+                    ? `了解${upgradeOffer.planName}`
+                    : '升级 / 续费'}
               </SettingsButton>
             </div>
           }
         >
+          {upgradeOffer && (
+            <UpgradePrompt
+              className="mb-3"
+              capability={upgradeOffer.capability}
+              plan={upgradeOffer.plan}
+              title={upgradeOffer.title}
+              description={upgradeOffer.description}
+              source="account-settings"
+              onUpgrade={openRecommendedUpgrade}
+            />
+          )}
+
           <SettingsCard>
             <div className="min-w-0 flex items-center gap-2">
               <PlanBadge
@@ -489,19 +556,29 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
             </div>
             {account.capabilities.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
-                {account.capabilities.map((key) => (
-                  <span
-                    key={key}
-                    className="px-2 py-0.5 rounded text-[11px]"
-                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-                  >
-                    {capabilityLabel(key)}
-                  </span>
-                ))}
+                {[...account.capabilities]
+                  .sort(
+                    (a, b) =>
+                      Number(a === 'support.priority') - Number(b === 'support.priority'),
+                  )
+                  .map((key) => (
+                    <span
+                      key={key}
+                      className="px-2 py-0.5 rounded text-[11px]"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                      }}
+                    >
+                      {key === CAP_CLOUD_SYNC
+                        ? cloudSyncEntitlementLabel(account.quotas)
+                        : capabilityLabel(key)}
+                    </span>
+                  ))}
               </div>
             ) : (
               <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                暂无（免费档）。本地功能不设限；付费解锁的是云端服务，例如「云同步（工作流跨设备）」。
+                暂无（免费档）。本地功能不设限；个人云同步额度以当前套餐权益为准。
               </div>
             )}
           </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 
 interface Props {
   scale: number;
@@ -20,10 +20,15 @@ const DRAG_THRESHOLD = 4;
 export function TaskGraphViewport({ scale, onScaleChange, className, style, children }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const scaleRef = useRef(scale);
-  scaleRef.current = scale;
+  const onScaleChangeRef = useRef(onScaleChange);
   const anchorRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number; ratio: number } | null>(null);
   const suppressClickRef = useRef(false);
   const cleanupRef = useRef<(() => void) | null>(null);
+
+  useLayoutEffect(() => {
+    scaleRef.current = scale;
+    onScaleChangeRef.current = onScaleChange;
+  }, [scale, onScaleChange]);
 
   useEffect(() => () => cleanupRef.current?.(), []);
 
@@ -49,11 +54,11 @@ export function TaskGraphViewport({ scale, onScaleChange, className, style, chil
         scrollTop: el.scrollTop,
         ratio: next / current,
       };
-      onScaleChange(next);
+      onScaleChangeRef.current(next);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [onScaleChange]);
+  }, []);
 
   // 缩放渲染完成后再按比例修正滚动位置，保持指针下的节点不漂移。
   useEffect(() => {

@@ -112,3 +112,9 @@ impl UnixPtyProcess {
         let _ = self.child.kill();
     }
 }
+
+impl Drop for UnixPtyProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}

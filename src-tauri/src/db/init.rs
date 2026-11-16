@@ -18,7 +18,16 @@ use std::fs;
 /// 原扁平列（cli_command/npm_package/pip_package/install_cmd/uninstall_cmd/update_cmd/
 /// version_cmd/latest_version_cmd/version_pattern）自本版起不再写入；存量库保留这些列
 /// （SQLite 删列代价高且无收益），仅停止读写。
-pub const SCHEMA_VERSION: i64 = 11;
+///
+/// v12：项目作为工作归属——新增 `projects` / `project_directories`，并为
+/// sessions / groupchat_rooms / workflow_definitions 增加可空 `project_id`。
+/// 项目目录只作为创建默认值，不参与已有工作运行目录的动态替换。
+///
+/// v13：项目增加可持久化图标，用于项目管理、工作归属选择和三类工作列表的统一识别。
+///
+/// v14：工作根统一由项目主目录/全局工作空间动态派生。移除 `sessions.cwd` 与
+/// `groupchat_rooms.output_dir`，新增仅供 ACP 宿主恢复使用的 `sessions.host_resume_cwd`。
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -89,6 +98,22 @@ CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT '',
             updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            icon TEXT NOT NULL DEFAULT '📁',
+            archived_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS project_directories (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS groupchat_participants (
             id              TEXT NOT NULL,
             room_id         TEXT NOT NULL,
@@ -113,7 +138,7 @@ CREATE TABLE IF NOT EXISTS groupchat_rooms (
             updated_at    INTEGER NOT NULL,
             goal_notes    TEXT NOT NULL DEFAULT '[]',
             allow_auto_cli INTEGER NOT NULL DEFAULT 1,
-            output_dir    TEXT NOT NULL DEFAULT '');
+            project_id    TEXT);
 CREATE TABLE IF NOT EXISTS groupchat_stances (
             room_id      TEXT NOT NULL,
             participant_id TEXT NOT NULL,
@@ -159,7 +184,7 @@ CREATE TABLE IF NOT EXISTS "sessions" (
             id TEXT PRIMARY KEY,
             agent_type TEXT NOT NULL DEFAULT '',
             title TEXT NOT NULL DEFAULT '',
-            cwd TEXT DEFAULT '',
+            host_resume_cwd TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             last_message_preview TEXT DEFAULT '',
@@ -169,7 +194,8 @@ CREATE TABLE IF NOT EXISTS "sessions" (
             api_model TEXT,
             agent_session_id TEXT
         , origin TEXT
-        , temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT NULL);
+        , temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT NULL
+        , project_id TEXT);
 CREATE TABLE IF NOT EXISTS workflow_definitions (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL DEFAULT '',
@@ -183,7 +209,8 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
-        , deleted_at INTEGER);
+        , deleted_at INTEGER
+        , project_id TEXT);
 CREATE TABLE IF NOT EXISTS workflow_events (
     seq            INTEGER PRIMARY KEY AUTOINCREMENT,
     execution_id   TEXT NOT NULL,
@@ -219,6 +246,10 @@ CREATE INDEX IF NOT EXISTS idx_wf_schedule_next ON workflow_schedules(next_run_a
 CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);
 CREATE INDEX IF NOT EXISTS idx_workflow_events_exec ON workflow_events (execution_id, seq);
+CREATE INDEX IF NOT EXISTS idx_project_directories_project
+    ON project_directories(project_id, sort_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_directories_primary
+    ON project_directories(project_id) WHERE is_primary = 1;
 "#;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -271,10 +302,8 @@ pub fn init_db() -> Result<DbPool, AppError> {
     // 云同步本地元数据（个人向跨设备同步，见 commands/cloud_sync.rs）：
     // 每个被同步对象一行——server_version = 本地已知的「远端版本」（新建为 0），
     // dirty = 本地有未推送改动（快速提示，非唯一判据），
-    // last_synced_hash = 上次成功同步时本地内容的规范化哈希（判「本地是否真改过」的唯一可靠判据），
-    // tombstone = 是否墓碑（本地彻底删除后阻止该 key 被 pull 复活；1 = 是），
-    // tombstone_pushed = 墓碑对应的「删除意图」是否已送达云端（1 = 已送达，不再重复推送；
-    //   0 = 尚未送达，作为补送候选继续尝试）。三种状态组合见 commands/cloud_sync.rs 模块注释。
+    // last_synced_hash = 上次成功同步时本地内容的规范化哈希（判「本地是否真改过」的唯一可靠判据）。
+    // 彻底删除的传播意图放在短生命周期表 sync_pending_delete 中，送达云端后立即清理。
     // 作为「基础兜底表」在此创建（与 file_history 同处）：新表用 IF NOT EXISTS 每次启动即补齐，
     // 老库无需 schema 版本迁移；只有「给旧表补列」才需要 SCHEMA_VERSION +1（见 migrate_schema）。
     conn.execute_batch(
@@ -285,21 +314,21 @@ pub fn init_db() -> Result<DbPool, AppError> {
             local_updated_at INTEGER NOT NULL DEFAULT 0,
             dirty INTEGER NOT NULL DEFAULT 0,
             last_synced_hash TEXT,
-            tombstone INTEGER NOT NULL DEFAULT 0,
-            tombstone_pushed INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (kind, object_key)
+        );
+        CREATE TABLE IF NOT EXISTS sync_pending_delete (
+            kind TEXT NOT NULL,
+            object_key TEXT NOT NULL,
+            base_revision INTEGER NOT NULL,
+            deleted_at INTEGER NOT NULL,
             PRIMARY KEY (kind, object_key)
         );",
     )?;
-    // 老库补列：既有 sync_state 表（无 last_synced_hash / tombstone / tombstone_pushed）在此按既有
-    // ensure_column 做法幂等补齐——只加列、不改数据、不随 SCHEMA_VERSION 门控（同 workflow_definitions.deleted_at）。
+    // 老库补列：既有 sync_state 表可能没有 last_synced_hash。
     ensure_column(&conn, "sync_state", "last_synced_hash", "TEXT")?;
-    ensure_column(&conn, "sync_state", "tombstone", "INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(
-        &conn,
-        "sync_state",
-        "tombstone_pushed",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
+    // 永久墓碑已由 sync_pending_delete 取代；旧列不再参与任何读写。
+    drop_column_if_exists(&conn, "sync_state", "tombstone")?;
+    drop_column_if_exists(&conn, "sync_state", "tombstone_pushed")?;
 
     // 飞地主机转移终态日志：写**主库**而不是 `enclave.db`——旧主机销毁后
     // `enclave.db` 可能被整体重建/删除，`policy_audit` 会随之一并消失
@@ -337,6 +366,13 @@ pub fn init_db() -> Result<DbPool, AppError> {
     // 全新库无该表，`IF EXISTS` 空跑。
     conn.execute("DROP TABLE IF EXISTS api_providers", [])?;
 
+    // 旧版「门户标签 › 顶部显示个数」已移除：当前工作台导航不再消费该值。
+    // app_settings 是 KV 表，清理无用记录不需要提升 schema 版本。
+    conn.execute(
+        "DELETE FROM app_settings WHERE key = 'custom_tabs_titlebar_limit'",
+        [],
+    )?;
+
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
     let now = crate::utils::now();
 
@@ -367,17 +403,24 @@ pub fn init_db() -> Result<DbPool, AppError> {
         conn.execute("UPDATE agents SET is_builtin = 0 WHERE is_builtin = 1", [])?;
     }
 
-    // App Settings 种子数据
-    let workspace_default = crate::utils::paths::app_root_dir()
+    // 旧版本曾把应用配置目录当成全局工作空间的默认值。该值不是用户选择，
+    // 迁移后清空，让运行时解析到用户文档目录；用户明确配置过的其它路径保持不变。
+    let legacy_workspace_default = crate::utils::paths::app_root_dir()
         .to_string_lossy()
         .into_owned();
+    conn.execute(
+        "DELETE FROM app_settings
+          WHERE key = 'pilotdesk-workspace' AND value = ?1",
+        rusqlite::params![legacy_workspace_default],
+    )?;
+
+    // App Settings 种子数据
     let settings_seeds: Vec<(String, String)> = vec![
         ("mode_prompt_native".into(), String::new()),
         ("mode_prompt_fast".into(), "快速简洁回答，直接给出结论，无需详细解释推理过程".into()),
         ("mode_prompt_think".into(), "逐步分析推理，详细解释你的思路和过程，给出完整的推理链".into()),
         ("mode_prompt_expert".into(), "以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案".into()),
         ("mode_prompt_plan".into(), "先分析需求并制定清晰的分步执行计划，先向用户呈现完整计划等待确认，未经确认不要执行任何操作。".into()),
-        ("pilotdesk-workspace".into(), workspace_default),
         ("workflow_max_concurrency".into(), "10".into()),
         ("workflow_max_subflow_depth".into(), "3".into()),
     ];
@@ -441,6 +484,28 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
         "api_usage_log",
         "channel",
         "TEXT NOT NULL DEFAULT 'api'",
+    )?;
+    // v12：项目归属列无条件补齐。项目表由终态脚本幂等创建；索引放在补列之后，
+    // 避免旧库尚未有 project_id 时 CREATE INDEX 先失败。
+    ensure_column(conn, "projects", "icon", "TEXT NOT NULL DEFAULT '📁'")?;
+    ensure_column(conn, "sessions", "project_id", "TEXT")?;
+    ensure_column(conn, "groupchat_rooms", "project_id", "TEXT")?;
+    ensure_column(conn, "workflow_definitions", "project_id", "TEXT")?;
+    if current_version < SCHEMA_VERSION {
+        // ACP 宿主导入会话需要保留宿主恢复目录；普通会话、圆桌与工作流均不再保存工作根。
+        ensure_column(conn, "sessions", "host_resume_cwd", "TEXT")?;
+        drop_column_if_exists(conn, "sessions", "cwd")?;
+        drop_column_if_exists(conn, "groupchat_rooms", "output_dir")?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_projects_archived_activity
+            ON projects(archived_at, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_sessions_project
+            ON sessions(project_id, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_groupchat_rooms_project
+            ON groupchat_rooms(project_id, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_workflow_defs_project
+            ON workflow_definitions(project_id, updated_at DESC);",
     )?;
     if current_version < SCHEMA_VERSION {
         // v4 → v5：api_usage_log 缓存读/写拆分。cache_read_tokens=缓存命中读取，
@@ -520,6 +585,22 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
         conn.execute_batch(&format!(
             "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {};",
             table, column, decl
+        ))?;
+    }
+    Ok(())
+}
+
+/// 幂等删列。SQLite 3.35+ 原生支持；v14 用它清理不再属于领域模型的路径快照。
+fn drop_column_if_exists(conn: &Connection, table: &str, column: &str) -> Result<(), AppError> {
+    let exists = conn
+        .prepare(&format!("PRAGMA table_info({})", table))?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == column);
+    if exists {
+        conn.execute_batch(&format!(
+            "ALTER TABLE \"{}\" DROP COLUMN \"{}\";",
+            table, column
         ))?;
     }
     Ok(())
@@ -714,11 +795,9 @@ mod tests {
 
         // 源表必须原样保留（回填是"加副本"，不是"搬家"）
         let src: String = conn
-            .query_row(
-                "SELECT api_key FROM api_providers WHERE id='p1'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT api_key FROM api_providers WHERE id='p1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(src, "CIPHERTEXT", "源表必须原样保留");
     }
@@ -813,6 +892,8 @@ mod tests {
         for t in [
             "sessions",
             "agents",
+            "projects",
+            "project_directories",
             "workflow_definitions",
             "workflow_events",
             "room_events",
@@ -880,6 +961,113 @@ mod tests {
             .query_row([], |r| r.get(0))
             .unwrap();
         assert!(sessions_sql.contains("origin"), "sessions 缺少 origin 列");
+        assert!(
+            sessions_sql.contains("project_id"),
+            "sessions 缺少 project_id 列"
+        );
+    }
+
+    /// v12：项目表、三类工作归属列和迁移幂等。
+    #[test]
+    fn v12_projects_and_membership_columns_migrate_idempotently() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                cwd TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_message_preview TEXT DEFAULT '',
+                message_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                api_provider TEXT,
+                api_model TEXT,
+                agent_session_id TEXT,
+                origin TEXT,
+                temperature REAL DEFAULT 0.7,
+                max_tokens INTEGER
+             );
+             CREATE TABLE groupchat_rooms (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                topic TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'idle',
+                strategy TEXT NOT NULL DEFAULT 'round_robin',
+                max_rounds INTEGER NOT NULL DEFAULT 0,
+                max_parallel INTEGER NOT NULL DEFAULT 2,
+                director_id TEXT,
+                current_task_id TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                goal_notes TEXT NOT NULL DEFAULT '[]',
+                allow_auto_cli INTEGER NOT NULL DEFAULT 1,
+                output_dir TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE workflow_definitions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                version TEXT NOT NULL DEFAULT '1.0.0',
+                description TEXT NOT NULL DEFAULT '',
+                trigger TEXT NOT NULL DEFAULT '{}',
+                stages TEXT NOT NULL DEFAULT '[]',
+                input_schema TEXT,
+                output_schema TEXT,
+                icon TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1
+             );
+             INSERT INTO sessions (id, created_at, updated_at) VALUES ('s1', 1, 1);
+             INSERT INTO groupchat_rooms (id, created_at, updated_at) VALUES ('r1', 1, 1);
+             INSERT INTO workflow_definitions (id, created_at, updated_at) VALUES ('w1', 1, 1);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 11i64).unwrap();
+
+        migrate_schema(&conn).unwrap();
+        migrate_schema(&conn).unwrap();
+
+        for (table, row_id) in [
+            ("sessions", "s1"),
+            ("groupchat_rooms", "r1"),
+            ("workflow_definitions", "w1"),
+        ] {
+            let columns: Vec<String> = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |row| row.get(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            assert!(
+                columns.contains(&"project_id".to_string()),
+                "{table} 应补 project_id"
+            );
+            let project_id: Option<String> = conn
+                .query_row(
+                    &format!("SELECT project_id FROM {table} WHERE id = ?1"),
+                    [row_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(project_id, None, "历史行默认不属于任何项目");
+        }
+
+        let ver: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, SCHEMA_VERSION);
+        let project_tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('projects', 'project_directories')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(project_tables, 2);
     }
 
     /// wipe_all_tables 已随 v5 整库重置策略一并删除；无 wipe 相关用例。
@@ -1099,6 +1287,73 @@ mod tests {
             .unwrap();
         assert_eq!(ver, SCHEMA_VERSION, "补列不应改动 schema 版本号");
         migrate_schema(&conn).unwrap(); // 再次执行保持幂等
+    }
+
+    #[test]
+    fn migrate_v14_drops_work_paths_and_adds_host_resume_cwd() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                cwd TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                origin TEXT,
+                project_id TEXT
+             );
+             INSERT INTO sessions (id, title, cwd, created_at, updated_at)
+             VALUES ('s1', '普通会话', 'D:\\Old', 1, 1);
+             CREATE TABLE groupchat_rooms (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                topic TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'idle',
+                strategy TEXT NOT NULL DEFAULT 'round_robin',
+                max_rounds INTEGER NOT NULL DEFAULT 0,
+                max_parallel INTEGER NOT NULL DEFAULT 2,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                goal_notes TEXT NOT NULL DEFAULT '[]',
+                allow_auto_cli INTEGER NOT NULL DEFAULT 1,
+                output_dir TEXT NOT NULL DEFAULT '',
+                project_id TEXT
+             );
+             INSERT INTO groupchat_rooms
+                (id, title, created_at, updated_at, output_dir)
+             VALUES ('r1', '旧圆桌', 1, 1, 'D:\\Old\\outputs\\Round');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 13i64).unwrap();
+
+        migrate_schema(&conn).unwrap();
+
+        let session_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(sessions)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(!session_columns.iter().any(|column| column == "cwd"));
+        assert!(session_columns
+            .iter()
+            .any(|column| column == "host_resume_cwd"));
+        let room_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(groupchat_rooms)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(!room_columns.iter().any(|column| column == "output_dir"));
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        migrate_schema(&conn).unwrap();
     }
 
     /// 比当前更新的库（未来版本应用创建）拒绝打开，绝不 wipe。

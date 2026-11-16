@@ -25,9 +25,9 @@ pub struct CreateRoomInput {
     /// 是否允许主持人在自动补人时添加 CLI 参与者（缺省 1=允许；按任务差异化限制）
     #[serde(default = "default_allow_auto_cli")]
     pub allow_auto_cli: i64,
-    /// 房间统一产物目录（绝对路径；缺省空=运行时回退 `<工作目录>/outputs/<房间标题>/`）
+    /// 工作归属项目；缺省表示未归入项目。
     #[serde(default)]
-    pub output_dir: String,
+    pub project_id: Option<String>,
     /// 同层任务执行并行上限（1-4，缺省 2）。
     #[serde(default)]
     pub max_parallel: Option<i64>,
@@ -90,7 +90,8 @@ pub fn groupchat_create_room(
 ) -> Result<Room, String> {
     let conn = state.get_conn()?;
     let now = crate::utils::now();
-
+    let project_id =
+        crate::commands::projects::validate_project_membership(&conn, input.project_id.as_deref())?;
     let room = Room {
         id: uuid::Uuid::new_v4().to_string(),
         title: input.title.clone(),
@@ -107,7 +108,7 @@ pub fn groupchat_create_room(
         updated_at: now,
         goal_notes: "[]".into(),
         allow_auto_cli: input.allow_auto_cli,
-        output_dir: input.output_dir,
+        project_id,
         // 派生字段：只有 list_rooms 会填
         current_round: None,
         task_total: None,
@@ -277,22 +278,6 @@ pub fn groupchat_set_director(
     let room = store::get_room(&conn, &room_id)?
         .ok_or_else(|| AppError::NotFound("房间不存在".to_string()))?;
     Ok(room)
-}
-
-#[tauri::command]
-pub fn groupchat_set_output_dir(
-    state: State<'_, DbState>,
-    registry: State<'_, RoomRegistry>,
-    room_id: String,
-    output_dir: String,
-) -> Result<Room, String> {
-    let conn = state.get_conn()?;
-    store::update_room_output_dir(&conn, &room_id, &output_dir)?;
-    if let Some(handle) = registry.get(&room_id) {
-        handle.send(RoomCommand::SetOutputDir(output_dir));
-    }
-    Ok(store::get_room(&conn, &room_id)?
-        .ok_or_else(|| AppError::NotFound("房间不存在".to_string()))?)
 }
 
 #[tauri::command]
@@ -993,6 +978,7 @@ fn build_groupchat_workflow(
         created_at: now,
         updated_at: now,
         enabled: true,
+        project_id: room.project_id.clone(),
     })
 }
 
@@ -1051,7 +1037,7 @@ mod tests {
             updated_at: now,
             goal_notes: "[]".to_string(),
             allow_auto_cli: 1,
-            output_dir: String::new(),
+            project_id: None,
             // 派生字段：只有 list_rooms 会填
             current_round: None,
             task_total: None,

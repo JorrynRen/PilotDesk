@@ -22,6 +22,7 @@ import { confirmDialog } from '../../stores/confirmStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
+import type { WorkflowDefinition } from '../../types/workflow';
 
 /** 后端执行计划（拓扑权威数据） */
 interface ExecutionPlan {
@@ -42,6 +43,9 @@ import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import { Select } from '../common/Select';
 import { WorkflowInputDialog } from './WorkflowInputDialog';
+import { ProjectWorkspaceContext } from '../project/ProjectWorkspaceContext';
+import { useProjectStore } from '../../stores/projectStore';
+import { projectPrimaryDirectory, workspaceArtifactRelativePath } from '../../utils/project';
 import type { WorkflowNode, WorkflowEdge, Stage, GateConfig, ExecutionProgressPayload, ValidationResult, PendingToolApproval } from '../../types/workflow';
 
 interface Props {
@@ -227,6 +231,11 @@ interface AwaitingInputPayload {
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, onSaveResult, onImported }) => {
   const { definitions, instances, updateDefinition, respondHumanInput, loadPendingInputs, pendingInputs, pendingApprovals, loadPendingApprovals, respondToolApproval } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
+  const projects = useProjectStore((state) => state.projects);
+  const workflowProject = def?.projectId
+    ? projects.find((project) => project.id === def.projectId) ?? null
+    : null;
+  const workflowWorkRoot = projectPrimaryDirectory(workflowProject);
 
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
   const stageEdges = useMemo(() => stages.flatMap(s => s.stageEdges || []), [stages]);
@@ -381,6 +390,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
   // 人工交互等待输入弹窗
   const [awaitingInput, setAwaitingInput] = useState<AwaitingInputPayload | null>(null);
   const [awaitingInputValue, setAwaitingInputValue] = useState<string>('');
+  const awaitingInputRef = useRef(awaitingInput);
+  useEffect(() => {
+    awaitingInputRef.current = awaitingInput;
+  }, [awaitingInput]);
   const [awaitingSubmitting, setAwaitingSubmitting] = useState(false);
 
   // 工具审批等待裁决弹窗（Agent 节点命中「工具授权」策略后暂停）
@@ -437,6 +450,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
       y: canvasY - stageTop - TITLE_H - stagePan.y,
     };
   }, [stagePositionsMap, stagePans, stageOffsetsY]);
+  const canvasToContentPosRef = useRef(canvasToContentPos);
+  useEffect(() => {
+    canvasToContentPosRef.current = canvasToContentPos;
+  }, [canvasToContentPos]);
 
   // 备份下拉：点击容器外部自动关闭
   useEffect(() => {
@@ -524,7 +541,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             const targetStageId = pickDropStage(cx, cy);
             if (targetStageId) {
               // 纯算术计算放置位置（落点 → 内容坐标，再由 createWorkflowNode 夹进该阶段可视窗口）
-                const rel = canvasToContentPos(cx, cy, targetStageId);
+                const rel = canvasToContentPosRef.current(cx, cy, targetStageId);
                 const newNode = createWorkflowNode(toolbarDrag.type, { x: rel.x, y: rel.y }, undefined, scale, panOf(targetStageId));
               setStages(prev => prev.map(s => {
                 if (s.id === targetStageId) {
@@ -597,7 +614,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             // 预览矩形 = 松手后节点的真实位置：直接复用同一个创建函数算位置，
             // 避免"预览与实际落点"两套换算走偏
             const meta = getNodeTypeMeta(toolbarDrag.type);
-            const rel = canvasToContentPos(cx, cy, hitStage);
+            const rel = canvasToContentPosRef.current(cx, cy, hitStage);
             const p = createWorkflowNode(toolbarDrag.type, { x: rel.x, y: rel.y }, undefined, scale, panOf(hitStage)).position!;
             setDropPreview({ stageId: hitStage, x: p.x, y: p.y, w: meta.nodeW, h: meta.nodeH });
           } else {
@@ -873,6 +890,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
     try {
       const result = await invoke<Array<{ id: string; workflowId: string; version: number; snapshot: string; createdAt: number }>>('list_workflow_versions', { workflowId: definitionId });
       setVersions(result);
+      setSelectedVersion(null);
       setShowVersions(true);
     } catch (err) {
       console.error('[WorkflowEditor] 加载版本列表失败:', err);
@@ -921,7 +939,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
    * - 不置 `restoredExecutionId`：那是"查看历史结果"的标记，画布会被标成已恢复的历史结果，
    *   而这里呈现的是实时执行。
    */
-  const handleRestoreExecution = async (executionId: string, opts?: { live?: boolean }) => {
+  const handleRestoreExecution = useCallback(async (executionId: string, opts?: { live?: boolean }) => {
     const live = opts?.live === true;
     try {
       const nodeExecs = await invoke<NodeExecutionRecord[]>('get_node_executions', { executionId });
@@ -966,7 +984,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
     } catch (err) {
       console.error('恢复执行状态失败:', err);
     }
-  };
+  }, [stages]);
+  const handleRestoreExecutionRef = useRef(handleRestoreExecution);
+  useEffect(() => {
+    handleRestoreExecutionRef.current = handleRestoreExecution;
+  }, [handleRestoreExecution]);
 
   // 组件挂载时刷新实例，并**接上**该定义正在后台跑的实例（如果有）。
   //
@@ -994,7 +1016,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
       executionIdRef.current = inst.id;
       setIsRunning(true);
       setSelectedHistoryId(inst.id);
-      await handleRestoreExecution(inst.id, { live: true });
+      await handleRestoreExecutionRef.current(inst.id, { live: true });
     })();
   }, [definitionId]);
 
@@ -1329,13 +1351,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
     // 先无条件补一次：待办可能在面板打开前就已发出（事件早于订阅，监听器拿不到历史事件）
     loadPendingInputs();
     loadPendingApprovals();
-    if (!isRunning && !awaitingInput && !awaitingApproval) return;
+    if (!isRunning && !awaitingInputRef.current && !awaitingApproval) return;
     const timer = setInterval(() => {
       loadPendingInputs();
       loadPendingApprovals();
     }, 2500);
     return () => clearInterval(timer);
-  }, [isRunning, awaitingInput, awaitingApproval, loadPendingInputs, loadPendingApprovals]);
+  }, [isRunning, awaitingApproval, loadPendingInputs, loadPendingApprovals]);
 
   // 根据 pendingApprovals 同步打开审批弹窗（事件早于订阅/页面刚打开时靠这条补齐）
   useEffect(() => {
@@ -1351,7 +1373,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
 
   // 根据 pendingInputs 同步打开输入弹窗（仅当未通过事件方式打开时）
   useEffect(() => {
-    if (awaitingInput) return;
+    if (awaitingInputRef.current) return;
     const cur = executionIdRef.current;
     if (!cur) return;
     const match = pendingInputs.find(p => p.executionId === cur);
@@ -3238,24 +3260,40 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
       `}</style>
 
       {/* ── 工具栏 ── */}
-      <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+      <div className="flex items-center gap-1 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
         <input
           value={name}
           onChange={(e) => handleNameChangeLocal(e.target.value)}
           className="text-xs outline-none px-2.5 py-1.5 rounded-lg"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)', minWidth: 120, maxWidth: 280 }}
+          style={{
+            width: 160,
+            minWidth: 110,
+            maxWidth: 160,
+            flex: '0 1 160px',
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border)',
+          }}
           placeholder="工作流名称"
         />
-        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ color: 'var(--accent)', background: 'var(--accent-light)' }}>
+        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ color: 'var(--accent)', background: 'var(--accent-light)', flexShrink: 0, whiteSpace: 'nowrap' }}>
           {def?.version || 'v1.0.0'}
         </span>
+        <ProjectWorkspaceContext
+          projectId={def?.projectId}
+          workRoot={workflowWorkRoot}
+          artifactRelativePath={workspaceArtifactRelativePath(name, 'workflow')}
+          compact
+          iconOnly
+          className="shrink min-w-0"
+        />
 
         <div className="flex-1" />
 
         {/* ── 历史执行恢复 ── */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           
-          <div className="relative">
+          <div className="relative shrink-0">
             <Select
               value={selectedHistoryId || ''}
               onChange={(execId) => {
@@ -3272,7 +3310,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                 setSelectedHistoryId(execId);
               }}
               options={[
-                { value: '', label: '查看历史执行记录' },
+                { value: '', label: '历史执行记录' },
                 ...instances
                   .filter(i => i.definitionId === definitionId && i.status !== 'pending')
                   .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
@@ -3287,22 +3325,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                     };
                   }),
               ]}
-              placeholder="查看历史执行记录"
+              placeholder="历史执行记录"
               size="sm"
-              style={{ minWidth: 120, maxWidth: 200 }}
+              panelMinWidth={300}
+              style={{
+                width: 144,
+                minWidth: 144,
+                maxWidth: 144,
+                flexShrink: 0,
+              }}
               title="选择历史执行记录恢复节点执行状态"
             />
           </div>
         </div>
 
-        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
+        <div className="w-px h-5 shrink-0" style={{ background: 'var(--border)' }} />
 
         {/* 节点类型库：悬停展开节点面板（压缩工具栏宽度，保留拖拽添加） */}
-        <div className="relative group">
+        <div className="relative group shrink-0">
           <button
-            className="pd-btn px-2.5 py-1 text-[11px] rounded flex items-center gap-1.5 whitespace-nowrap"
+            className="pd-btn px-2.5 py-1 text-[11px] rounded flex items-center justify-center gap-1.5 whitespace-nowrap"
             style={{
-              minWidth: 118,
+              width: 124,
               border: '1px solid var(--border)',
               background: 'var(--bg-tertiary)',
               color: 'var(--text-secondary)',
@@ -3321,17 +3365,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           {/* 透明 hover 桥：覆盖按钮与面板之间的 mt-1 空隙，保证悬停连续 */}
           <div className="absolute left-0 right-0 top-full h-1" aria-hidden />
           <div
-            className={`absolute left-0 top-full mt-1 z-50 flex items-center gap-1 flex-wrap p-2 rounded-lg transition-opacity duration-200 ${
+            role="menu"
+            className={`pd-menu absolute left-0 right-0 top-full mt-1 z-50 flex flex-col items-stretch transition-opacity duration-200 ${
               'opacity-0 invisible pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:pointer-events-auto'
             }`}
-            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', maxWidth: 560 }}
           >
               {(() => {
                 const renderNode = (nt: typeof palette[number]) => (
                   <div
                     key={nt.type}
-                    className="flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
-                    style={{ border: `1px solid ${nt.color}44`, background: `${nt.color}15`, color: 'var(--text-primary)', width: 96, whiteSpace: 'nowrap' }}
+                    role="menuitem"
+                    className="pd-menu-item cursor-grab select-none"
+                    style={{ border: `1px solid ${nt.color}44`, background: `${nt.color}15`, color: 'var(--text-primary)' }}
+                    title={nt.label}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       toolbarDragRef.current = nt.type;
@@ -3351,7 +3397,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                     onMouseEnter={(e) => {
                       e.currentTarget.style.borderColor = 'var(--accent)';
                       e.currentTarget.style.background = 'var(--accent)';
-                      e.currentTarget.style.color = '#fff';
+                      e.currentTarget.style.color = 'var(--text-on-accent)';
                       e.currentTarget.style.transform = 'translateY(-1px)';
                       e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
                     }}
@@ -3364,7 +3410,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                     }}
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 4, fontSize: 11, background: `${nt.color}22`, color: nt.color }} className="shrink-0">{nt.icon}</span>
-                    <span className="truncate">{nt.label}</span>
+                    <span className="truncate min-w-0">{nt.label}</span>
                   </div>
                 );
                 return (
@@ -3376,19 +3422,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             </div>
         </div>
 
-        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
+        <div className="w-px h-5 shrink-0" style={{ background: 'var(--border)' }} />
 
         <button
             onClick={handleAddStage}
-            className="pd-btn px-2.5 py-1 text-[11px] rounded"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            className="pd-btn px-2 py-1 text-[11px] rounded"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}
           >
             + 阶段
           </button>
 
-        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
+        <div className="w-px h-5 shrink-0" style={{ background: 'var(--border)' }} />
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1 shrink-0">
           <button
           onClick={() => setShowGrid((v) => !v)}
           className="pd-btn px-2 py-1 text-[11px] rounded flex items-center justify-center"
@@ -3427,8 +3473,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           </button>
           <button
             onClick={handleSaveClean}
-            className="pd-btn px-3 py-1 text-[11px] rounded"
-            style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
+            className="pd-btn px-2.5 py-1 text-[11px] rounded"
+            style={{ background: 'var(--accent)', color: 'var(--text-on-accent)', border: 'none', flexShrink: 0, whiteSpace: 'nowrap' }}
           >
             保存
           </button>
@@ -3440,7 +3486,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                 setBackupDropdownOpen(prev => !prev);
               }}
               className="pd-btn px-2 py-1 text-[11px] rounded flex items-center gap-1"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)', flexShrink: 0, whiteSpace: 'nowrap' }}
             >
               备份
               <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 3L4 5 6 3"/></svg>
@@ -3448,36 +3494,35 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             {/* 方案 B 热桥：覆盖按钮与下拉之间的 mt-1 (4px) 空隙，确保 hover 路径连续不中断 */}
             <div className="absolute left-0 right-0 top-full h-1" aria-hidden />
             <div
-              className={`absolute top-full right-0 mt-1 w-[88px] rounded-lg overflow-hidden z-50 transition-opacity duration-200 ${
+              role="menu"
+              className={`pd-menu absolute top-full right-0 mt-1 z-50 w-[88px] transition-opacity duration-200 ${
                 backupDropdownOpen
                   ? 'opacity-100 visible pointer-events-auto'
                   : 'opacity-0 invisible pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:pointer-events-auto'
               }`}
-              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
             >
               <button
+                type="button"
+                role="menuitem"
                 onClick={(e) => {
                   e.stopPropagation();
                   setBackupDropdownOpen(false);
                   handleSaveVersion();
                 }}
-                className="w-full text-left px-2.5 py-1.5 text-[11px] transition-colors"
-                style={{ color: 'var(--text-secondary)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                className="pd-menu-item"
               >
                 保存备份
               </button>
               <button
+                type="button"
+                role="menuitem"
                 onClick={(e) => {
                   e.stopPropagation();
                   setBackupDropdownOpen(false);
                   handleLoadVersions();
                 }}
-                className="w-full text-left px-2.5 py-1.5 text-[11px] transition-colors"
+                className="pd-menu-item"
                 style={{ color: versions.length > 0 ? 'var(--accent)' : 'var(--text-tertiary)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 恢复版本{versions.length > 0 ? `(${versions.length})` : ''}
               </button>
@@ -4350,13 +4395,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             onContextMenu={(e) => { e.preventDefault(); setEdgeContextMenu(null); }}
           />
           <div
-            className="fixed z-[1000] rounded-lg py-1 min-w-[140px]"
+            role="menu"
+            className="pd-menu fixed z-[1000] min-w-[140px]"
             style={{
               left: edgeContextMenu.x,
               top: edgeContextMenu.y,
-              background: 'var(--bg-tertiary)',
-              border: '1px solid var(--border)',
-              boxShadow: 'var(--shadow-lg)',
             }}
           >
             {/* 查找edge所属stage */}
@@ -4367,19 +4410,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
               const targetNode = edgeStage?.nodes.find(n => n.id === edge?.target);
               return (
                 <>
-                  <div className="px-3 py-1.5 text-[10px] border-b" style={{ color: 'var(--text-tertiary)', borderBottomColor: 'var(--border)' }}>
+                  <div className="pd-menu-label border-b" style={{ borderBottomColor: 'var(--border-light)' }}>
                     {sourceNode?.label || '?'} → {targetNode?.label || '?'}
                   </div>
                   {edge && edgeStage && (
                     <button
-                      className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
-                      style={{ color: 'var(--text-primary)', background: 'transparent', border: 'none' }}
+                      type="button"
+                      role="menuitem"
+                      className="pd-menu-item"
                       onClick={() => {
                         setEdgeContextMenu(null);
                         openConditionEditor(edge, edgeStage.id);
                       }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-light)'; e.currentTarget.style.color = 'var(--accent)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-primary)'; }}
                     >
                       <span>{'✎'}</span>
                       <span>{edge.condition ? '编辑条件' : '添加条件'}</span>
@@ -4387,14 +4429,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                     </button>
                   )}
                   <button
-                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
-                    style={{ color: 'var(--status-danger)', background: 'transparent', border: 'none' }}
+                    type="button"
+                    role="menuitem"
+                    className="pd-menu-item"
+                    data-tone="danger"
                     onClick={() => {
                       setEdgeContextMenu(null);
                       handleDeleteEdge(edgeContextMenu.edgeId);
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(248,81,73,0.1)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                   >
                     <span>{'✕'}</span>
                     <span>删除连线</span>
@@ -4452,33 +4494,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                     const renderOption = (k: string) => (
                       <div
                         key={k}
+                        role="menuitem"
                         onClick={() => pickField(k)}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        style={{
-                          padding: '5px 12px',
-                          cursor: 'pointer',
-                          color: 'var(--text-primary)',
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: 'var(--fs-11)',
-                          lineHeight: '18px',
-                          borderBottom: '1px solid var(--border)',
-                        }}
+                        className="pd-menu-item font-mono"
                         title={k}
                       >{k}</div>
                     );
                     const renderGroupHeader = (title: string) => (
                       <div
-                        style={{
-                          padding: '4px 12px',
-                          fontSize: 'var(--fs-10)',
-                          lineHeight: '16px',
-                          fontWeight: 600,
-                          color: 'var(--text-tertiary)',
-                          background: 'var(--bg-tertiary)',
-                          borderBottom: '1px solid var(--border)',
-                          userSelect: 'none',
-                        }}
+                        className="pd-menu-label"
+                        style={{ background: 'var(--bg-tertiary)', userSelect: 'none' }}
                       >{title}</div>
                     );
 
@@ -4502,6 +4527,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                               <>
                                 <div onClick={() => setCondFieldOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 99 }} />
                                 <div
+                                  role="menu"
+                                  className="pd-menu"
                                   style={{
                                     position: 'absolute',
                                     left: 0,
@@ -4511,10 +4538,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                                     zIndex: 100,
                                     maxHeight: 176,
                                     overflow: 'auto',
-                                    borderRadius: 'var(--radius-md)',
-                                    border: '1px solid var(--border)',
-                                    background: 'var(--bg-primary)',
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
                                   }}
                                 >
                                   {mappingCandidates.length > 0 && renderGroupHeader('源节点输出映射')}
@@ -5000,14 +5023,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
-              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>备份历史</span>
+              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>版本历史</span>
               <button onClick={() => setShowVersions(false)} className="pd-btn p-1 rounded" style={{ color: 'var(--text-tertiary)' }}>
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3l8 8M11 3l-8 8" /></svg>
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-3 pd-scroll-stable">
               {versions.length === 0 ? (
-                <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无版本记录</div>
+                <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无本地备份</div>
               ) : (
                 <div className="space-y-2">
                   {versions.map((v) => (
@@ -5027,7 +5050,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                           onChange={() => setSelectedVersion(v)}
                           style={{ accentColor: 'var(--accent)' }}
                         />
-<div className="flex items-center gap-2"><span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>v{v.version}</span><span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{new Date(v.createdAt * 1000).toLocaleString('zh-CN')}</span></div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>v{v.version}</span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{new Date(v.createdAt * 1000).toLocaleString('zh-CN')}</span>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1">
                         <button

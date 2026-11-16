@@ -235,6 +235,15 @@ pub struct TurnView {
     /// 空串表示未约定，不注入位置约束。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub output_dir: String,
+    /// 房间工作根：项目主目录或全局工作区，作为相对路径与命令执行基准。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workspace_root: String,
+    /// 项目关联目录：可读写、与工作根共用矩阵权限。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_roots: Vec<String>,
+    /// 后端解析完成的完整工作区语义；不进入历史消息序列化。
+    #[serde(skip)]
+    pub(crate) workspace: Option<crate::commands::projects::WorkspaceResolution>,
     /// 本轮真实时钟锚点（房间级、每轮只在用户指令到达时取一次）。
     ///
     /// 同一轮内主持人、所有参与者、包括并发派发的执行者共用同一个字符串，因此不存在
@@ -572,18 +581,31 @@ fn build_participant_sections(view: &TurnView) -> ParticipantSections {
             view.user_language
         )
     };
-    let output_dir = if view.output_dir.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n【产物目录】本房间所有参与者产出的文件必须统一写入目录：`{}`（绝对路径）。\
-             该目录由系统创建好，写文件时缺失的上级目录会自动创建，**无需**用 mkdir 创建\
-             （尤其不要写 Unix 风格的 `mkdir -p`：本机是 cmd.exe，会把 `-p` 当成目录名，\
-             在工作目录里多出一个 `-p` 目录）；\
-             禁止随意选择其他位置（桌面、工作区根目录等）；\
-             报告产物时仍按【产物规范】给出该目录下的绝对路径。",
-            view.output_dir
-        )
+    let output_dir = {
+        let mut section = view
+            .workspace
+            .as_ref()
+            .map(|workspace| {
+                format!(
+                    "\n\n{}",
+                    crate::commands::projects::workspace_context_prompt(
+                        workspace,
+                        (!view.output_dir.is_empty()).then_some(view.output_dir.as_str()),
+                    )
+                )
+            })
+            .unwrap_or_default();
+        if !view.output_dir.is_empty() {
+            section.push_str(&format!(
+                "\n\n【产物约束】本房间所有参与者产出的文件必须统一写入产物目录 `{}`。\
+                 该目录由系统创建好，写文件时缺失的上级目录会自动创建，**无需**用 mkdir 创建\
+                 （尤其不要写 Unix 风格的 `mkdir -p`：本机是 cmd.exe，会把 `-p` 当成目录名，\
+                 在工作目录里多出一个 `-p` 目录）；禁止随意改用桌面或工作根等其它位置；\
+                 报告产物时给出该目录下的绝对路径。",
+                view.output_dir
+            ));
+        }
+        section
     };
     ParticipantSections {
         roster,

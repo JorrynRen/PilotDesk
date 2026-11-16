@@ -106,12 +106,14 @@ export interface WorkflowDefinition {
   description: string;
   trigger: TriggerConfig;
   stages: Stage[];
-  icon?: string;                 // emoji 图标
+  icon?: string | null;          // emoji 图标；null 表示使用默认图标
   inputSchema?: Record<string, { type: string; description?: string; required?: boolean; default?: JsonValue }>;
   outputSchema?: Record<string, { type: string; description?: string }>;
   createdAt: number;
   updatedAt: number;
   enabled: boolean;
+  /** 工作归属项目；缺省表示未归入项目 */
+  projectId?: string;
 }
 
 // ── 工作流实例 ──

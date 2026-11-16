@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Users } from 'lucide-react';
-import { TitleBar, StatusBar } from '../components/layout';
-import { useTerminal, type ViewMode } from '../TerminalManager';
+import { WorkbenchAssetPage } from '../components/layout';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
-import { useAccountStore } from '../stores/accountStore';
+import { CAP_TEAM_MEMBERS, useAccountStore } from '../stores/accountStore';
 import { OrgGovernanceSection } from '../components/enclave/OrgGovernancePanels';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
 import { EnclaveToolbarActions, EnclaveFilesRootPanel } from '../components/enclave/EnclaveToolbar';
-import type { MemberView } from '../types/enclave';
+import { UpgradePrompt } from '../components/common/UpgradePrompt';
+import type { MemberView, OrgSnapshotView } from '../types/enclave';
 
 /** 治理快照新鲜度上限（秒）：超过即视为「可能过期」，与后端 SNAPSHOT_STALE_MAX_SECS 对齐。 */
 const SNAPSHOT_STALE_MAX_SECS = 600;
@@ -48,21 +47,30 @@ function freshnessText(syncedAt: number): string {
   return minutes < 1 ? '刚刚同步' : `同步于 ${minutes} 分钟前`;
 }
 
+/** 组织快照是否仍具备有效团队版；过期或非 active 组织不再视为可用。 */
+function hasEffectiveTeamPlan(org: OrgSnapshotView): boolean {
+  if (org.status && org.status !== 'active') return false;
+  if (org.planKey.trim().toLowerCase() !== 'team') return false;
+  if (org.planExpiresAt) {
+    const expiresAt = Date.parse(org.planExpiresAt);
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return false;
+  }
+  return true;
+}
+
 /**
  * 飞地「组织与权限」页 —— 独立路由 `/enclave/org`。
  *
  * 只读展示：组织信息 + 成员表。策略开关 / 应急开关 / 审计流水 / 主机转移随后续里程碑接入。
  */
 export function EnclaveOrgPage() {
-  const { viewMode, setMode } = useTerminal();
-  const navigate = useNavigate();
-
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const detail = useEnclaveOrgStore((s) => s.detail);
   const loading = useEnclaveOrgStore((s) => s.loading);
   const error = useEnclaveOrgStore((s) => s.error);
   const lastRefresh = useEnclaveOrgStore((s) => s.lastRefresh);
+  const openOrganization = useAccountStore((s) => s.openOrganization);
   // 登录账号变化 → 必须先校验新身份，再重新加载本机团队数据
   const accountKey = useAccountStore((s) => s.account?.email ?? '');
 
@@ -70,12 +78,7 @@ export function EnclaveOrgPage() {
     let cancelled = false;
     void (async () => {
       const st = useEnclaveOrgStore.getState();
-      if (!(await st.ensureIdentity()) || cancelled) return;
-      await st.loadOrgs();
-      if (cancelled) return;
-      const cur = useEnclaveOrgStore.getState();
-      // 本机还没有当前账号的组织快照（新账号 / 刚升级）→ 主动拉一轮
-      if (cur.orgs.length === 0 && !cur.lastRefresh) await cur.refresh();
+      if (cancelled || !(await st.ensureOrgs())) return;
       await useEnclaveOrgStore.getState().loadFreshness();
     })();
     return () => {
@@ -83,16 +86,9 @@ export function EnclaveOrgPage() {
     };
   }, [accountKey]);
 
-  // 顶栏组合菜单仍可切到其它模式：切模式后回到主布局（与知识库页同构）
-  const handleModeChange = useCallback(
-    (mode: ViewMode) => {
-      setMode(mode);
-      navigate('/');
-    },
-    [setMode, navigate],
-  );
-
   const org = detail?.org ?? orgs.find((o) => o.orgId === activeOrgId) ?? null;
+  const needsTeamPlan = Boolean(org && !hasEffectiveTeamPlan(org));
+  const canManageCurrentOrg = org?.myRole === 'owner' || org?.myRole === 'admin';
   const members: MemberView[] = detail?.members ?? [];
   /**
    * 在线成员（主机侧订阅列表）：每 20s 拉一次。
@@ -100,20 +96,21 @@ export function EnclaveOrgPage() {
    * 团队数据本身不缓存，在线状态只是主机内存里的连接数；owner 由本机提供主机服务，
    * 因此能读到列表就说明 owner 在线，一并标成在线。
    */
-  const [onlineIds, setOnlineIds] = useState<string[]>([]);
+  const [onlineState, setOnlineState] = useState<{ orgId: string; ids: string[] }>({
+    orgId: '',
+    ids: [],
+  });
+  const onlineIds = onlineState.orgId === activeOrgId ? onlineState.ids : [];
   useEffect(() => {
-    if (!activeOrgId) {
-      setOnlineIds([]);
-      return;
-    }
+    if (!activeOrgId) return;
     let cancelled = false;
     const load = () => {
       void invoke<string[]>('enclave_online_members', { orgId: activeOrgId })
         .then((ids) => {
-          if (!cancelled) setOnlineIds(ids);
+          if (!cancelled) setOnlineState({ orgId: activeOrgId, ids });
         })
         .catch(() => {
-          if (!cancelled) setOnlineIds([]);
+          if (!cancelled) setOnlineState({ orgId: activeOrgId, ids: [] });
         });
     };
     load();
@@ -128,7 +125,9 @@ export function EnclaveOrgPage() {
   const ownerId = org?.ownerUserId || members.find((m) => m.role === 'owner')?.userId || '';
   if (ownerId) onlineSet.add(ownerId);
   const [orgTab, setOrgTab] = useState<OrgTab>('basic');
-  const [memberPage, setMemberPage] = useState(0);
+  const [memberPageState, setMemberPageState] = useState({ orgId: '', page: 0 });
+  const memberPage = memberPageState.orgId === activeOrgId ? memberPageState.page : 0;
+  const setMemberPage = (page: number) => setMemberPageState({ orgId: activeOrgId, page });
   /** 本机团队文件根目录面板（全局设置，与任务/知识库页共用） */
   const [rootOpen, setRootOpen] = useState(false);
   const memberPages = Math.max(1, Math.ceil(members.length / MEMBER_PAGE_SIZE));
@@ -137,37 +136,33 @@ export function EnclaveOrgPage() {
     currentMemberPage * MEMBER_PAGE_SIZE,
     (currentMemberPage + 1) * MEMBER_PAGE_SIZE,
   );
-  useEffect(() => {
-    setMemberPage(0);
-  }, [activeOrgId]);
   // 成员列表拉取失败的原因（平台成员接口属待对齐项）：只提示，不算整轮失败
   const memberWarning = lastRefresh?.memberError ?? null;
 
   /** 手动刷新：身份 → 平台快照 → 组织/成员/治理。 */
   const refreshOrg = async () => {
-    const st = useEnclaveOrgStore.getState();
-    if (!(await st.ensureIdentity())) return;
-    await useEnclaveOrgStore.getState().refresh();
+    await useEnclaveOrgStore.getState().ensureOrgs(true);
+  };
+
+  const openTeamBilling = () => {
+    if (!org) return;
+    const platformOrgId = Number(org.orgId);
+    void openOrganization({
+      organizationId:
+        Number.isInteger(platformOrgId) && platformOrgId > 0
+          ? platformOrgId
+          : undefined,
+      capability: CAP_TEAM_MEMBERS,
+      source: 'team-settings',
+    });
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <TitleBar
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        rightPanelOpen={false}
-        showBackButton={false}
-        enclaveOpen
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')}
-      />
-
-      <div className="flex-1 min-h-0 px-2 flex flex-col overflow-hidden">
+    <WorkbenchAssetPage contextLabel="飞地 · 组织与权限" activeAsset="enclave" frameless>
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <div
-          className="shrink-0 rounded-lg overflow-hidden"
+          className="enclave-surface shrink-0 overflow-hidden"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
           <EnclaveNavBar
@@ -229,7 +224,7 @@ export function EnclaveOrgPage() {
         {/* 组织信息卡 */}
         {org && (
           <div
-            className="shrink-0 rounded-lg p-3 flex flex-col gap-2"
+            className="enclave-surface shrink-0 p-3 flex flex-col gap-2"
             style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
           >
             <div className="flex items-center gap-2 flex-wrap">
@@ -285,9 +280,37 @@ export function EnclaveOrgPage() {
           </div>
         )}
 
+        {org && needsTeamPlan && (
+          canManageCurrentOrg ? (
+            <UpgradePrompt
+              className="shrink-0"
+              forceShow
+              capability={CAP_TEAM_MEMBERS}
+              plan="team"
+              title="为当前组织补齐团队协作能力"
+              description="成员与席位治理、共享工作流、团队用量看板、审计与 SSO，均由当前组织的团队版统一开通。"
+              source="team-settings"
+              actionLabel="为组织开通团队版"
+              onUpgrade={openTeamBilling}
+            />
+          ) : (
+            <div className="pd-upgrade-prompt shrink-0">
+              <div className="pd-upgrade-prompt-copy">
+                <div className="pd-upgrade-prompt-title-row">
+                  <span className="pd-upgrade-prompt-plan">团队版</span>
+                  <span className="pd-upgrade-prompt-title">当前组织尚未开通团队协作</span>
+                </div>
+                <p className="pd-upgrade-prompt-description">
+                  成员与席位治理、共享工作流、团队用量看板、审计与 SSO 需团队版；请联系组织所有者或管理员开通。
+                </p>
+              </div>
+            </div>
+          )
+        )}
+
         {/* 成员表 */}
         <div
-          className="shrink-0 rounded-lg flex flex-col overflow-hidden"
+          className="enclave-surface shrink-0 flex flex-col overflow-hidden"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
           <div
@@ -415,10 +438,7 @@ export function EnclaveOrgPage() {
         </div>
       </div>
 
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
     </div>
+    </WorkbenchAssetPage>
   );
 }

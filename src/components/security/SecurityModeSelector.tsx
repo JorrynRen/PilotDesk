@@ -101,14 +101,10 @@ export function SecurityModeSelector({
           宽度取够一行放下最长说明（"风险/未知命令与路径、中高风险工具需确认"），说明不再折行 */}
       {open && (
         <div
-          className={`absolute left-0 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'} overflow-y-auto z-50`}
+          role="menu"
+          className={`pd-menu absolute left-0 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 overflow-y-auto`}
           style={{
-            padding: 4,
             maxHeight: 280,
-            borderRadius: 'var(--radius-lg)',
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            boxShadow: '0 10px 28px rgba(0,0,0,0.22)',
             minWidth: 276,
           }}
         >
@@ -117,19 +113,15 @@ export function SecurityModeSelector({
             return (
               <button
                 key={m.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
                 onClick={() => {
                   onChange(m.value);
                   setOpen(false);
                 }}
-                className="w-full text-left flex flex-col gap-0.5 outline-none transition-colors hover:bg-[var(--bg-tertiary)]"
-                style={{
-                  padding: '6px 8px',
-                  borderRadius: 7,
-                  width: '100%',
-                  textAlign: 'left',
-                  alignItems: 'stretch',
-                  backgroundColor: active ? 'var(--bg-tertiary)' : 'transparent',
-                }}
+                className="pd-menu-item pd-menu-item-rich"
+                data-active={active ? 'true' : undefined}
               >
                 <span
                   className="flex items-center gap-1.5"

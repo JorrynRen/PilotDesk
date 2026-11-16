@@ -1446,8 +1446,7 @@ fn parse_split(raw: &str) -> Result<Vec<TaskSplitDraft>, String> {
     let text = extract_json(raw)
         .ok_or_else(|| "模型没有输出 JSON 数组（可换一个更擅长结构化输出的模型）".to_string())?;
     let v: Value = serde_json::from_str(&text).map_err(|e| format!("解析模型输出失败: {}", e))?;
-    let items =
-        split_items(&v).ok_or_else(|| "模型输出里没有子任务列表".to_string())?;
+    let items = split_items(&v).ok_or_else(|| "模型输出里没有子任务列表".to_string())?;
     let mut out = Vec::new();
     for item in items {
         // 条目允许是字符串（模型偶尔只给标题）或对象

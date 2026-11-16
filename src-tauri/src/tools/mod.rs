@@ -52,6 +52,7 @@ pub mod stt;
 pub mod subagent;
 pub mod todo_write;
 pub mod tts;
+pub mod work_history;
 pub mod write_file;
 
 /// 工具风险等级
@@ -63,6 +64,17 @@ pub enum RiskLevel {
     Medium,
     /// 高风险：执行命令、删除文件等（严格确认）
     High,
+}
+
+/// 工具调用中需要进入路径安全矩阵的本地路径参数。
+///
+/// 内建工具由 AgentLoop 的静态清单提取；动态工具（MCP）通过
+/// [`ToolHandler::local_path_arguments`] 提供，避免外部工具绕过路径策略。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalPathArgument {
+    pub path: String,
+    /// 参数自身指定的相对路径基准；None 表示使用会话主工作目录。
+    pub base: Option<String>,
 }
 
 impl RiskLevel {
@@ -137,6 +149,15 @@ pub trait ToolHandler: Send + Sync {
     #[allow(dead_code)]
     fn tags(&self) -> &[ToolTag] {
         &[]
+    }
+    /// 提取需要进入本地路径安全矩阵的参数。
+    ///
+    /// 返回 Err 表示工具声明了路径参数、但当前参数无法可靠解析；调用方必须失败关闭。
+    fn local_path_arguments(
+        &self,
+        _arguments: &serde_json::Value,
+    ) -> Result<Vec<LocalPathArgument>, String> {
+        Ok(Vec::new())
     }
     /// 执行工具
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String>;
@@ -227,6 +248,19 @@ impl ToolRegistry {
             .find(|h| h.name() == name)
             .map(|h| h.risk_level())
     }
+
+    /// 获取动态工具声明的本地路径参数。未知工具返回空列表，由执行阶段统一报错。
+    pub fn get_local_path_arguments(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<Vec<LocalPathArgument>, String> {
+        self.handlers
+            .iter()
+            .find(|h| h.name() == name)
+            .map(|h| h.local_path_arguments(arguments))
+            .unwrap_or_else(|| Ok(Vec::new()))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -267,6 +301,8 @@ pub struct ProviderModelInfo {
 /// 构建期环境依赖（运行时数据，不硬编码进清单）。
 pub struct ToolEnv {
     pub cwd: String,
+    /// 当前项目主目录与全部关联目录；MCP stdio 的显式 cwd 必须落在此范围内。
+    pub workspace_roots: Vec<String>,
     pub api_format: ApiFormat,
     /// 图像生成/编辑工具依赖：(endpoint, key)。`None` 或 Anthropic 格式时不注册图像工具
     /// （这两个工具走 OpenAI 专有的 `/images/generations`）。
@@ -317,7 +353,7 @@ pub struct ToolEnv {
 /// 会话模式禁用清单（全量可用）。
 pub static SESSION_DISABLE: &[&str] = &[];
 
-/// 群聊模式禁用清单（4 项）。
+/// 群聊模式禁用清单。
 ///
 /// 已移除（v1.1 评估后启用）：generate_image / edit_image（注入 provider 图像端点）、
 /// browser（零依赖）、load_skill（注入 SkillLoader）。variation_image 已并入 generate_image（image 数组）。
@@ -333,6 +369,9 @@ pub static SESSION_DISABLE: &[&str] = &[];
 pub static GROUPCHAT_DISABLE: &[&str] = &[
     "task",
     "todo_write",
+    "search_work_items",
+    "read_work_item",
+    "query_work_usage",
     "save_memory",
     "search_memory",
     "list_memory",
@@ -642,13 +681,16 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
 
     // ── 飞地：团队知识库（只读；受数据出境闸门约束）──
     if env.enclave_team_knowledge_allowed {
-        if let (Some(store), Some(org_id)) = (env.enclave_store.clone(), env.enclave_org_id.clone()) {
-            tools.push(Arc::new(crate::enclave::tools::SearchOrgKnowledgeTool::new(
-                store.clone(),
-                org_id.clone(),
-                env.enclave_trust_domain,
-                env.enclave_state.clone(),
-            )));
+        if let (Some(store), Some(org_id)) = (env.enclave_store.clone(), env.enclave_org_id.clone())
+        {
+            tools.push(Arc::new(
+                crate::enclave::tools::SearchOrgKnowledgeTool::new(
+                    store.clone(),
+                    org_id.clone(),
+                    env.enclave_trust_domain,
+                    env.enclave_state.clone(),
+                ),
+            ));
             tools.push(Arc::new(
                 crate::enclave::tools::ReadOrgKnowledgeEntryTool::new(
                     store,
@@ -670,6 +712,59 @@ pub fn assemble_tools(profile: &ToolProfile, env: &ToolEnv) -> Vec<Arc<dyn ToolH
         .into_iter()
         .filter(|t| !is_disabled(profile, t.name()))
         .collect()
+}
+
+fn path_is_within_root(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let path_key = crate::utils::paths::path_key(path);
+    let root_key = crate::utils::paths::path_key(root);
+    !root_key.is_empty()
+        && (path_key == root_key
+            || path_key
+                .strip_prefix(&root_key)
+                .is_some_and(|suffix| suffix.starts_with('/')))
+}
+
+/// MCP stdio 的进程 cwd 也必须遵守项目目录边界：
+/// 未配置时默认使用当前会话工作根；显式配置只接受绝对路径，且必须位于
+/// 主目录、关联目录或当前工作根内部。不能依赖 PilotDesk 进程自身的 cwd。
+fn resolve_mcp_stdio_cwd(
+    configured_cwd: Option<&str>,
+    workspace_cwd: &str,
+    workspace_roots: &[String],
+) -> Result<Option<String>, String> {
+    let configured_cwd = configured_cwd
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(cwd) = configured_cwd else {
+        return Ok((!workspace_cwd.trim().is_empty()).then(|| {
+            crate::utils::paths::normalize_absolute_path(workspace_cwd, "")
+                .to_string_lossy()
+                .to_string()
+        }));
+    };
+
+    let expanded = crate::utils::paths::resolve_tilde(cwd);
+    if !std::path::Path::new(&expanded).is_absolute() {
+        return Err(format!("MCP stdio cwd 必须是绝对路径: {}", cwd));
+    }
+    let cwd_path = crate::utils::paths::normalize_absolute_path(&expanded, "");
+    let allowed = if workspace_roots.is_empty() {
+        path_is_within_root(
+            &cwd_path,
+            &crate::utils::paths::normalize_absolute_path(workspace_cwd, ""),
+        )
+    } else {
+        workspace_roots
+            .iter()
+            .filter(|root| !root.trim().is_empty())
+            .map(|root| crate::utils::paths::normalize_absolute_path(root.trim(), ""))
+            .any(|root| path_is_within_root(&cwd_path, &root))
+    };
+    if allowed {
+        Ok(Some(cwd_path.to_string_lossy().to_string()))
+    } else {
+        Err(format!("cwd {} 不在当前项目安全目录内", cwd_path.display()))
+    }
 }
 
 /// 统一装配入口：`assemble_tools` + todo_write 会话注册 + MCP 整体装配。
@@ -695,6 +790,13 @@ pub async fn build_registry(
         )));
     }
 
+    // 工作检索工具需要主库连接池，且群聊场景在 GROUPCHAT_DISABLE 中整体禁用。
+    for tool in work_history::tools(ctx.pool.clone()) {
+        if !is_disabled(profile, tool.name()) {
+            registry.register(tool);
+        }
+    }
+
     // MCP 整体装配（作为整体进清单，由本处统一处理，不做逐场景编码）
     if !is_disabled(profile, MCP_CAP) {
         // 同步段内取连接并读取配置，守卫在 await 前释放（只跨 await 传递 owned 数据）
@@ -708,18 +810,35 @@ pub async fn build_registry(
         // 连接池：装配期连接一次以枚举工具，运行期由 McpToolHandler 懒连接复用 + 失败重连。
         let pool = crate::tools::mcp::McpConnectionPool::new();
         for server in &servers {
-            let client = match pool.get_or_connect(server).await {
+            let mut server = server.clone();
+            if !server.is_http() {
+                match resolve_mcp_stdio_cwd(
+                    server.cwd.as_deref(),
+                    &ctx.env.cwd,
+                    &ctx.env.workspace_roots,
+                ) {
+                    Ok(cwd) => server.cwd = cwd,
+                    Err(error) => {
+                        log::warn!("[MCP] 跳过服务器 {}：{}", server.name, error);
+                        continue;
+                    }
+                }
+            }
+            let client = match pool.get_or_connect(&server).await {
                 Ok(c) => c,
                 Err(e) => {
                     log::warn!("[MCP] 连接服务器 {} 失败: {}", server.name, e);
                     continue;
                 }
             };
-            let server_tools = match client.lock().await.list_tools().await {
-                Ok(t) => t,
-                Err(e) => {
-                    log::warn!("[MCP] 列出工具失败 {}: {}", server.name, e);
-                    continue;
+            let (server_tools, caps) = {
+                let mut c = client.lock().await;
+                match c.list_tools().await {
+                    Ok(t) => (t, c.capabilities()),
+                    Err(e) => {
+                        log::warn!("[MCP] 列出工具失败 {}: {}", server.name, e);
+                        continue;
+                    }
                 }
             };
             let tool_count = server_tools.len();
@@ -730,13 +849,70 @@ pub async fn build_registry(
                     info,
                 )));
             }
+            // resources / prompts 能力以合成工具暴露（仅会话模式；群聊不注册，保持房间装配简单）
+            if caps.resources {
+                registry.register(Arc::new(crate::tools::mcp::McpResourceHandler::list(
+                    pool.clone(),
+                    server.clone(),
+                )));
+                registry.register(Arc::new(crate::tools::mcp::McpResourceHandler::read(
+                    pool.clone(),
+                    server.clone(),
+                )));
+            }
+            if caps.prompts {
+                registry.register(Arc::new(crate::tools::mcp::McpPromptHandler::list(
+                    pool.clone(),
+                    server.clone(),
+                )));
+                registry.register(Arc::new(crate::tools::mcp::McpPromptHandler::get(
+                    pool.clone(),
+                    server.clone(),
+                )));
+            }
             log::info!(
-                "[MCP] 已加载服务器 {}（{} 个工具）",
+                "[MCP] 已加载服务器 {}（{} 个工具，resources={} prompts={}）",
                 server.name,
-                tool_count
+                tool_count,
+                caps.resources,
+                caps.prompts
             );
         }
     }
 
     Ok(Arc::new(registry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_mcp_stdio_cwd;
+
+    #[test]
+    fn mcp_stdio_cwd_defaults_to_session_directory() {
+        assert_eq!(
+            resolve_mcp_stdio_cwd(None, r"C:\Project", &[]).unwrap(),
+            Some(r"C:\Project".to_string())
+        );
+        assert_eq!(resolve_mcp_stdio_cwd(None, "  ", &[]).unwrap(), None);
+    }
+
+    #[test]
+    fn mcp_stdio_cwd_accepts_main_and_linked_directories() {
+        let roots = vec![r"C:\Project".to_string(), r"C:\Linked".to_string()];
+        assert_eq!(
+            resolve_mcp_stdio_cwd(Some(r"C:\Project\src"), r"C:\Project", &roots).unwrap(),
+            Some(r"C:\Project\src".to_string())
+        );
+        assert_eq!(
+            resolve_mcp_stdio_cwd(Some(r"C:\Linked\docs"), r"C:\Project", &roots).unwrap(),
+            Some(r"C:\Linked\docs".to_string())
+        );
+    }
+
+    #[test]
+    fn mcp_stdio_cwd_rejects_external_and_prefix_sibling_paths() {
+        let roots = vec![r"C:\Project".to_string(), r"C:\Linked".to_string()];
+        assert!(resolve_mcp_stdio_cwd(Some(r"C:\External"), r"C:\Project", &roots).is_err());
+        assert!(resolve_mcp_stdio_cwd(Some(r"C:\Project2"), r"C:\Project", &roots).is_err());
+    }
 }

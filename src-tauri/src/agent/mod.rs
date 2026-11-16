@@ -21,9 +21,9 @@ pub mod descriptor;
 pub mod handler;
 // 宿主会话导入（`session/list` + `session/load` 回放），与运行链路互不复用状态
 pub mod host_sessions;
+pub mod lifecycle;
 pub mod line_processor;
 pub mod list_skills;
-pub mod lifecycle;
 pub mod registry;
 // P0 连接传输抽象层（契约）。当前仅声明、未被上层引用，接线在 P0-4 落地。
 pub mod transport;
@@ -72,9 +72,7 @@ pub(crate) fn split_model_label(label: Option<&str>) -> (&str, &str) {
         return ("", "");
     };
     match raw.split_once(':') {
-        Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
-            (provider, model)
-        }
+        Some((provider, model)) if !provider.is_empty() && !model.is_empty() => (provider, model),
         _ => ("", raw),
     }
 }
@@ -186,6 +184,8 @@ pub struct OnceOutput {
 pub struct AsyncOptions {
     /// 工作目录（会话启动前先 CD 到此目录）
     pub cwd: String,
+    /// 项目主目录与全部关联目录（ACP 用于 additionalDirectories）。
+    pub workspace_roots: Vec<String>,
     /// 前端会话 ID
     pub session_id: String,
     /// 来源类型
@@ -217,15 +217,132 @@ struct AgentProcess {
     aborted: Arc<AtomicBool>,
 }
 
+/// 进程池内的空闲 ACP 会话
+struct IdleAcpSession {
+    /// 子进程保持活跃、握手已完成、等待下次复用
+    session: transport::acp::AcpSession,
+    last_used: Instant,
+}
+
+/// ACP 进程池：按 agent_type 维护空闲会话列表，避免每次 prompt 重新 spawn+握手。
+/// 空闲超时后后台清理任务自动 kill（默认 30min）。
+struct AcpProcessPool {
+    /// agent_type → 空闲会话列表
+    pools: Arc<std::sync::Mutex<HashMap<String, Vec<IdleAcpSession>>>>,
+    idle_timeout: Duration,
+    /// 清理任务是否已启动（`shared()` 克隆间共享，保证全局只起一个）
+    cleanup_started: Arc<AtomicBool>,
+}
+
+impl AcpProcessPool {
+    fn new(idle_timeout: Duration) -> Self {
+        Self {
+            pools: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            idle_timeout,
+            cleanup_started: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// 惰性启动后台清理任务（每分钟扫一次，kill 超过 idle_timeout 的会话）。
+    ///
+    /// `AgentManager::new()` 在应用 setup 阶段执行——主线程、**无 Tokio runtime**，
+    /// 此处直接 `tokio::spawn` 会 panic（"there is no reactor running"）。
+    /// 故推迟到首个 async 调用点（take/put，必有 runtime）再启动。
+    fn ensure_cleanup_task(&self) {
+        if self.cleanup_started.swap(true, Ordering::SeqCst) {
+            return; // 已启动
+        }
+        if tokio::runtime::Handle::try_current().is_err() {
+            // 仍无 runtime（同步上下文调用）：复位标志，下次再试
+            self.cleanup_started.store(false, Ordering::SeqCst);
+            return;
+        }
+        let pools = Arc::clone(&self.pools);
+        let idle_timeout = self.idle_timeout;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let mut m = pools.lock().unwrap();
+                for (_key, list) in m.iter_mut() {
+                    list.retain(|idle| {
+                        if idle.last_used.elapsed() >= idle_timeout {
+                            log::info!(
+                                "[ACP 进程池] kill 空闲会话: session={} idle={}s",
+                                idle.session.session_id,
+                                idle.last_used.elapsed().as_secs()
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+                // 移除空列表，释放 HashMap 条目
+                m.retain(|_, list| !list.is_empty());
+            }
+        });
+    }
+
+    /// 从池中取一个空闲会话；没有返回 None。
+    /// 取走后列表里不再有它（所有权交给调用方，用完调用方需 recycle 或 close）。
+    async fn take(&self, agent_type: &str) -> Option<transport::acp::AcpSession> {
+        self.ensure_cleanup_task();
+        let mut m = self.pools.lock().unwrap();
+        let list = m.get_mut(agent_type)?;
+        // 最新鲜的先取（最不容易被清理掉）
+        let idx = list
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, idle)| idle.last_used)
+            .map(|(i, _)| i)?;
+        Some(list.remove(idx).session)
+    }
+
+    /// 把用完的会话放回池（复用前需调用 `session.recycle()` 清空上轮状态）。
+    async fn put(&self, agent_type: &str, mut session: transport::acp::AcpSession) {
+        self.ensure_cleanup_task();
+        session.recycle();
+        let mut m = self.pools.lock().unwrap();
+        let list = m.entry(agent_type.to_string()).or_default();
+        list.push(IdleAcpSession {
+            session,
+            last_used: Instant::now(),
+        });
+        log::debug!(
+            "[ACP 进程池] 会话回收: agent_type={} pool_size={}",
+            agent_type,
+            list.len()
+        );
+    }
+
+    /// 硬 kill 某 agent_type 的所有池内会话（Agent 被卸载/删除/配置变更时调用）
+    fn evict_all(&self, agent_type: &str) {
+        let mut m = self.pools.lock().unwrap();
+        if let Some(list) = m.remove(agent_type) {
+            log::info!(
+                "[ACP 进程池] evict agent_type={} 共 {} 个会话",
+                agent_type,
+                list.len()
+            );
+            // IdleAcpSession 被 drop 时内部 AcpSession 的 Drop 会 kill 进程
+        }
+    }
+}
+
 /// Agent 管理器
 pub struct AgentManager {
     processes: Arc<Mutex<HashMap<String, AgentProcess>>>,
+    /// ACP 进程池（子进程保持活跃，避免每次 prompt 重新 spawn+握手）
+    acp_pool: AcpProcessPool,
 }
 
 impl AgentManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
+            // ACP 会话空闲 30min 后自动回收（进程被 kill，下次 prompt 重新 spawn）
+            acp_pool: AcpProcessPool::new(Duration::from_secs(30 * 60)),
         }
     }
 
@@ -234,7 +351,20 @@ impl AgentManager {
     pub fn shared(&self) -> Self {
         Self {
             processes: Arc::clone(&self.processes),
+            acp_pool: AcpProcessPool {
+                pools: Arc::clone(&self.acp_pool.pools),
+                idle_timeout: self.acp_pool.idle_timeout,
+                cleanup_started: Arc::clone(&self.acp_pool.cleanup_started),
+            },
         }
+    }
+
+    /// 硬清某 agent_type 的 ACP 进程池。
+    ///
+    /// Agent 卸载/删除/配置变更后必须调用：池按 agent_type 索引、不感知配置内容，
+    /// 不清会让下一次会话复用到按**旧配置** spawn 的池内进程。
+    pub fn evict_acp_pool(&self, agent_type: &str) {
+        self.acp_pool.evict_all(agent_type);
     }
 
     // ------------------------------------------------------------------
@@ -624,8 +754,8 @@ impl AgentManager {
         // （`on_chunk` 是 `Box<dyn Fn + Send>`，用 Mutex 包成 `Sync` 以满足 EventSink）
         let on_chunk = Mutex::new(callbacks.on_chunk);
         let on_session_id = std::sync::Arc::clone(&callbacks.on_session_id);
-        let sink: crate::agent::transport::EventSink = Arc::new(move |ev: UnifiedAgentEvent| {
-            match ev {
+        let sink: crate::agent::transport::EventSink =
+            Arc::new(move |ev: UnifiedAgentEvent| match ev {
                 UnifiedAgentEvent::Chunk { content, .. } => {
                     if let Ok(f) = on_chunk.lock() {
                         f(content);
@@ -637,14 +767,14 @@ impl AgentManager {
                     (on_session_id)(agent_session_id);
                 }
                 _ => {}
-            }
-        });
+            });
 
         let conn = AgentConn {
             session_id: session_id.clone(),
             agent_id: agent_type.clone(),
             transport: TransportKind::Subprocess,
             cwd,
+            workspace_roots: async_opts.workspace_roots.clone(),
             conn: serde_json::Value::Null,
             secret: None,
             resume_id: agent_session_id.map(|s| s.to_string()),
@@ -657,46 +787,105 @@ impl AgentManager {
             enforce_security_matrix: false,
         };
 
-        let mut session =
-            crate::agent::transport::subprocess::SubprocessSession::new(config.clone());
-        let handle = session
-            .connect(&conn, sink)
-            .await
-            .map_err(|e| format!("建立会话失败: {}", e))?;
+        // ── ACP 进程池复用：先查池，没有再新建 ──
+        let agent_type_for_pool = agent_type.clone();
+        let is_acp = matches!(
+            config.agent_type.as_str(),
+            "hermes" | "gemini" | "codex" | "claude"
+        );
 
-        let result = session
-            .prompt(
-                &handle,
-                PromptInput {
-                    text: message.to_string(),
-                    images: Vec::new(),
-                },
-            )
-            .await;
+        if is_acp {
+            let mut session: transport::acp::AcpSession =
+                if let Some(spawned) = self.acp_pool.take(&agent_type_for_pool).await {
+                    log::info!(
+                        "[Agent] 复用 ACP 池会话: agent_type={} pool hit",
+                        agent_type_for_pool
+                    );
+                    spawned
+                } else {
+                    transport::acp::AcpSession::new()
+                };
 
-        // 运行结束即摘除进程表项（与 legacy 的 stop_generation 收尾口径一致）
-        if let Ok(mut procs) = self.processes.lock() {
-            procs.remove(&session_id);
-        }
+            let handle = session
+                .connect(&conn, sink)
+                .await
+                .map_err(|e| format!("建立会话失败: {}", e))?;
 
-        match result {
-            Ok(out) => Ok(ExecuteResult {
-                stdout: out.text.trim().to_string(),
-                exit_code: 0,
-                stderr: String::new(),
-                usage: out.usage,
-                model: out.model,
-            }),
-            // 非 0 退出：与 legacy 一致地返回 Ok + 非 0 退出码，交由上层做友好错误映射
-            Err(AgentError::ProcessExited { exit_code, stderr }) => Ok(ExecuteResult {
-                stdout: String::new(),
-                exit_code,
-                stderr,
-                usage: None,
-                model: None,
-            }),
-            Err(AgentError::Cancelled) => Err("已取消".to_string()),
-            Err(e) => Err(format!("{}", e)),
+            let result = session
+                .prompt(
+                    &handle,
+                    PromptInput {
+                        text: message.to_string(),
+                        images: Vec::new(),
+                    },
+                )
+                .await;
+
+            if let Ok(mut procs) = self.processes.lock() {
+                procs.remove(&session_id);
+            }
+
+            // prompt 结束：软回收进池（进程保持活跃，避免下次 spawn+握手）
+            self.acp_pool.put(&agent_type_for_pool, session).await;
+
+            match result {
+                Ok(out) => Ok(ExecuteResult {
+                    stdout: out.text.trim().to_string(),
+                    exit_code: 0,
+                    stderr: String::new(),
+                    usage: out.usage,
+                    model: out.model,
+                }),
+                Err(AgentError::ProcessExited { exit_code, stderr }) => Ok(ExecuteResult {
+                    stdout: String::new(),
+                    exit_code,
+                    stderr,
+                    usage: None,
+                    model: None,
+                }),
+                Err(AgentError::Cancelled) => Err("已取消".to_string()),
+                Err(e) => Err(format!("{}", e)),
+            }
+        } else {
+            // ── 非 ACP 路径（CLI 兼容）：保持原逻辑 ──
+            let mut session = transport::subprocess::SubprocessSession::new(config.clone());
+            let handle = session
+                .connect(&conn, sink)
+                .await
+                .map_err(|e| format!("建立会话失败: {}", e))?;
+
+            let result = session
+                .prompt(
+                    &handle,
+                    PromptInput {
+                        text: message.to_string(),
+                        images: Vec::new(),
+                    },
+                )
+                .await;
+
+            if let Ok(mut procs) = self.processes.lock() {
+                procs.remove(&session_id);
+            }
+
+            match result {
+                Ok(out) => Ok(ExecuteResult {
+                    stdout: out.text.trim().to_string(),
+                    exit_code: 0,
+                    stderr: String::new(),
+                    usage: out.usage,
+                    model: out.model,
+                }),
+                Err(AgentError::ProcessExited { exit_code, stderr }) => Ok(ExecuteResult {
+                    stdout: String::new(),
+                    exit_code,
+                    stderr,
+                    usage: None,
+                    model: None,
+                }),
+                Err(AgentError::Cancelled) => Err("已取消".to_string()),
+                Err(e) => Err(format!("{}", e)),
+            }
         }
     }
 
@@ -793,12 +982,14 @@ impl AgentManager {
         message: String,
         _mode: String,
         cwd: Option<String>,
+        workspace_roots: Vec<String>,
         _system_prompt: Option<String>,
         agent_session_id: Option<String>,
     ) -> Result<(), String> {
         let source_type = config.agent_type.clone();
         let async_opts = AsyncOptions {
             cwd: cwd.unwrap_or_default(),
+            workspace_roots,
             session_id: session_id.clone(),
             source_type: source_type.clone(),
             timeout: TimeoutPolicy::llm_inference(),
@@ -992,6 +1183,7 @@ impl AgentManager {
         let source_type = config.agent_type.clone();
         let async_opts = AsyncOptions {
             cwd: cwd.to_string(),
+            workspace_roots: vec![cwd.to_string()],
             session_id: _temp_session_id.to_string(),
             source_type: source_type.clone(),
             timeout: TimeoutPolicy::llm_inference(),
@@ -1198,6 +1390,7 @@ pub async fn run_transport_session(
     session_id: &str,
     message: &str,
     cwd: &str,
+    workspace_roots: &[String],
     agent_session_id: Option<&str>,
     approvals: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>>,
     // 会话安全模式（仅 ACP 兜底路径使用：宿主不提供 modes 时决定要不要打断用户）
@@ -1368,6 +1561,7 @@ pub async fn run_transport_session(
         agent_id: descriptor.agent_id.clone(),
         transport: descriptor.transport,
         cwd: cwd.to_string(),
+        workspace_roots: workspace_roots.to_vec(),
         conn: descriptor.conn.clone(),
         secret: None,
         resume_id: agent_session_id.map(|s| s.to_string()),
@@ -1485,7 +1679,10 @@ pub async fn run_transport_session(
                 let _ = session.close(&handle).await;
                 return Ok(());
             }
-            log::info!("[Agent/run_transport_session] 回合结束(完成)：session={}", session_id);
+            log::info!(
+                "[Agent/run_transport_session] 回合结束(完成)：session={}",
+                session_id
+            );
             // 先上报结束、再关闭对端：`agent-done` 是前端"思考中 → 完成"的唯一信号，
             // 必须排在可能阻塞的 `close()`（`child.kill()` 内部含 `wait()`）之前，
             // 否则对端回收慢就会让 UI 一直停在"生成中"。

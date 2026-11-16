@@ -239,6 +239,9 @@ pub struct WorkflowDefinition {
     pub created_at: i64,
     pub updated_at: i64,
     pub enabled: bool,
+    /// 工作归属项目；None 表示未归入项目。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 // ════════════════════════════════════════════════════════════
@@ -323,10 +326,11 @@ fn def_from_row(row: &rusqlite::Row) -> rusqlite::Result<WorkflowDefinition> {
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
         enabled: row.get(11)?,
+        project_id: row.get(12)?,
     })
 }
 
-const DEF_COLUMNS: &str = "id, name, version, description, trigger, stages, input_schema, output_schema, icon, created_at, updated_at, enabled";
+const DEF_COLUMNS: &str = "id, name, version, description, trigger, stages, input_schema, output_schema, icon, created_at, updated_at, enabled, project_id";
 
 /// 列出**未删除**的工作流定义（默认视图，回收站内的已软删除项不可见）。
 pub fn list_definitions(conn: &Connection) -> Result<Vec<WorkflowDefinition>, AppError> {
@@ -389,7 +393,10 @@ pub fn is_definition_deleted(conn: &Connection, id: &str) -> Result<bool, AppErr
 ///
 /// 与 [`get_definition`] 的区别：这里把"已被删除（在回收站里）"与"根本不存在"分开报，
 /// 便于用户从回收站恢复或替换该 Subflow 节点，而不是看到一个含糊的"定义不存在"。
-pub fn resolve_subflow_for_run(conn: &Connection, id: &str) -> Result<WorkflowDefinition, AppError> {
+pub fn resolve_subflow_for_run(
+    conn: &Connection,
+    id: &str,
+) -> Result<WorkflowDefinition, AppError> {
     match get_definition(conn, id)? {
         Some(def) if !is_definition_deleted(conn, id)? => Ok(def),
         Some(def) => Err(AppError::InvalidInput(format!(
@@ -409,11 +416,13 @@ pub fn resolve_subflow_for_run(conn: &Connection, id: &str) -> Result<WorkflowDe
 
 pub fn create_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<(), AppError> {
     let now = crate::utils::now();
+    let project_id =
+        crate::commands::projects::validate_project_membership(conn, def.project_id.as_deref())?;
     conn.execute(
         "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages,
-         input_schema, output_schema, icon, created_at, updated_at, enabled)
+         input_schema, output_schema, icon, created_at, updated_at, enabled, project_id)
 
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             def.id,
             def.name,
@@ -427,6 +436,7 @@ pub fn create_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
             now,
             now,
             def.enabled,
+            project_id,
         ],
     )?;
     // 本地工作流有改动 → 云同步标脏（best-effort，表缺失/未启用时静默；见 cloud_sync）
@@ -436,12 +446,25 @@ pub fn create_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
 
 pub fn update_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<(), AppError> {
     let now = crate::utils::now();
+    let current_project_id: Option<String> = conn
+        .query_row(
+            "SELECT project_id FROM workflow_definitions WHERE id = ?1",
+            params![def.id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let project_id = crate::commands::projects::validate_project_membership_update(
+        conn,
+        def.project_id.as_deref(),
+        current_project_id.as_deref(),
+    )?;
     conn.execute(
         "UPDATE workflow_definitions SET name = ?1, version = ?2, description = ?3,
          trigger = ?4, stages = ?5, input_schema = ?6, output_schema = ?7,
-         icon = ?8, updated_at = ?9, enabled = ?10
+         icon = ?8, updated_at = ?9, enabled = ?10, project_id = ?11
 
-         WHERE id = ?11",
+         WHERE id = ?12",
         params![
             def.name,
             def.version,
@@ -453,6 +476,7 @@ pub fn update_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
             def.icon.as_ref().map(|v| v.to_string()),
             now,
             def.enabled,
+            project_id,
             def.id,
         ],
     )?;
@@ -541,7 +565,7 @@ pub fn list_deleted_workflows(conn: &Connection) -> Result<Vec<DeletedWorkflow>,
     let rows = stmt
         .query_map([], |row| {
             let def = def_from_row(row)?;
-            let deleted_at: Option<i64> = row.get(12)?;
+            let deleted_at: Option<i64> = row.get(13)?;
             let node_count = def.stages.iter().map(|s| s.nodes.len()).sum();
             let subflow_count = def
                 .stages
@@ -564,9 +588,15 @@ pub fn list_deleted_workflows(conn: &Connection) -> Result<Vec<DeletedWorkflow>,
 /// 取一个不与现有**未删除**工作流重名的名称；重名时自动追加序号（「名称 (2)」「名称 (3)」…）。
 fn unique_workflow_name(conn: &Connection, base: &str) -> Result<String, AppError> {
     let base = base.trim();
-    let base = if base.is_empty() { "未命名工作流" } else { base };
-    let alive: std::collections::HashSet<String> =
-        list_definitions(conn)?.into_iter().map(|d| d.name).collect();
+    let base = if base.is_empty() {
+        "未命名工作流"
+    } else {
+        base
+    };
+    let alive: std::collections::HashSet<String> = list_definitions(conn)?
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
     if !alive.contains(base) {
         return Ok(base.to_string());
     }
@@ -585,8 +615,8 @@ fn unique_workflow_name(conn: &Connection, base: &str) -> Result<String, AppErro
 /// 若与现有未删除工作流**重名**，自动追加序号（如「名称 (2)」）。返回 `(id, 最终名称)`。
 /// 幂等：若该工作流本就未删除，直接返回当前名称，不做改动。
 pub fn restore_workflow(conn: &Connection, id: &str) -> Result<(String, String), AppError> {
-    let def = get_definition(conn, id)?
-        .ok_or_else(|| AppError::NotFound("工作流不存在".to_string()))?;
+    let def =
+        get_definition(conn, id)?.ok_or_else(|| AppError::NotFound("工作流不存在".to_string()))?;
     if !is_definition_deleted(conn, id)? {
         return Ok((id.to_string(), def.name));
     }
@@ -613,8 +643,8 @@ pub fn purge_workflow(conn: &Connection, id: &str) -> Result<(), AppError> {
         ));
     }
     hard_delete_definition(conn, id)?;
-    // 彻底删除 → 保留 sync_state 行并置墓碑（阻止该 key 被 pull 复活）；墓碑永久保留，不做自动清理。
-    crate::commands::cloud_sync::mark_workflow_purged(conn, id);
+    // 彻底删除 → 登记待发送删除；云端确认后立即清理，不保留永久墓碑。
+    crate::commands::cloud_sync::mark_workflow_delete_pending(conn, id);
     Ok(())
 }
 
@@ -628,8 +658,8 @@ pub fn empty_recycle_bin(conn: &Connection) -> Result<usize, AppError> {
     let mut purged = 0usize;
     for id in &ids {
         hard_delete_definition(conn, id)?;
-        // 同 purge_workflow：置墓碑，阻止已彻底删除的 key 被 pull 复活
-        crate::commands::cloud_sync::mark_workflow_purged(conn, id);
+        // 同 purge_workflow：登记待发送删除，云端确认后清理。
+        crate::commands::cloud_sync::mark_workflow_delete_pending(conn, id);
         purged += 1;
     }
     Ok(purged)
@@ -1017,11 +1047,7 @@ pub(crate) fn snapshot_before_overwrite(
 
 /// 按来源清理自动快照：`manual` 不清理；其余来源各只保留最近 [`AUTO_VERSION_KEEP`] 个。
 /// 幂等：`DELETE ... NOT IN (最近 N 个)`，同连接内执行。
-fn prune_auto_versions(
-    conn: &Connection,
-    workflow_id: &str,
-    origin: &str,
-) -> Result<(), AppError> {
+fn prune_auto_versions(conn: &Connection, workflow_id: &str, origin: &str) -> Result<(), AppError> {
     if origin == VERSION_ORIGIN_MANUAL {
         return Ok(());
     }
@@ -1238,6 +1264,20 @@ mod tests {
         conn
     }
 
+    #[test]
+    fn update_definition_can_clear_icon_to_use_default() {
+        let conn = full_conn();
+        let mut def = def_with_subflow("d1", "图标回归", None);
+        def.icon = Some("📝".into());
+        create_definition(&conn, &def).unwrap();
+
+        def.icon = None;
+        update_definition(&conn, &def).unwrap();
+
+        let saved = get_definition(&conn, "d1").unwrap().unwrap();
+        assert_eq!(saved.icon, None, "选择默认图标必须把 icon 持久化为 NULL");
+    }
+
     /// 造一个含单个 Subflow 节点（引用 `subflow_of`）的工作流定义；`subflow_of` 为 None 时无节点。
     fn def_with_subflow(id: &str, name: &str, subflow_of: Option<&str>) -> WorkflowDefinition {
         let nodes = match subflow_of {
@@ -1286,6 +1326,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             enabled: true,
+            project_id: None,
         }
     }
 
@@ -1414,7 +1455,10 @@ mod tests {
         assert!(list_deleted_workflows(&conn).unwrap().is_empty());
         assert!(get_definition(&conn, "a").unwrap().is_none());
         assert!(get_definition(&conn, "b").unwrap().is_none());
-        assert!(get_definition(&conn, "c").unwrap().is_some(), "未删除项不受影响");
+        assert!(
+            get_definition(&conn, "c").unwrap().is_some(),
+            "未删除项不受影响"
+        );
     }
 
     /// 内部替换路径走彻底删除：不进回收站。
@@ -1440,12 +1484,16 @@ mod tests {
         assert_eq!(resolve_subflow_for_run(&conn, "sub").unwrap().id, "sub");
 
         soft_delete_definition(&conn, "sub").unwrap();
-        let err = resolve_subflow_for_run(&conn, "sub").unwrap_err().to_string();
+        let err = resolve_subflow_for_run(&conn, "sub")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("数值计算子流"), "错误应含子流名: {}", err);
         assert!(err.contains("已被删除"), "错误应说明已被删除: {}", err);
         assert!(err.contains("回收站"), "错误应引导回收站恢复: {}", err);
 
-        let missing = resolve_subflow_for_run(&conn, "nope").unwrap_err().to_string();
+        let missing = resolve_subflow_for_run(&conn, "nope")
+            .unwrap_err()
+            .to_string();
         assert!(missing.contains("不存在"), "缺失应报不存在: {}", missing);
     }
 
@@ -1524,7 +1572,10 @@ mod tests {
             .into_iter()
             .filter(|v| v.origin == VERSION_ORIGIN_CLOUD_SYNC)
             .count();
-        assert_eq!(auto, AUTO_VERSION_KEEP as usize, "云同步快照只保留最近 3 个");
+        assert_eq!(
+            auto, AUTO_VERSION_KEEP as usize,
+            "个人云同步快照只保留最近 3 个"
+        );
 
         for i in 0..5 {
             let mut d = get_definition(&conn, "v2").unwrap().unwrap();

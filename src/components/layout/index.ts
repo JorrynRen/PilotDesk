@@ -6,3 +6,6 @@ export { RightPanel } from './RightPanel';
 export { StatusBar } from './StatusBar';
 export { NotificationCenter } from './NotificationCenter';
 export { CommandCenter } from './CommandCenter';
+export { WorkbenchRail } from './WorkbenchRail';
+export type { WorkbenchAssetKey } from './WorkbenchRail';
+export { WorkbenchAssetPage } from './WorkbenchAssetPage';

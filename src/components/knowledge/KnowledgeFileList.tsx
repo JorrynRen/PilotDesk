@@ -299,7 +299,6 @@ export function KnowledgeFileList({
   const relations = useKnowledgeStore((s) => s.relations);
   const linkFiles = useKnowledgeStore((s) => s.linkFiles);
   const unlinkFiles = useKnowledgeStore((s) => s.unlinkFiles);
-  const loadMoreFiles = useKnowledgeStore((s) => s.loadMoreFiles);
   const ensureAllFiles = useKnowledgeStore((s) => s.ensureAllFiles);
   const removeFiles = useKnowledgeStore((s) => s.removeFiles);
   /** 已加载的条目：文件搜索按「条目标题」命中时要用（分页外条目搜不到，与条目页同口径） */
@@ -651,26 +650,26 @@ export function KnowledgeFileList({
           </button>
           {menuOpen && (
             <div
-              className="absolute right-0 top-full mt-1 py-1 rounded-lg z-20"
+              role="menu"
+              className="pd-menu absolute right-0 top-full mt-1 z-20"
               style={{
-                backgroundColor: 'var(--bg-secondary)',
-                border: '1px solid var(--border)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.22)',
                 minWidth: 168,
               }}
             >
               <button
+                type="button"
+                role="menuitem"
                 onClick={() => void doExport(exportTargets, false)}
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                style={{ color: 'var(--text-primary)' }}
+                className="pd-menu-item"
               >
                 <FolderOpen size={12} />
                 复制到目录…
               </button>
               <button
+                type="button"
+                role="menuitem"
                 onClick={() => void doExport(exportTargets, true)}
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors hover:opacity-80"
-                style={{ color: 'var(--text-primary)' }}
+                className="pd-menu-item"
               >
                 <Package size={12} />
                 打包为 zip…

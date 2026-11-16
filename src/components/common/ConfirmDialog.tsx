@@ -8,7 +8,7 @@ import { useConfirmStore } from '../../stores/confirmStore';
  * 支持 Esc 或点击遮罩取消。
  *
  * z-index 说明：页面级弹窗统一是 `z-[120]`，而本组件在 DOM 中挂在 `<Routes>` 之前，
- * 同级 z-index 时会被后出现的页面弹窗压在下面（「上报到组织」→ 二次确认看不到就是这个问题）。
+ * 同级 z-index 时会被后出现的页面弹窗压在下面（页面内模态触发二次确认时可能看不到）。
  * 故这里取 `z-[130]`，始终高于页面级弹窗：后开的确认弹窗正确叠加在上一级之上，关闭后回到上一级。
  */
 export function ConfirmDialog() {

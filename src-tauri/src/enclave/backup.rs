@@ -85,8 +85,7 @@ pub fn status(conn: &Connection) -> Result<BackupStatusView, String> {
         enabled: get_setting(conn, KEY_ENABLED)
             .map(|v| v != "0")
             .unwrap_or(false),
-        interval_hours: setting_i64(conn, KEY_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS)
-            .clamp(1, 168),
+        interval_hours: setting_i64(conn, KEY_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS).clamp(1, 168),
         keep: setting_i64(conn, KEY_KEEP, DEFAULT_KEEP).clamp(1, 30),
         last_at: setting_i64(conn, KEY_LAST_AT, 0),
         last_path: get_setting(conn, KEY_LAST_PATH).unwrap_or_default(),
@@ -151,10 +150,14 @@ pub fn run_backup(conn: &Connection) -> Result<BackupInfo, String> {
     let dir = backup_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败：{}", e))?;
 
-    let tmp_db = std::env::temp_dir().join(format!("pilotdesk-backup-{}.db", crate::utils::new_id()));
+    let tmp_db =
+        std::env::temp_dir().join(format!("pilotdesk-backup-{}.db", crate::utils::new_id()));
     let result = (|| -> Result<BackupInfo, String> {
-        conn.execute("VACUUM INTO ?1", params![tmp_db.to_string_lossy().to_string()])
-            .map_err(|e| format!("生成数据库快照失败：{}", e))?;
+        conn.execute(
+            "VACUUM INTO ?1",
+            params![tmp_db.to_string_lossy().to_string()],
+        )
+        .map_err(|e| format!("生成数据库快照失败：{}", e))?;
 
         let file_name = format!("enclave-backup-{}.zip", now);
         let out_path = dir.join(&file_name);
@@ -167,8 +170,7 @@ pub fn run_backup(conn: &Connection) -> Result<BackupInfo, String> {
         zip.start_file("enclave.db", opts)
             .map_err(|e| format!("写入数据库快照失败：{}", e))?;
         let mut db_file = File::open(&tmp_db).map_err(|e| format!("读取数据库快照失败：{}", e))?;
-        std::io::copy(&mut db_file, &mut zip)
-            .map_err(|e| format!("写入数据库快照失败：{}", e))?;
+        std::io::copy(&mut db_file, &mut zip).map_err(|e| format!("写入数据库快照失败：{}", e))?;
 
         // 2) 团队文件（按组织目录；只备份本机作为主机的组织）
         let root = files::resolve_team_files_root(conn)?;
@@ -184,7 +186,11 @@ pub fn run_backup(conn: &Connection) -> Result<BackupInfo, String> {
                 let entries = match std::fs::read_dir(&current) {
                     Ok(e) => e,
                     Err(e) => {
-                        return Err(format!("读取团队文件目录失败（{}）：{}", current.display(), e))
+                        return Err(format!(
+                            "读取团队文件目录失败（{}）：{}",
+                            current.display(),
+                            e
+                        ))
                     }
                 };
                 for entry in entries.flatten() {
@@ -226,7 +232,9 @@ pub fn run_backup(conn: &Connection) -> Result<BackupInfo, String> {
             .map_err(|e| format!("写入备份清单失败：{}", e))?;
         zip.finish().map_err(|e| format!("完成备份包失败：{}", e))?;
 
-        let size = std::fs::metadata(&out_path).map(|m| m.len() as i64).unwrap_or(0);
+        let size = std::fs::metadata(&out_path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
         put_setting(conn, KEY_LAST_AT, &now.to_string())?;
         put_setting(conn, KEY_LAST_PATH, &out_path.to_string_lossy())?;
         put_setting(conn, KEY_LAST_SIZE, &size.to_string())?;

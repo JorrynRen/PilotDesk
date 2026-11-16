@@ -132,22 +132,21 @@ export function RightPanel({ isOpen, mode }: RightPanelProps) {
 
   return (
     <aside
-      className="w-[260px] flex flex-col shrink-0 rounded-lg"
+      className="pd-right-panel flex flex-col shrink-0 rounded-lg"
       // 壳层风格：去掉 border-left，靠"底色 + 圆角 + 相邻面板之间的 8px 缝"区分。
       // 这里**不加 overflow-hidden**：面板里挂着插件面板/灵感库等，可能出现绝对定位的下拉，
       // 裁切会把它们切掉；面板内各层底色基本透明，圆角处不会露出色块。
       style={{ backgroundColor: 'var(--bg-side)' }}
     >
       {/* Header */}
-      <div className="flex items-center px-3 h-9 gap-0.5" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="pd-right-panel-tabs" role="tablist" aria-label="右侧面板">
         {/* Fixed tabs */}
         <button
           onClick={() => setActiveTab('inspiration')}
-          className="pd-btn px-2 py-1 rounded text-xs shrink-0"
-          style={{
-            color: effectiveTab === 'inspiration' ? 'var(--accent)' : 'var(--text-secondary)',
-            backgroundColor: effectiveTab === 'inspiration' ? 'var(--accent-light)' : 'transparent',
-          }}
+          className="pd-right-panel-tab"
+          data-active={effectiveTab === 'inspiration'}
+          role="tab"
+          aria-selected={effectiveTab === 'inspiration'}
         >
           <Lightbulb size={12} />
           灵感
@@ -156,11 +155,10 @@ export function RightPanel({ isOpen, mode }: RightPanelProps) {
         {!isTerminalMode && (
           <button
             onClick={() => setActiveTab('files')}
-            className="pd-btn px-2 py-1 rounded text-xs shrink-0"
-            style={{
-              color: effectiveTab === 'files' ? 'var(--accent)' : 'var(--text-secondary)',
-              backgroundColor: effectiveTab === 'files' ? 'var(--accent-light)' : 'transparent',
-            }}
+            className="pd-right-panel-tab"
+            data-active={effectiveTab === 'files'}
+            role="tab"
+            aria-selected={effectiveTab === 'files'}
             title="当前会话的文件修改历史（可撤销到修改前版本）"
           >
             <History size={12} />
@@ -171,11 +169,10 @@ export function RightPanel({ isOpen, mode }: RightPanelProps) {
         {showPluginTab && (
           <button
             onClick={() => setActiveTab('plugins')}
-            className="pd-btn px-2 py-1 rounded text-xs shrink-0"
-            style={{
-              color: effectiveTab === 'plugins' ? 'var(--accent)' : 'var(--text-secondary)',
-              backgroundColor: effectiveTab === 'plugins' ? 'var(--accent-light)' : 'transparent',
-            }}
+            className="pd-right-panel-tab"
+            data-active={effectiveTab === 'plugins'}
+            role="tab"
+            aria-selected={effectiveTab === 'plugins'}
             title="插件提供的运行时面板（插件安装与启停在 设置 › 插件管理）"
           >
             <Package size={12} />

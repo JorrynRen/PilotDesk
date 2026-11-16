@@ -90,6 +90,12 @@ impl IdleState {
             || self.awaiting_user.load(Ordering::Relaxed) > 0
     }
 
+    /// 池回收时清空所有豁免状态，避免新会话继承上一轮的 in_flight 计数。
+    fn reset(&self) {
+        self.in_flight_tools.store(0, Ordering::Relaxed);
+        self.awaiting_user.store(0, Ordering::Relaxed);
+    }
+
     fn dec(counter: &AtomicUsize) {
         // 事件可能重复/乱序（对端行为不受我们控制），计数只做**饱和**递减，
         // 绝不回绕成天文数字（否则一次误减会让看门狗永久失效）。
@@ -151,6 +157,56 @@ fn resume_plan(has_resume_id: bool, resume_supported: bool, load_supported: bool
         ResumePlan::Load
     } else {
         ResumePlan::New
+    }
+}
+
+fn supports_additional_directories(agent_caps: &Value) -> bool {
+    agent_caps["sessionCapabilities"]["additionalDirectories"].is_object()
+}
+
+/// 会话级附加目录只包含关联目录；主目录已经由 `cwd` 承载，重复项按 path key 去重。
+fn additional_directories_for(cwd: &str, workspace_roots: &[String]) -> Vec<String> {
+    let cwd_key = crate::utils::paths::path_key(std::path::Path::new(cwd));
+    workspace_roots
+        .iter()
+        .map(|root| root.trim())
+        .filter(|root| !root.is_empty())
+        .filter(|root| crate::utils::paths::path_key(std::path::Path::new(root)) != cwd_key)
+        .fold(Vec::<String>::new(), |mut roots, root| {
+            if !roots.iter().any(|existing| {
+                crate::utils::paths::path_key(std::path::Path::new(existing))
+                    == crate::utils::paths::path_key(std::path::Path::new(root))
+            }) {
+                roots.push(root.to_string());
+            }
+            roots
+        })
+}
+
+fn session_new_params(cwd: &str, workspace_roots: &[String], agent_caps: &Value) -> Value {
+    let mut params = json!({ "cwd": cwd, "mcpServers": [] });
+    let additional_directories = additional_directories_for(cwd, workspace_roots);
+    if supports_additional_directories(agent_caps) && !additional_directories.is_empty() {
+        params["additionalDirectories"] = json!(additional_directories);
+    }
+    params
+}
+
+fn capabilities_from_agent(agent_caps: &Value) -> Capabilities {
+    let resume_supported = agent_caps["sessionCapabilities"]["resume"]
+        .as_object()
+        .is_some()
+        || agent_caps["sessionCapabilities"]["resume"]
+            .as_bool()
+            .unwrap_or(false);
+    let load_supported = agent_caps["loadSession"].as_bool().unwrap_or(false);
+    Capabilities {
+        tool_events: true,
+        permission: true,
+        reasoning: true,
+        resume: resume_supported || load_supported,
+        persistent: true,
+        automatable: true,
     }
 }
 
@@ -237,7 +293,10 @@ pub fn project_session_update(session_id: &str, params: &Value) -> Vec<UnifiedAg
         // 工具调用开始
         "tool_call" => vec![UnifiedAgentEvent::ToolStart {
             session_id: sid(),
-            tool_id: update["toolCallId"].as_str().unwrap_or_default().to_string(),
+            tool_id: update["toolCallId"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
             name: update["title"]
                 .as_str()
                 .or_else(|| update["kind"].as_str())
@@ -251,7 +310,10 @@ pub fn project_session_update(session_id: &str, params: &Value) -> Vec<UnifiedAg
             if status == "completed" || status == "failed" {
                 vec![UnifiedAgentEvent::ToolResult {
                     session_id: sid(),
-                    tool_id: update["toolCallId"].as_str().unwrap_or_default().to_string(),
+                    tool_id: update["toolCallId"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
                     result: update["rawOutput"].to_string(),
                     success: status == "completed",
                 }]
@@ -335,7 +397,10 @@ pub fn parse_permission_options(params: &Value) -> Vec<PermissionOption> {
 /// 匹配顺序：**精确 kind** → **前缀**（`allow*` / `reject*`）→ 兜底
 /// （`AllowAlways` 退化为 `Allow`；`Deny` 取最后一项——多数实现把拒绝放末位）。
 /// 无可用选项时返回 `None`，调用方应据此按拒绝处理（**绝不默认放行**）。
-pub fn pick_option_id(options: &[PermissionOption], decision: PermissionDecision) -> Option<String> {
+pub fn pick_option_id(
+    options: &[PermissionOption],
+    decision: PermissionDecision,
+) -> Option<String> {
     if options.is_empty() {
         return None;
     }
@@ -409,7 +474,10 @@ pub fn parse_session_modes(resp: &Value) -> (Vec<AcpMode>, Option<String>) {
                 .collect()
         })
         .unwrap_or_default();
-    (available, modes["currentModeId"].as_str().map(str::to_string))
+    (
+        available,
+        modes["currentModeId"].as_str().map(str::to_string),
+    )
 }
 
 /// 权限请求的粗粒度风险：只看 ACP 标准的 `toolCall.kind`。
@@ -492,7 +560,10 @@ mod permission_tests {
 
         // 只有拒绝项时，Allow 必须返回 None（**绝不默认放行**）
         let only_reject = opts(&[("r1", "reject_once")]);
-        assert_eq!(pick_option_id(&only_reject, PermissionDecision::Allow), None);
+        assert_eq!(
+            pick_option_id(&only_reject, PermissionDecision::Allow),
+            None
+        );
 
         // kind 形状不符（空串）→ 前缀不命中；Deny 取末位
         let unknown = opts(&[("u1", ""), ("u2", "")]);
@@ -683,24 +754,25 @@ pub fn kill_all_live_sessions() {
 /// 与 `subprocess` 的关键差别：**常驻会话**——进程与连接在会话存续期内保持，
 /// 不需要每轮冷启动、不需要靠正则抓 session id。
 pub struct AcpSession {
-    peer: Option<JsonRpcPeer>,
-    session_id: String,
-    remote_id: Option<String>,
-    sink: Option<EventSink>,
-    caps: Capabilities,
+    pub peer: Option<JsonRpcPeer>,
+    pub session_id: String,
+    pub remote_id: Option<String>,
+    pub sink: Option<EventSink>,
+    pub caps: Capabilities,
     /// 本轮累计正文（`Chunk` 事件由 `session/update` 处理器追加）
-    text_buf: Arc<Mutex<String>>,
+    pub text_buf: Arc<Mutex<String>>,
     /// 取消令牌：与调用方**共享同一份**（`connect` 时取 `conn.abort`）。
     /// `prompt` 等待期间轮询它——置位即主动结束等待并发 `session/cancel`，
     /// 让"停止生成"能即时打断 ACP 回合（否则只能干等到回合自然结束或回合超时）。
-    abort: Arc<AtomicBool>,
-    /// 活跃度看门狗的状态（与 `session/update` / 权限处理器共享）
+    pub abort: Arc<AtomicBool>,
+    /// 活跃度看门狗的状态（与 `session/update` / 权限处理器共享）。
+    /// 私有：`IdleState` 是本文件内部实现细节，外部只经 `recycle()` 间接触达。
     idle: Arc<IdleState>,
     /// 子进程 pid（0 = 已收尾）。退出时按它强杀进程树，`close()` / Drop 时摘除。
-    child_pid: AtomicU32,
+    pub child_pid: AtomicU32,
     /// 宿主自报的当前模型（`session/new|resume|load` 响应里的 `models.currentModelId`）。
     /// 用量归属需要它；宿主不给就留空，不猜。
-    current_model: Option<String>,
+    pub current_model: Option<String>,
 }
 
 impl AcpSession {
@@ -1059,11 +1131,20 @@ impl AgentSession for AcpSession {
                 .as_bool()
                 .unwrap_or(false);
         let load_supported = agent_caps["loadSession"].as_bool().unwrap_or(false);
+        let additional_directories_supported = supports_additional_directories(agent_caps);
 
         // ── 4) 建/恢复会话 ──
         // 有 resume_id 时优先 `session/resume`，对端不支持才退回 `session/load`。
         // 两条路径都可能把历史以 `session/update` 重放一遍，期间一律抑制事件。
-        let new_params = json!({ "cwd": conn.cwd, "mcpServers": [] });
+        let new_params = session_new_params(&conn.cwd, &conn.workspace_roots, agent_caps);
+        if !additional_directories_supported
+            && !additional_directories_for(&conn.cwd, &conn.workspace_roots).is_empty()
+        {
+            log::warn!(
+                "[acp] 宿主未声明 additionalDirectories 能力，本轮仅使用主目录 cwd={}",
+                conn.cwd
+            );
+        }
         let mut resume_params = new_params.clone();
         if let Some(rid) = &conn.resume_id {
             resume_params["sessionId"] = json!(rid);
@@ -1170,7 +1251,8 @@ impl AgentSession for AcpSession {
             })
             .or_else(|| conn.resume_id.clone());
         if resp["sessionId"].as_str().is_none() {
-            if let (Some(want), Some(got)) = (conn.resume_id.as_deref(), self.remote_id.as_deref()) {
+            if let (Some(want), Some(got)) = (conn.resume_id.as_deref(), self.remote_id.as_deref())
+            {
                 if want != got {
                     log::info!(
                         "[acp] 对端恢复后更换了会话 id：{} -> {}（以响应/_meta 为准）",
@@ -1214,7 +1296,10 @@ impl AgentSession for AcpSession {
             "[acp] 会话模式: session={} current={:?} available={:?}",
             self.session_id,
             current_mode_id,
-            available_modes.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
+            available_modes
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>()
         );
 
         // 每轮显式写回用户选择的模式：进程是每轮重建的，且实测 codex-acp 的
@@ -1250,7 +1335,11 @@ impl AgentSession for AcpSession {
                     )
                     .await
                 {
-                    Ok(_) => log::info!("[acp] 已切换到宿主模式 {}: session={}", want, self.session_id),
+                    Ok(_) => log::info!(
+                        "[acp] 已切换到宿主模式 {}: session={}",
+                        want,
+                        self.session_id
+                    ),
                     // 切换失败不阻断本轮：用户至少还能继续对话，日志留痕便于排查
                     Err(e) => log::warn!("[acp] session/set_mode 失败（继续本轮）: {}", e),
                 }
@@ -1259,15 +1348,8 @@ impl AgentSession for AcpSession {
 
         // ACP 天生具备结构化能力（工具事件/思考/常驻会话/会话恢复）；
         // resume 按对端实际公布的能力位标记（resume 或 load 任一可用即算可恢复）。
-        // permission 暂标 false：审批尚未接入（见 2b 的 TODO），不能声称支持。
-        self.caps = Capabilities {
-            tool_events: true,
-            permission: false,
-            reasoning: true,
-            resume: resume_supported || load_supported,
-            persistent: true,
-            automatable: true,
-        };
+        // 权限请求已由 2b 的 ApprovalGate 接管：批准、拒绝、超时与 resolved 事件均已接线。
+        self.caps = capabilities_from_agent(agent_caps);
         self.peer = Some(peer);
 
         Ok(SessionHandle {
@@ -1301,7 +1383,10 @@ impl AgentSession for AcpSession {
         }
 
         // 诊断打点：本轮"结束信号"是否到达、几时到达。
-        log::info!("[acp] session/prompt 发出，等待对端回合结束响应：session={}", sid);
+        log::info!(
+            "[acp] session/prompt 发出，等待对端回合结束响应：session={}",
+            sid
+        );
         // "停止生成"接线：把共享取消令牌与回合请求一起竞速。
         // 否则该等待最长会挂到 TURN_TIMEOUT(1800s)，用户点了停止也没有任何反应。
         let abort = Arc::clone(&self.abort);
@@ -1389,7 +1474,11 @@ impl AgentSession for AcpSession {
             }
         };
         let resp = outcome.map_err(|e| {
-            log::warn!("[acp] session/prompt 未拿到回合结束响应：session={} err={}", sid, e);
+            log::warn!(
+                "[acp] session/prompt 未拿到回合结束响应：session={} err={}",
+                sid,
+                e
+            );
             AgentError::Protocol(e)
         })?;
         log::info!(
@@ -1399,11 +1488,7 @@ impl AgentSession for AcpSession {
         );
 
         let stop = resp["stopReason"].as_str().unwrap_or("end_turn");
-        let text = self
-            .text_buf
-            .lock()
-            .map(|b| b.clone())
-            .unwrap_or_default();
+        let text = self.text_buf.lock().map(|b| b.clone()).unwrap_or_default();
         // 用量：宿主上报才带（字段可缺），缺失/全 0 一律 None，不落"零用量"行
         let usage = parse_usage(&resp);
         if let Some(u) = usage {
@@ -1455,6 +1540,28 @@ impl AgentSession for AcpSession {
     }
 }
 
+// ── AcpSession 独立方法（不属于 AgentSession trait） ──
+
+impl AcpSession {
+    /// 软回收（进程池用）：清空本轮累积的事件缓冲与状态标记，
+    /// **不 kill 子进程**（留给下次复用）。peer/stdout 读取循环由 Drop 终止
+    /// ——池内会话保持长期存活，Drop 延迟到池显式 evict 或进程被系统杀死。
+    /// close/evict 时才硬 kill。
+    pub fn recycle(&mut self) {
+        // 清空文本缓冲（新会话轮次从空开始）
+        if let Ok(mut buf) = self.text_buf.lock() {
+            buf.clear();
+        }
+        // idle 看门狗状态重置（让新轮次从"刚启动"的基线开始计时）
+        self.idle.reset();
+        log::debug!(
+            "[acp] session recycled: session={} agent_session={}",
+            self.session_id,
+            self.remote_id.as_deref().unwrap_or("")
+        );
+    }
+}
+
 impl Drop for AcpSession {
     fn drop(&mut self) {
         // 兜底：本轮如果没走 close（panic / future 被 cancel），这里收尾。
@@ -1483,6 +1590,48 @@ mod tests {
         assert_eq!(resume_plan(true, false, true), ResumePlan::Load);
         // 两者都不支持 → 只能新建（新 id 会回传前端，后续仍可继续）
         assert_eq!(resume_plan(true, false, false), ResumePlan::New);
+    }
+
+    #[test]
+    fn additional_directories_exclude_main_and_deduplicate_links() {
+        let roots = vec![
+            r"C:\Project".to_string(),
+            r"C:\Linked".to_string(),
+            r"C:\Linked".to_string(),
+            "  ".to_string(),
+        ];
+        assert_eq!(
+            additional_directories_for(r"C:\Project", &roots),
+            vec![r"C:\Linked".to_string()]
+        );
+    }
+
+    #[test]
+    fn session_new_only_sends_linked_directories_when_supported() {
+        let roots = vec![r"C:\Project".to_string(), r"C:\Linked".to_string()];
+
+        let unsupported =
+            session_new_params(r"C:\Project", &roots, &json!({"sessionCapabilities": {}}));
+        assert_eq!(unsupported["cwd"], r"C:\Project");
+        assert!(unsupported.get("additionalDirectories").is_none());
+
+        let supported = session_new_params(
+            r"C:\Project",
+            &roots,
+            &json!({"sessionCapabilities": {"additionalDirectories": {}}}),
+        );
+        assert_eq!(supported["additionalDirectories"], json!([r"C:\Linked"]));
+    }
+
+    #[test]
+    fn acp_capabilities_advertise_permission_and_resume() {
+        let caps = capabilities_from_agent(&json!({
+            "loadSession": true,
+            "sessionCapabilities": {"resume": {}}
+        }));
+        assert!(caps.permission);
+        assert!(caps.resume);
+        assert!(caps.tool_events && caps.reasoning && caps.persistent && caps.automatable);
     }
 
     #[test]

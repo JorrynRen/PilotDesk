@@ -23,6 +23,7 @@ pub struct PilotDeskCliRunner {
     agent_manager: Arc<AsyncMutex<AgentManager>>,
     pool: DbPool,
     cwd: String,
+    workspace_roots: Vec<String>,
     /// agent_type -> agent_session_id（跨轮 `--resume` 持续会话）。
     sessions: Mutex<HashMap<String, String>>,
     /// 参与者审批闸门（主持人裁决；ACP 权限请求走这条，与会话/工作流同一契约）。
@@ -40,6 +41,7 @@ impl PilotDeskCliRunner {
         agent_manager: Arc<AsyncMutex<AgentManager>>,
         pool: DbPool,
         cwd: String,
+        workspace_roots: Vec<String>,
         approvals: Arc<dyn crate::agent::transport::ApprovalGate>,
         security: Arc<RwLock<Option<SecurityMode>>>,
         usage_scope: String,
@@ -49,6 +51,7 @@ impl PilotDeskCliRunner {
             agent_manager,
             pool,
             cwd,
+            workspace_roots,
             sessions: Mutex::new(HashMap::new()),
             approvals,
             security,
@@ -81,7 +84,12 @@ impl PilotDeskCliRunner {
             ));
         };
 
-        let resume_session_id = self.sessions.lock().unwrap().get(&descriptor.agent_id).cloned();
+        let resume_session_id = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&descriptor.agent_id)
+            .cloned();
 
         // 正文与对端会话 id 都从统一事件里收：`prompt()` 的回包不保证带 sessionId
         let collected = Arc::new(Mutex::new(String::new()));
@@ -117,6 +125,7 @@ impl PilotDeskCliRunner {
             agent_id: descriptor.agent_id.clone(),
             transport: descriptor.transport,
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
             conn: descriptor.conn.clone(),
             secret: None,
             resume_id: resume_session_id.clone(),
@@ -231,6 +240,7 @@ impl CliRunner for PilotDeskCliRunner {
         let session_key = agent_type.to_string();
         let async_opts = AsyncOptions {
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
             session_id: session_key.clone(),
             source_type: agent_type.to_string(),
             timeout: TimeoutPolicy::llm_inference(),

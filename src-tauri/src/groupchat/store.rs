@@ -18,7 +18,7 @@ pub fn insert_room(conn: &Connection, room: &Room) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO groupchat_rooms
             (id, title, topic, status, strategy, max_rounds, max_parallel,
-             director_id, current_task_id, created_at, updated_at, goal_notes, allow_auto_cli, output_dir)
+             director_id, current_task_id, created_at, updated_at, goal_notes, allow_auto_cli, project_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             room.id,
@@ -34,7 +34,7 @@ pub fn insert_room(conn: &Connection, room: &Room) -> Result<(), AppError> {
             room.updated_at,
             room.goal_notes,
             room.allow_auto_cli,
-            room.output_dir,
+            room.project_id,
         ],
     )?;
     Ok(())
@@ -43,7 +43,7 @@ pub fn insert_room(conn: &Connection, room: &Room) -> Result<(), AppError> {
 pub fn get_room(conn: &Connection, room_id: &str) -> Result<Option<Room>, AppError> {
     conn.query_row(
         "SELECT id, title, topic, status, strategy, max_rounds, max_parallel,
-                director_id, current_task_id, created_at, updated_at, goal_notes, allow_auto_cli, output_dir
+                director_id, current_task_id, created_at, updated_at, goal_notes, allow_auto_cli, project_id
          FROM groupchat_rooms WHERE id = ?1",
         params![room_id],
         row_to_room,
@@ -55,7 +55,7 @@ pub fn get_room(conn: &Connection, room_id: &str) -> Result<Option<Room>, AppErr
 pub fn list_rooms(conn: &Connection) -> Result<Vec<Room>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT id, title, topic, status, strategy, max_rounds, max_parallel,
-                director_id, current_task_id, created_at, updated_at, goal_notes, allow_auto_cli, output_dir
+                director_id, current_task_id, created_at, updated_at, goal_notes, allow_auto_cli, project_id
          FROM groupchat_rooms ORDER BY updated_at DESC",
     )?;
     let rows = stmt.query_map([], row_to_room)?;
@@ -179,18 +179,6 @@ pub fn update_room_goal_notes(
     Ok(())
 }
 
-pub fn update_room_output_dir(
-    conn: &Connection,
-    room_id: &str,
-    output_dir: &str,
-) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE groupchat_rooms SET output_dir = ?1, updated_at = ?2 WHERE id = ?3",
-        params![output_dir, crate::utils::now(), room_id],
-    )?;
-    Ok(())
-}
-
 /// 更新房间的同层任务执行并行上限（`max_parallel`，1-4）。
 /// 执行阶段每波重新读取该值，因此运行中修改只影响下一波次。
 pub fn update_room_max_parallel(
@@ -207,11 +195,7 @@ pub fn update_room_max_parallel(
 
 /// 更新房间的「讨论轮次参考预算」（`max_rounds`）。仅作参考刻度，不做硬上限判定。
 /// `n <= 0` 表示**不设预算**（前端只显示已讨论轮次，不显示分母）。
-pub fn update_room_round_budget(
-    conn: &Connection,
-    room_id: &str,
-    n: i64,
-) -> Result<(), AppError> {
+pub fn update_room_round_budget(conn: &Connection, room_id: &str, n: i64) -> Result<(), AppError> {
     conn.execute(
         "UPDATE groupchat_rooms SET max_rounds = ?1, updated_at = ?2 WHERE id = ?3",
         params![n, crate::utils::now(), room_id],
@@ -234,7 +218,7 @@ fn row_to_room(row: &rusqlite::Row<'_>) -> rusqlite::Result<Room> {
         updated_at: row.get(10)?,
         goal_notes: row.get(11)?,
         allow_auto_cli: row.get(12)?,
-        output_dir: row.get(13)?,
+        project_id: row.get(13)?,
         // 派生字段：由 list_rooms 单独补（见 room_progress）
         current_round: None,
         task_total: None,

@@ -90,8 +90,9 @@ export function SkillPicker({ agentType, onSelect, onClose, dropUp = true }: Ski
   return (
     <div
       ref={containerRef}
-      className={`absolute left-0 ${dropUp ? 'bottom-full mb-2' : 'top-full mt-2'} w-80 rounded-xl shadow-xl overflow-hidden z-50`}
-      style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+      role="listbox"
+      aria-label="选择技能"
+      className={`pd-menu pd-menu-picker absolute left-0 ${dropUp ? 'bottom-full mb-2' : 'top-full mt-2'} z-50 w-80`}
       onKeyDown={handleKeyDown}
     >
       {/* Search */}
@@ -116,7 +117,7 @@ export function SkillPicker({ agentType, onSelect, onClose, dropUp = true }: Ski
       </div>
 
       {/* List */}
-      <div className="max-h-64 overflow-y-auto">
+      <div className="pd-menu-list max-h-64 overflow-y-auto">
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-6">
             <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-secondary)' }} />
@@ -132,11 +133,12 @@ export function SkillPicker({ agentType, onSelect, onClose, dropUp = true }: Ski
           filteredSkills.map((skill, idx) => (
             <button
               key={skill.name}
+              type="button"
+              role="option"
+              aria-selected={idx === selectedIndex}
               onClick={() => handleSelect(skill.name, skill.description)}
-              className="w-full flex items-start gap-2 px-3 py-2 text-left transition-colors"
-              style={{
-                backgroundColor: idx === selectedIndex ? 'var(--bg-tertiary)' : 'transparent',
-              }}
+              className="pd-menu-item items-start"
+              data-active={idx === selectedIndex ? 'true' : undefined}
             >
               <div className="flex-1 min-w-0">
                 <div className="text-xs flex items-center gap-1.5" >
@@ -153,7 +155,7 @@ export function SkillPicker({ agentType, onSelect, onClose, dropUp = true }: Ski
       </div>
 
       {/* Footer hint */}
-      <div className="px-3 py-1.5" style={{ borderTop: '1px solid var(--border)' }}>
+      <div className="pd-menu-footer">
         <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
           ↑↓ 导航 / Enter 选择 / Esc 关闭
         </span>

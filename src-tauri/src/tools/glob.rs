@@ -64,7 +64,14 @@ impl ToolHandler for GlobTool {
             let mut matched = Vec::new();
             for f in files {
                 if re.is_match(&f) {
-                    matched.push(f);
+                    matched.push(
+                        crate::utils::paths::normalize_absolute_path(
+                            &abs_path.join(&f).to_string_lossy(),
+                            &cwd,
+                        )
+                        .to_string_lossy()
+                        .to_string(),
+                    );
                     if matched.len() >= 200 {
                         break;
                     }

@@ -59,9 +59,14 @@ impl ToolHandler for ExecutePythonTool {
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
-        let cwd = arguments["cwd"].as_str().unwrap_or(&self.cwd);
+        let cwd = arguments["cwd"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&self.cwd);
+        let cwd = crate::utils::paths::normalize_absolute_path(cwd, &self.cwd);
         let code = arguments["code"].as_str();
         let file = arguments["file"].as_str();
-        run_python(cwd, code, file).await
+        run_python(&cwd.to_string_lossy(), code, file).await
     }
 }

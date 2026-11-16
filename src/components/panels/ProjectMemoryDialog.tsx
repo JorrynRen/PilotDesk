@@ -1,24 +1,26 @@
 /**
  * ProjectMemoryDialog — 项目记忆预览弹窗
  *
- * 只读预览「当前会话工作区」的记忆根下的 MEMORY.md，并提供跳转到设置页编辑的入口。
+ * 只读预览当前项目主目录（未归属项目时为全局工作空间）的 AGENTS.md，
+ * 并提供跳转到设置页编辑的入口。
  *
  * 为什么是弹窗而不是右侧面板的常驻 tab：它只有一个只读预览 + 一个跳设置按钮，
  * 常驻会白占一个窄面板（260px）顶部的 tab 位；而"看一眼 Agent 现在记住了什么"属于
  * 低频、看一眼就走的动作，弹窗更合适（入口在输入框工具栏）。
  *
- * 口径提示：记忆根由当前会话的 cwd 解析。**"选了会话但 cwd 为空"与"没选会话"是两回事**：
- * 前者是会话用了「全局工作空间」（前端就是写空串，见 InputBar 的 handlePickProjectDir），
- * 此时展示的仍是兜底记忆根，但绝不能说成"未选中会话"—— 用户明明开着会话，
- * 提示对不上现实就会被当成 bug。
+ * 口径提示：普通会话的动态工作根不持久化，由后端按项目主目录/全局工作空间解析；
+ * ACP 宿主导入会话的运行 cwd 虽然是宿主恢复目录，PilotDesk 侧项目文件仍固定在
+ * 项目主目录或全局工作空间；宿主是否加载它由宿主自行处理，不做显式注入。
  */
 
 import { useEffect, useState } from 'react';
 import { MemoryStick, FileText, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useSessionWorkspaceInfo } from '../../hooks/useSessionWorkspaceInfo';
 import { getProjectMemory, type ProjectMemoryInfo } from '../../types';
 import { elide } from '../../utils/text';
+import { normalizeDisplayPath } from '../../utils/path';
 
 interface ProjectMemoryDialogProps {
   onClose: () => void;
@@ -27,31 +29,41 @@ interface ProjectMemoryDialogProps {
 export function ProjectMemoryDialog({ onClose }: ProjectMemoryDialogProps) {
   const navigate = useNavigate();
   const currentSession = useSessionStore((s) => s.sessions.find((x) => x.id === s.currentSessionId));
-  const [mem, setMem] = useState<ProjectMemoryInfo | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { info: workspaceInfo, loading: workspaceLoading } = useSessionWorkspaceInfo(currentSession?.id);
+  const [memoryState, setMemoryState] = useState<{
+    scope: string;
+    mem: ProjectMemoryInfo | null;
+  }>({ scope: '', mem: null });
 
-  const sessionCwd = currentSession?.cwd || '';
   const sessionTitle = currentSession?.title || '';
-  /** 选了会话但 cwd 为空 = 该会话用的是「全局工作空间」，与"没选会话"必须区分 */
   const hasSession = !!currentSession;
+  const hostManaged = hasSession && currentSession?.agentType !== 'api';
+  const memoryRoot = hasSession ? workspaceInfo?.memoryRoot : undefined;
+  const workspaceResolved = !hasSession || (!workspaceLoading && !!workspaceInfo);
+  const memoryScope = workspaceResolved ? `root:${memoryRoot ?? '__global__'}` : null;
+  const mem = memoryScope && memoryState.scope === memoryScope ? memoryState.mem : null;
+  const loading = !memoryScope || memoryState.scope !== memoryScope;
+  const displayMemoryRoot = normalizeDisplayPath(mem?.root ?? memoryRoot);
+  const sourceLabel = !hasSession
+    ? '全局工作空间'
+    : workspaceInfo?.projectId
+      ? '项目主目录'
+      : '全局工作空间';
 
   useEffect(() => {
+    if (!memoryScope) return;
     let disposed = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const m = await getProjectMemory(sessionCwd || undefined);
-        if (!disposed) setMem(m);
-      } catch {
-        if (!disposed) setMem(null);
-      } finally {
-        if (!disposed) setLoading(false);
-      }
-    })();
+    void getProjectMemory(memoryRoot)
+      .then((next) => {
+        if (!disposed) setMemoryState({ scope: memoryScope, mem: next });
+      })
+      .catch(() => {
+        if (!disposed) setMemoryState({ scope: memoryScope, mem: null });
+      });
     return () => {
       disposed = true;
     };
-  }, [sessionCwd]);
+  }, [memoryRoot, memoryScope]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -82,11 +94,9 @@ export function ProjectMemoryDialog({ onClose }: ProjectMemoryDialogProps) {
           <MemoryStick size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
           <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>项目记忆</span>
           <span className="text-[11px] truncate min-w-0" style={{ color: 'var(--text-tertiary)' }}>
-            {sessionCwd
-              ? `当前工作区：${sessionTitle || sessionCwd}`
-              : hasSession
-                ? `当前会话：${sessionTitle || '未命名会话'}`
-                : '未选中会话'}
+            {hasSession
+              ? `${sessionTitle || '未命名会话'} · ${sourceLabel}`
+              : `${sourceLabel}记忆`}
           </span>
           <div className="flex-1" />
           <button
@@ -99,17 +109,14 @@ export function ProjectMemoryDialog({ onClose }: ProjectMemoryDialogProps) {
           </button>
         </div>
 
-        {/* 记忆根来源 —— 未选中会话时显示的是兜底记忆根，必须写明，避免误读成当前项目 */}
+        {/* 记忆根来源：ACP 宿主目录与项目记忆根不是同一个概念，需要明确展示。 */}
         <div className="px-5 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-          {sessionCwd ? (
-            <span className="text-[11px] break-all" style={{ color: 'var(--text-tertiary)' }}>
-              记忆根：{mem?.root ?? '…'}
-            </span>
-          ) : (
-            <span className="text-[11px]" style={{ color: 'var(--status-warning, #f59e0b)' }}>
-              {hasSession
-                ? '当前会话使用「全局工作空间」，展示的是兜底记忆根（非某个项目的记忆）'
-                : '当前未选中会话，展示的是兜底记忆根（非某个项目的记忆）'}
+          <span className="text-[11px] break-all" style={{ color: 'var(--text-tertiary)' }}>
+            {sourceLabel}记忆根：{displayMemoryRoot || '解析中…'}
+          </span>
+          {hostManaged && (
+            <span className="block mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+              该会话由 CLI/ACP 宿主运行；AGENTS.md 是否加载由宿主自行处理，PilotDesk 不向宿主注入内容。
             </span>
           )}
         </div>
@@ -122,11 +129,11 @@ export function ProjectMemoryDialog({ onClose }: ProjectMemoryDialogProps) {
             <div className="flex flex-col items-center justify-center gap-3 py-8">
               <MemoryStick size={26} style={{ color: 'var(--text-tertiary)' }} />
               <span className="text-xs text-center" style={{ color: 'var(--text-secondary)' }}>
-                该工作区还没有 MEMORY.md
+                该工作区还没有 AGENTS.md
               </span>
               {mem && (
-                <span className="text-[10px] max-w-full truncate" style={{ color: 'var(--text-tertiary)' }} title={mem.root}>
-                  记忆根：{mem.root}
+                <span className="text-[10px] max-w-full truncate" style={{ color: 'var(--text-tertiary)' }} title={displayMemoryRoot}>
+                  记忆根：{displayMemoryRoot}
                 </span>
               )}
               <button

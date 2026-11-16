@@ -77,6 +77,7 @@ pub fn build_tool_catalog(
     let memory_limit = crate::api_agent::db::load_memory_max_entries(conn);
     let env = tools::ToolEnv {
         cwd: String::new(),
+        workspace_roots: Vec::new(),
         api_format: ApiFormat::OpenAI,
         image: Some((String::new(), String::new())),
         vision: Some((String::new(), String::new())),
@@ -161,6 +162,15 @@ pub fn build_tool_catalog(
         &session_profile,
         &groupchat_profile,
     ));
+
+    // 工作检索工具持连接池、不在 default_tools 中；目录复用真实实例元数据。
+    for tool in tools::work_history::tools(pool.clone()) {
+        items.push(to_catalog_item(
+            tool.as_ref(),
+            &session_profile,
+            &groupchat_profile,
+        ));
+    }
 
     // 内部能力项：文件历史（非 LLM 工具，write_file/edit_file 的自动副作用）。
     // 与内建工具同构纳入清单，支持按场景差异化禁用（overrides 追加禁用）。

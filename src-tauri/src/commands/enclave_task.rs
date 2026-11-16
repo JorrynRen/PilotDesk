@@ -13,7 +13,9 @@ use tauri::State;
 use crate::enclave::authz;
 use crate::enclave::files::{self, FileAssetView};
 use crate::enclave::reports::{self, FeedbackView, ReportView};
-use crate::enclave::tasks::{self, CreateTaskInput, DepsPreview, TaskView, UpdateTaskInput};
+use crate::enclave::tasks::{
+    self, CreateTaskInput, DepsPreview, PendingTaskSummary, TaskView, UpdateTaskInput,
+};
 use crate::enclave::EnclaveState;
 
 /// 角色缺失时的提示：区分「没登录」与「登录了但快照没同步」。
@@ -57,8 +59,7 @@ where
             Ok(out)
         }
         Some(_) => {
-            let data =
-                crate::enclave::host::call_host(state, db, org_id, command, payload).await?;
+            let data = crate::enclave::host::call_host(state, db, org_id, command, payload).await?;
             serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
         }
         None => Err(role_missing(state)),
@@ -81,6 +82,31 @@ pub async fn enclave_task_list(
         "task.list",
         json!({}),
         |c, actor| tasks::list_tasks(c, &org_id, actor),
+    )
+    .await
+}
+
+/// 当前账号在组织内真正需要处理的任务数。
+///
+/// 口径：
+/// - 分配给我（或由我创建且尚未分配）、未被前置依赖阻塞的 `pending` 任务；
+/// - 我作为创建者或负责人、当前处于 `submitted` 的汇报。
+///
+/// 汇总容器（有子任务）自身不执行，不进入待办计数。主机在本地库统计；
+/// 成员走独立的 `task.pending_summary` 通道，网络只返回一个很小的汇总对象。
+#[tauri::command]
+pub async fn enclave_task_pending_summary(
+    db: State<'_, crate::DbState>,
+    org_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<PendingTaskSummary, String> {
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.pending_summary",
+        json!({}),
+        |c, actor| tasks::pending_summary(c, &org_id, actor),
     )
     .await
 }
@@ -597,9 +623,7 @@ pub async fn enclave_report_return(
         &org_id,
         "report.return",
         payload,
-        |c, actor| {
-            reports::return_report(c, &org_id, actor, &task_id, &report_id, &reason)
-        },
+        |c, actor| reports::return_report(c, &org_id, actor, &task_id, &report_id, &reason),
     )
     .await
 }
@@ -629,13 +653,15 @@ pub async fn enclave_report_feedback_list(
 
 /// 组织成员才可读组织知识库（默认拒绝：无快照 → 拒绝）。
 fn ensure_kb_view(conn: &rusqlite::Connection, org_id: &str) -> Result<(), String> {
-    authz::role_for_org(conn, org_id)?.map(|_| ()).ok_or_else(|| {
-        if authz::has_identity(conn).unwrap_or(true) {
-            "尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()
-        } else {
-            "请先登录平台账号后使用团队功能".to_string()
-        }
-    })
+    authz::role_for_org(conn, org_id)?
+        .map(|_| ())
+        .ok_or_else(|| {
+            if authz::has_identity(conn).unwrap_or(true) {
+                "尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()
+            } else {
+                "请先登录平台账号后使用团队功能".to_string()
+            }
+        })
 }
 
 #[tauri::command]
@@ -845,9 +871,7 @@ pub async fn enclave_kb_entry_file_detach(
         payload,
         |c, _actor| {
             authz::authorize(c, &org_id, authz::Action::KbEdit)?;
-            crate::enclave::knowledge::detach_entry_file(
-                c, &org_id, &kb_id, &memory_id, &file_id,
-            )
+            crate::enclave::knowledge::detach_entry_file(c, &org_id, &kb_id, &memory_id, &file_id)
         },
     )
     .await
@@ -1262,13 +1286,8 @@ pub async fn enclave_file_abs_path(
             .store
             .with_conn(|c| files::file_abs_path(c, &org_id, &file_id)),
         Some(_) => {
-            crate::enclave::host::fetch_file_to_cache(
-                state.inner(),
-                db.inner(),
-                &org_id,
-                &file_id,
-            )
-            .await
+            crate::enclave::host::fetch_file_to_cache(state.inner(), db.inner(), &org_id, &file_id)
+                .await
         }
         None => Err(role_missing(state.inner())),
     }
@@ -1465,7 +1484,11 @@ fn compute_team_capability(
         }
     }
     TeamIngestCapability {
-        can_process: if is_internal { "local".into() } else { "cloud".into() },
+        can_process: if is_internal {
+            "local".into()
+        } else {
+            "cloud".into()
+        },
         provider_name: model.provider_name,
         model: model.model,
         trust_domain: trust.as_str().into(),
@@ -1476,9 +1499,9 @@ fn compute_team_capability(
 
 fn cache_team_capability(state: &EnclaveState, org_id: &str, cap: &TeamIngestCapability) {
     let json = serde_json::to_string(cap).unwrap_or_default();
-    let _ = state.store.with_conn(|c| {
-        crate::enclave::knowledge::save_ingest_capability(c, org_id, &json)
-    });
+    let _ = state
+        .store
+        .with_conn(|c| crate::enclave::knowledge::save_ingest_capability(c, org_id, &json));
 }
 
 #[tauri::command]
@@ -1495,11 +1518,13 @@ pub async fn enclave_kb_ingest_capability(
         }
         Some(_) => {
             let cached = state.store.with_conn(|c| {
-                Ok(crate::enclave::knowledge::load_ingest_capability(c, &org_id))
+                Ok(crate::enclave::knowledge::load_ingest_capability(
+                    c, &org_id,
+                ))
             })?;
-            let pending = state.store.with_conn(|c| {
-                Ok(crate::enclave::knowledge::ingest_queue_pending(c, &org_id))
-            })?;
+            let pending = state
+                .store
+                .with_conn(|c| Ok(crate::enclave::knowledge::ingest_queue_pending(c, &org_id)))?;
             let mut cap = cached
                 .and_then(|json| serde_json::from_str::<TeamIngestCapability>(&json).ok())
                 .unwrap_or_else(|| empty_capability("主机尚未上报加工能力", pending));
@@ -1527,11 +1552,7 @@ pub async fn enclave_kb_queue_list(
         "kb.queue.list",
         payload,
         move |c, _actor| {
-            crate::enclave::knowledge::list_ingest_queue(
-                c,
-                &org_for_query,
-                kb_for_query.as_deref(),
-            )
+            crate::enclave::knowledge::list_ingest_queue(c, &org_for_query, kb_for_query.as_deref())
         },
     )
     .await
@@ -1586,14 +1607,12 @@ pub async fn enclave_kb_queue_run(
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TeamQueueRunOutcome, String> {
     match state.store.with_conn(|c| authz::role_for_org(c, &org_id))? {
-        Some(authz::Role::Owner) => {
-            drain_team_queue(db.inner(), state.inner(), &org_id, 10).await
-        }
+        Some(authz::Role::Owner) => drain_team_queue(db.inner(), state.inner(), &org_id, 10).await,
         Some(_) => {
             // 成员无法在本地执行（不缓存团队数据）：主机后台循环会接手
-            let remaining = state.store.with_conn(|c| {
-                Ok(crate::enclave::knowledge::ingest_queue_pending(c, &org_id))
-            })?;
+            let remaining = state
+                .store
+                .with_conn(|c| Ok(crate::enclave::knowledge::ingest_queue_pending(c, &org_id)))?;
             Ok(TeamQueueRunOutcome {
                 done: 0,
                 failed: 0,
@@ -1629,12 +1648,8 @@ pub async fn enclave_kb_ingest_preview(
             let row = crate::enclave::knowledge::get_ingest(c, &org_for_write, &qid)?;
             let p: serde_json::Value =
                 serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
-            let (title, content, _) = crate::enclave::knowledge::manual_ingest_text(
-                c,
-                &org_for_write,
-                &row.kind,
-                &p,
-            )?;
+            let (title, content, _) =
+                crate::enclave::knowledge::manual_ingest_text(c, &org_for_write, &row.kind, &p)?;
             Ok(TeamIngestPreview { title, content })
         },
     )
@@ -1708,9 +1723,9 @@ pub async fn enclave_kb_ingest_file(
     let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
     let kb = match kb_id {
         Some(k) => k,
-        None => state.store.with_conn(|c| {
-            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
-        })?,
+        None => state
+            .store
+            .with_conn(|c| crate::enclave::knowledge::ensure_org_kb(c, &org_id, ""))?,
     };
     match role {
         Some(authz::Role::Owner) => {
@@ -1745,13 +1760,9 @@ pub async fn enclave_kb_ingest_file(
                 .and_then(|s| s.to_str())
                 .unwrap_or("file")
                 .to_string();
-            let token = crate::enclave::host::upload_temp_file(
-                state.inner(),
-                db.inner(),
-                &org_id,
-                &path,
-            )
-            .await?;
+            let token =
+                crate::enclave::host::upload_temp_file(state.inner(), db.inner(), &org_id, &path)
+                    .await?;
             let data = crate::enclave::host::call_host(
                 state.inner(),
                 db.inner(),
@@ -1784,15 +1795,18 @@ pub async fn enclave_kb_generate(
     }
     let kb = match kb_id {
         Some(k) => k,
-        None => state.store.with_conn(|c| {
-            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
-        })?,
+        None => state
+            .store
+            .with_conn(|c| crate::enclave::knowledge::ensure_org_kb(c, &org_id, ""))?,
     };
-    let (kb_name, fields_json) = state.store.with_conn(|c| {
-        crate::enclave::knowledge::kb_meta(c, &org_id, &kb)
-    })?;
+    let (kb_name, fields_json) = state
+        .store
+        .with_conn(|c| crate::enclave::knowledge::kb_meta(c, &org_id, &kb))?;
     let model = {
-        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
+        let conn = db
+            .pool
+            .get()
+            .map_err(|e| format!("取主库连接失败：{}", e))?;
         crate::api_agent::kb_llm::resolve_kb_model(&conn)
             .map_err(|e| format!("没有可用模型：{}", e))?
     };
@@ -1967,9 +1981,9 @@ pub async fn enclave_kb_ingest_snippet(
     let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
     let kb = match kb_id {
         Some(k) => k,
-        None => state.store.with_conn(|c| {
-            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
-        })?,
+        None => state
+            .store
+            .with_conn(|c| crate::enclave::knowledge::ensure_org_kb(c, &org_id, ""))?,
     };
     match role {
         Some(authz::Role::Owner) => {
@@ -2026,9 +2040,9 @@ pub async fn enclave_kb_ingest_url(
     let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
     let kb = match kb_id {
         Some(k) => k,
-        None => state.store.with_conn(|c| {
-            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
-        })?,
+        None => state
+            .store
+            .with_conn(|c| crate::enclave::knowledge::ensure_org_kb(c, &org_id, ""))?,
     };
     match role {
         Some(authz::Role::Owner) => {
@@ -2079,9 +2093,9 @@ async fn snapshot_pending_urls(
     if max == 0 {
         return Ok(0);
     }
-    let rows = state.store.with_conn(|c| {
-        crate::enclave::knowledge::list_ingest_queue(c, org_id, None)
-    })?;
+    let rows = state
+        .store
+        .with_conn(|c| crate::enclave::knowledge::list_ingest_queue(c, org_id, None))?;
     let mut done = 0usize;
     let mut tried = 0usize;
     for row in rows {
@@ -2095,7 +2109,9 @@ async fn snapshot_pending_urls(
         }
         let payload: serde_json::Value =
             serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
-        let Some(obj) = payload.as_object() else { continue };
+        let Some(obj) = payload.as_object() else {
+            continue;
+        };
         let has_file = obj
             .get("fileId")
             .and_then(|v| v.as_str())
@@ -2122,8 +2138,8 @@ async fn snapshot_pending_urls(
         let fetched: Result<(String, crate::api_agent::knowledge::IngestPrep), String> = async {
             let html = crate::commands::knowledge::load_page(&url).await?;
             let text = crate::tools::browser::html_to_markdown(&html);
-            let title = name
-                .unwrap_or_else(|| crate::commands::knowledge::extract_title(&html, &url));
+            let title =
+                name.unwrap_or_else(|| crate::commands::knowledge::extract_title(&html, &url));
             let prep = crate::api_agent::knowledge::prepare_web(&title, &text)?;
             Ok((title, prep))
         }
@@ -2132,9 +2148,9 @@ async fn snapshot_pending_urls(
         let mut next = payload.clone();
         match fetched {
             Ok((title, prep)) => {
-                let imported = state.store.with_conn(|c| {
-                    files::import_bytes(c, org_id, &prep.name, &prep.write_bytes)
-                })?;
+                let imported = state
+                    .store
+                    .with_conn(|c| files::import_bytes(c, org_id, &prep.name, &prep.write_bytes))?;
                 if let Some(o) = next.as_object_mut() {
                     o.insert("fileId".into(), json!(imported.file_id));
                     o.insert("fileName".into(), json!(imported.file_name));
@@ -2198,9 +2214,9 @@ async fn drain_team_queue(
     let mut failed = 0usize;
     let mut stopped = false;
     for _ in 0..max {
-        let row = state.store.with_conn(|c| {
-            crate::enclave::knowledge::claim_next_ingest(c, org_id)
-        })?;
+        let row = state
+            .store
+            .with_conn(|c| crate::enclave::knowledge::claim_next_ingest(c, org_id))?;
         let Some(row) = row else { break };
         match process_team_queue_row(db, state, org_id, &row).await {
             Ok(n) => {
@@ -2224,9 +2240,9 @@ async fn drain_team_queue(
             }
         }
     }
-    let remaining = state.store.with_conn(|c| {
-        Ok(crate::enclave::knowledge::ingest_queue_pending(c, org_id))
-    })?;
+    let remaining = state
+        .store
+        .with_conn(|c| Ok(crate::enclave::knowledge::ingest_queue_pending(c, org_id)))?;
     Ok(TeamQueueRunOutcome {
         done,
         failed,
@@ -2249,15 +2265,22 @@ async fn process_team_queue_row(
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
-    let (kb_name, fields_json) = state.store.with_conn(|c| {
-        crate::enclave::knowledge::kb_meta(c, org_id, &row.kb_id)
-    })?;
+    let (kb_name, fields_json) = state
+        .store
+        .with_conn(|c| crate::enclave::knowledge::kb_meta(c, org_id, &row.kb_id))?;
     let model = {
-        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
-        crate::api_agent::kb_llm::resolve_kb_model(&conn).map_err(|e| format!("模型不可用：{}", e))?
+        let conn = db
+            .pool
+            .get()
+            .map_err(|e| format!("取主库连接失败：{}", e))?;
+        crate::api_agent::kb_llm::resolve_kb_model(&conn)
+            .map_err(|e| format!("模型不可用：{}", e))?
     };
     let (trust, actor) = {
-        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
+        let conn = db
+            .pool
+            .get()
+            .map_err(|e| format!("取主库连接失败：{}", e))?;
         let trust = crate::commands::api_provider::provider_trust_domain(&conn, &model.provider_id);
         drop(conn);
         let actor = state
@@ -2308,14 +2331,11 @@ async fn process_team_queue_row(
         }
         "file" => {
             // 只认 file_assets（fileId）：投喂后文件可能被重命名/移动，relPath 只是快照。
-            let file_id = payload
-                .get("fileId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let file_id = payload.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
             let abs = if !file_id.is_empty() {
-                state.store.with_conn(|c| {
-                    files::file_meta(c, org_id, file_id).map(|m| m.abs_path)
-                })?
+                state
+                    .store
+                    .with_conn(|c| files::file_meta(c, org_id, file_id).map(|m| m.abs_path))?
             } else {
                 let rel = payload
                     .get("relPath")
@@ -2328,10 +2348,8 @@ async fn process_team_queue_row(
                         .to_string())
                 })?
             };
-            let prep = crate::api_agent::knowledge::prepare_file(
-                std::path::Path::new(&abs),
-                false,
-            )?;
+            let prep =
+                crate::api_agent::knowledge::prepare_file(std::path::Path::new(&abs), false)?;
             if prep.blocks.is_empty() {
                 return Err("该格式暂不支持抽取正文（原文已入库）".into());
             }
@@ -2351,9 +2369,8 @@ async fn process_team_queue_row(
             )
             .await
             .map_err(|e| format!("模型整理未生效：{}", e))?;
-            let (chunks, _truncated) = crate::api_agent::knowledge::assemble_plans(
-                &prep, &blocks, &plans,
-            );
+            let (chunks, _truncated) =
+                crate::api_agent::knowledge::assemble_plans(&prep, &blocks, &plans);
             let digest = &crate::api_agent::knowledge::sha256_hex(prep.sha.as_bytes())[..16];
             chunks
                 .iter()
@@ -2383,7 +2400,9 @@ async fn process_team_queue_row(
             let name = payload.get("name").and_then(|v| v.as_str());
             // 投喂时已把原文快照存成团队文件：整理只读这份快照，页面改版/下线都不影响
             let (page_title, prep) = if let Some(fid) = file_id_opt.as_deref() {
-                let meta = state.store.with_conn(|c| files::file_meta(c, org_id, fid))?;
+                let meta = state
+                    .store
+                    .with_conn(|c| files::file_meta(c, org_id, fid))?;
                 let text = std::fs::read_to_string(&meta.abs_path)
                     .map_err(|e| format!("读取网址原文快照失败：{}", e))?;
                 let title = payload
@@ -2509,22 +2528,16 @@ pub async fn enclave_task_split_preview(
                         t.status
                  FROM org_tasks t WHERE t.id = ?1 AND t.org_id = ?2",
             rusqlite::params![task_id, org_id],
-            |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                ))
-            },
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()
         .map_err(|e| format!("读取任务失败：{}", e))?
         .ok_or_else(|| "任务不存在或不属于该组织".to_string())
     })?;
     if parent_task_id.as_deref().is_some_and(|p| !p.is_empty()) {
-        return Err("该任务本身就是子任务，只能对顶层任务做 AI 拆解（系统只支持一层父子）".to_string());
+        return Err(
+            "该任务本身就是子任务，只能对顶层任务做 AI 拆解（系统只支持一层父子）".to_string(),
+        );
     }
     if child_count > 0 {
         return Err("该任务已经是汇总容器，请对它的子任务单独拆解".to_string());
@@ -2533,7 +2546,10 @@ pub async fn enclave_task_split_preview(
         return Err("任务已归档或作废，无法拆解".to_string());
     }
     let model = {
-        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
+        let conn = db
+            .pool
+            .get()
+            .map_err(|e| format!("取主库连接失败：{}", e))?;
         crate::api_agent::kb_llm::resolve_kb_model(&conn)
             .map_err(|e| format!("没有可用模型：{}", e))?
     };
@@ -2579,9 +2595,7 @@ pub async fn run_enclave_kb_queue_loop(db: crate::DbState, state: Arc<EnclaveSta
     loop {
         let hosts = state
             .store
-            .with_conn(|c| {
-                crate::enclave::org::host_org_ids(c, &crate::enclave::host::device_id())
-            })
+            .with_conn(|c| crate::enclave::org::host_org_ids(c, &crate::enclave::host::device_id()))
             .unwrap_or_default();
         for org_id in hosts {
             let cap = compute_team_capability(&db, &state, &org_id);
@@ -2589,9 +2603,7 @@ pub async fn run_enclave_kb_queue_loop(db: crate::DbState, state: Arc<EnclaveSta
             if cap.pending > 0 {
                 // 网址原文落盘不依赖模型：无模型时也要先有原文（文件页可见、可手工入库）
                 match snapshot_pending_urls(&state, &org_id, 3).await {
-                    Ok(n) if n > 0 => {
-                        crate::enclave::host::notify_change(&state, &org_id, "kb")
-                    }
+                    Ok(n) if n > 0 => crate::enclave::host::notify_change(&state, &org_id, "kb"),
                     _ => {}
                 }
             }

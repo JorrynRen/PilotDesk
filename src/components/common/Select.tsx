@@ -54,6 +54,12 @@ export interface SelectProps {
    */
   variant?: 'field' | 'ghost';
   title?: string;
+  /** 无可见 label 时的可访问名称；与 title 分开，避免只能依赖浏览器 tooltip。 */
+  ariaLabel?: string;
+  /** 仅显示图标（用于空间受限的工具栏）；必须同时提供 ariaLabel。 */
+  iconOnly?: boolean;
+  /** iconOnly 时显示的图标；缺省仍显示当前值首字，避免出现空按钮。 */
+  triggerIcon?: ReactNode;
   /** 展开方向偏好；默认 auto：下方空间不足且上方更宽裕时自动向上展开 */
   prefer?: 'auto' | 'up' | 'down';
   /** 面板最小宽度（px），默认与触发按钮同宽 */
@@ -86,6 +92,9 @@ export function Select({
   size = 'md',
   variant = 'field',
   title,
+  ariaLabel,
+  iconOnly = false,
+  triggerIcon,
   prefer = 'auto',
   panelMinWidth,
   searchable = false,
@@ -247,8 +256,11 @@ export function Select({
         ref={btnRef}
         type="button"
         title={title}
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        aria-haspopup="listbox"
         disabled={disabled}
-        className={`flex items-center justify-between text-left ${
+        className={`flex items-center ${iconOnly ? 'justify-center' : 'justify-between text-left'} ${
           ghost
             ? 'gap-1.5 rounded-lg transition-colors text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
             : 'gap-2'
@@ -257,7 +269,7 @@ export function Select({
           // ghost 与顶栏「知识库 / 飞地 / 门户」同形：32px 高（18px 行高 + 上下 7px）、12px 字。
           // 颜色只由 class 给 —— 行内 color 的优先级高于 `hover:text-*`，会让 hover 失效。
           height: ghost ? 32 : h,
-          padding: ghost ? '7px 10px' : pad,
+          padding: iconOnly ? 0 : ghost ? '7px 10px' : pad,
           fontSize: ghost ? 12 : fs,
           ...(ghost
             ? {}
@@ -278,16 +290,22 @@ export function Select({
           setActive(Math.max(0, flat.findIndex((o) => o.value === value)));
         }}
       >
-        <span className="truncate">{current ? current.label : placeholder}</span>
-        <ChevronDown
-          size={chevron}
-          style={{
-            flexShrink: 0,
-            opacity: 0.7,
-            transform: open ? 'rotate(180deg)' : 'none',
-            transition: 'transform .15s',
-          }}
-        />
+        {iconOnly ? (
+          triggerIcon
+        ) : (
+          <>
+            <span className="truncate">{current ? current.label : placeholder}</span>
+            <ChevronDown
+              size={chevron}
+              style={{
+                flexShrink: 0,
+                opacity: 0.7,
+                transform: open ? 'rotate(180deg)' : 'none',
+                transition: 'transform .15s',
+              }}
+            />
+          </>
+        )}
       </button>
 
       {open &&

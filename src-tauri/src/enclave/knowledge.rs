@@ -190,11 +190,7 @@ fn normalize_field_schema(raw: &str) -> Result<String, String> {
         .ok_or_else(|| "专属属性定义必须是数组".to_string())?;
     let mut seen = std::collections::HashSet::new();
     for f in arr {
-        let key = f
-            .get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+        let key = f.get("key").and_then(|v| v.as_str()).unwrap_or("").trim();
         if key.is_empty() {
             return Err("专属属性的存储键不能为空".to_string());
         }
@@ -303,7 +299,8 @@ pub fn delete_kb(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(), Str
         conn.query_row(sql, params![kb_id], |r| r.get(0))
             .map_err(|e| format!("校验知识库内容失败：{}", e))
     };
-    let entries = count("SELECT COUNT(*) FROM knowledge_base_memories WHERE knowledge_base_id = ?1")?;
+    let entries =
+        count("SELECT COUNT(*) FROM knowledge_base_memories WHERE knowledge_base_id = ?1")?;
     if entries > 0 {
         return Err(format!("库里还有 {} 条知识，先移除后再删除", entries));
     }
@@ -418,8 +415,7 @@ pub fn list_files_page(
          WHERE kbf.knowledge_base_id {scope}
          ORDER BY kbf.added_at DESC, fa.file_name"
     );
-    let mut args: Vec<rusqlite::types::Value> =
-        vec![rusqlite::types::Value::Text(key.to_string())];
+    let mut args: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::Text(key.to_string())];
     if let Some(l) = limit {
         sql.push_str(" LIMIT ?");
         args.push(l.clamp(1, 5000).into());
@@ -605,9 +601,7 @@ pub fn link_file_relation(
             .optional()
             .map_err(|e| format!("查询文件关系失败：{}", e))?;
         match next {
-            Some(n) if n == from => {
-                return Err("这会形成循环关系，请先调整已有的关系".to_string())
-            }
+            Some(n) if n == from => return Err("这会形成循环关系，请先调整已有的关系".to_string()),
             Some(n) => cursor = n,
             None => break,
         }
@@ -673,11 +667,14 @@ fn map_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<KbEntryView> {
         tags: r.get(3)?,
         origin: r.get(4)?,
         source_ref: r.get(5)?,
-        metadata: serde_json::from_str(&metadata_raw)
-            .unwrap_or_else(|_| serde_json::json!({})),
+        metadata: serde_json::from_str(&metadata_raw).unwrap_or_else(|_| serde_json::json!({})),
         added_by: r.get(7)?,
         added_at,
-        updated_at: if updated_at == 0 { added_at } else { updated_at },
+        updated_at: if updated_at == 0 {
+            added_at
+        } else {
+            updated_at
+        },
         stale: r.get::<_, i64>(9)? != 0,
         files: Vec::new(),
     })
@@ -744,7 +741,10 @@ fn attach_files(conn: &Connection, entries: &mut [KbEntryView]) -> Result<(), St
             .map_err(|e| format!("查询知识库文件失败：{}", e))?;
         for row in rows {
             let (memory_id, file) = row.map_err(|e| format!("读取知识库文件失败：{}", e))?;
-            grouped.entry((kb_id.clone(), memory_id)).or_default().push(file);
+            grouped
+                .entry((kb_id.clone(), memory_id))
+                .or_default()
+                .push(file);
         }
     }
     for e in entries.iter_mut() {
@@ -1294,8 +1294,7 @@ pub fn update_entry(
     )
     .map_err(|e| format!("保存知识条目失败：{}", e))?;
 
-    get_entry(conn, org_id, kb_id, memory_id)?
-        .ok_or_else(|| "知识条目不存在".to_string())
+    get_entry(conn, org_id, kb_id, memory_id)?.ok_or_else(|| "知识条目不存在".to_string())
 }
 
 /// 移除条目（仅 owner / admin，授权在命令层）；附件关联一并清除，原件仍归任务侧管理。
@@ -1684,7 +1683,8 @@ pub fn manual_ingest_text(
                     )
                 }
             };
-            let prep = crate::api_agent::knowledge::prepare_file(std::path::Path::new(&abs), false)?;
+            let prep =
+                crate::api_agent::knowledge::prepare_file(std::path::Path::new(&abs), false)?;
             let title = file_name
                 .rsplit_once('.')
                 .map(|(s, _)| s)
@@ -1870,7 +1870,11 @@ pub fn write_ingest_entries(
                 e.tags,
                 origin,
                 source_ref,
-                if e.metadata.trim().is_empty() { "{}" } else { &e.metadata },
+                if e.metadata.trim().is_empty() {
+                    "{}"
+                } else {
+                    &e.metadata
+                },
                 actor,
                 now
             ],
@@ -1904,11 +1908,7 @@ pub fn kb_meta(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(String, 
 }
 
 /// 加工能力缓存：主机侧算好写进 `enclave_settings`，成员端读同一份（成员没有主库，无法自行解析 Provider）。
-pub fn save_ingest_capability(
-    conn: &Connection,
-    org_id: &str,
-    json: &str,
-) -> Result<(), String> {
+pub fn save_ingest_capability(conn: &Connection, org_id: &str, json: &str) -> Result<(), String> {
     let key = format!("kb_ingest_capability:{}", org_id);
     conn.execute(
         "INSERT INTO enclave_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
@@ -1990,7 +1990,11 @@ pub fn add_candidate(
             title,
             content,
             tags,
-            if metadata.trim().is_empty() { "{}" } else { metadata },
+            if metadata.trim().is_empty() {
+                "{}"
+            } else {
+                metadata
+            },
             origin,
             actor,
             now
@@ -2089,8 +2093,7 @@ pub fn adopt_candidate(
         params![id, org_id],
     )
     .map_err(|e| format!("删除候选失败：{}", e))?;
-    get_entry(conn, org_id, kb_id, &memory_id)?
-        .ok_or_else(|| "采纳后未找到知识条目".to_string())
+    get_entry(conn, org_id, kb_id, &memory_id)?.ok_or_else(|| "采纳后未找到知识条目".to_string())
 }
 
 pub fn reject_candidate(
@@ -2288,7 +2291,9 @@ mod tests {
         assert_eq!(list[0].to_file_id, "f2");
 
         assert!(unlink_file_relation(&conn, "8", "kb-org-8", REL_ATTACHMENT, "f1", "f2").unwrap());
-        assert!(list_file_relations(&conn, "8", "kb-org-8").unwrap().is_empty());
+        assert!(list_file_relations(&conn, "8", "kb-org-8")
+            .unwrap()
+            .is_empty());
         assert!(!unlink_file_relation(&conn, "8", "kb-org-8", REL_ATTACHMENT, "f1", "f2").unwrap());
     }
 
@@ -2310,16 +2315,16 @@ mod tests {
         let unknown =
             link_file_relation(&conn, "8", "kb-org-8", "1", "contains", "f1", "f2").unwrap_err();
         assert!(unknown.contains("未知"), "{}", unknown);
-        let own =
-            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f1").unwrap_err();
+        let own = link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f1")
+            .unwrap_err();
         assert!(own.contains("自己"), "{}", own);
-        let outside =
-            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f9").unwrap_err();
+        let outside = link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f9")
+            .unwrap_err();
         assert!(outside.contains("不在当前知识库"), "{}", outside);
 
         link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
-        let occupied =
-            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f3", "f2").unwrap_err();
+        let occupied = link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f3", "f2")
+            .unwrap_err();
         assert!(occupied.contains("另一个文件的附件"), "{}", occupied);
     }
 
@@ -2330,8 +2335,8 @@ mod tests {
         seed_kb_file(&conn, "m1", "f1", "A.txt");
         seed_kb_file(&conn, "m1", "f2", "B.txt");
         link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
-        let err =
-            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f2", "f1").unwrap_err();
+        let err = link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f2", "f1")
+            .unwrap_err();
         assert!(err.contains("循环"), "{}", err);
     }
 
@@ -2342,10 +2347,15 @@ mod tests {
         seed_kb_file(&conn, "m1", "f1", "正文.docx");
         seed_kb_file(&conn, "m2", "f2", "附件.pdf");
         link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
-        assert_eq!(list_file_relations(&conn, "8", "kb-org-8").unwrap().len(), 1);
+        assert_eq!(
+            list_file_relations(&conn, "8", "kb-org-8").unwrap().len(),
+            1
+        );
 
         remove_entry(&conn, "8", "kb-org-8", "m2").unwrap();
-        assert!(list_file_relations(&conn, "8", "kb-org-8").unwrap().is_empty());
+        assert!(list_file_relations(&conn, "8", "kb-org-8")
+            .unwrap()
+            .is_empty());
         let rows: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM knowledge_base_file_relations WHERE knowledge_base_id = 'kb-org-8'",

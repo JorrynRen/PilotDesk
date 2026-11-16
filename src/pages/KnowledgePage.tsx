@@ -9,15 +9,13 @@
  * 分类 / 标签 / 热度 / 重要，专属属性按「库 × 条目」各存一份。
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Library, Plus, Pencil, Trash2, Layers, Sparkles, Network, Search, Loader2, FolderOpen, X,
 } from 'lucide-react';
-import { TitleBar, StatusBar } from '../components/layout';
+import { WorkbenchAssetPage } from '../components/layout';
 import { PageToolbar, type ToolbarAction } from '../components/common/PageToolbar';
-import { useTerminal, type ViewMode } from '../TerminalManager';
 import { makeBaseId, useKnowledgeStore, type KnowledgeTab } from '../stores/knowledgeStore';
 import { KnowledgeEntryList } from '../components/knowledge/KnowledgeEntryList';
 import { KnowledgeFileList } from '../components/knowledge/KnowledgeFileList';
@@ -42,9 +40,6 @@ const TAB_META: Record<KnowledgeTab, { label: string; icon: typeof Search }> = {
 };
 
 export function KnowledgePage() {
-  const { viewMode, setMode } = useTerminal();
-  const navigate = useNavigate();
-
   const bases = useKnowledgeStore((s) => s.bases);
   const entries = useKnowledgeStore((s) => s.entries);
   const files = useKnowledgeStore((s) => s.files);
@@ -73,12 +68,6 @@ export function KnowledgePage() {
       void useKnowledgeStore.getState().ensureAllEntries();
     }
   }, [activeTab, activeBaseId]);
-
-  // 组合开关点击：切模式并回到主布局（与设置页同一套处理）
-  const handleModeChange = useCallback((mode: ViewMode) => {
-    setMode(mode);
-    navigate('/');
-  }, [setMode, navigate]);
 
   // entries / files / candidates 已经是「当前库」的内容（过滤在后端做，切库即重拉）
   //
@@ -113,24 +102,13 @@ export function KnowledgePage() {
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <TitleBar
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        rightPanelOpen={false}
-        showBackButton={false}
-        knowledgeOpen
-        onOpenKnowledge={() => { /* 已在知识库页，无需动作 */ }}
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')}
-      />
-      <div className="flex-1 min-h-0 px-2 flex gap-2">
+    <WorkbenchAssetPage contextLabel="知识库" activeAsset="knowledge" frameless>
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="knowledge-page-body flex-1 min-h-0 flex gap-2">
       {/* gap-2：左栏与右侧内容区之间留出"底"色的缝 —— 否则左栏（--bg-side）与内容区里同为
           --bg-side 的属性面板会左右紧贴、连成一片（同色 + 相邻 = 看不出是两块）。 */}
         {/* 左：知识库列表 */}
-        <aside className="w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-side)' }}>
+        <aside className="knowledge-base-pane w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-side)' }}>
           <div className="h-10 shrink-0 px-3 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
             <Library size={13} style={{ color: 'var(--accent)' }} />
             <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>知识库</span>
@@ -148,14 +126,15 @@ export function KnowledgePage() {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          <div className="knowledge-base-list flex-1 overflow-y-auto py-2">
             {bases.map((b) => {
               const active = base?.id === b.id;
+              const pendingCount = active && !loading ? candidates.length : b.pendingCount;
               return (
                 <button
                   key={b.id}
                   onClick={() => void useKnowledgeStore.getState().selectBase(b.id)}
-                  className="relative w-full text-left px-2.5 py-2 rounded-lg transition-colors"
+                  className={`knowledge-base-item relative w-full text-left transition-colors ${active ? 'is-active' : ''}`}
                   style={{
                     // 卡片要「标题 / 描述 / 统计」纵向三行，但全局 button 重置把 <button> 定成了
                     // inline-flex + row + gap 4（未分层，优先级高于 Tailwind 的 flex-col 工具类），
@@ -164,24 +143,14 @@ export function KnowledgePage() {
                     flexDirection: 'column',
                     alignItems: 'stretch',
                     gap: 0,
-                    // 卡片态：未选中也要有边框，否则一堆卡片贴在侧栏底色上，边界全糊在一起。
-                    // 选中态**统一按会话列表（`SessionListItem`）的口径**：选中 = `var(--border)` 底、
-                    // 未选中 = 透明（卡片描边另给）。
-                    backgroundColor: active ? 'var(--border)' : 'transparent',
-                    border: '1px solid var(--border)',
-                    // 选中标识：直接把左边框加粗成主题色（参考「卡片左侧色条」做法）。
-                    // 颜色会跟着卡片圆角走、并在圆角处自然汇入上下描边，延伸只到约 45°；
-                    // 不再用 inset 阴影 —— 那种做法会沿上下边各铺满一个圆角半径（11px），显得过长。
-                    // paddingLeft 由 12 降到 10，抵消 3px 边框比 1px 多的 2px，内容不位移。
-                    ...(active ? { borderLeft: '3px solid var(--accent)', paddingLeft: 10 } : {}),
                   }}
                 >
                   <div className="flex items-center gap-1.5 min-w-0">
                     <Library size={10} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                     <span className="text-xs truncate" style={{ color: 'var(--text-primary)', fontWeight: active ? 600 : 500 }}>{b.name}</span>
-                    {b.pendingCount > 0 && (
+                    {pendingCount > 0 && (
                       <span className="ml-auto shrink-0 px-1.5 py-[1px] rounded-full text-[9px]" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
-                        {b.pendingCount}
+                        {pendingCount}
                       </span>
                     )}
                   </div>
@@ -199,7 +168,7 @@ export function KnowledgePage() {
 
         {/* 右：选中库的视图 */}
         {base ? (
-          <main className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
+          <main className="knowledge-main flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
             <div className="shrink-0 px-4 pt-3" style={{ borderBottom: '1px solid var(--border)' }}>
               <div className="flex flex-col">
                 {/* 标题行与按钮同一行：简介因此能占满整宽 —— 放在左侧那一列里时，
@@ -214,7 +183,7 @@ export function KnowledgePage() {
                   )}
                   {/* 统计信息：紧跟在库名之后（原先自占一行，白吃一行高度）。
                       用 shrink-0 + nowrap 保证四个数字始终同一行，空间不够时先压库名（它 truncate）。 */}
-                  <div className="flex items-center gap-3 shrink-0 whitespace-nowrap text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <div className="knowledge-base-stats flex items-center gap-3 shrink-0 whitespace-nowrap text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                     <span>{base.entryCount} 条知识</span>
                     <span>{base.fileCount} 个文件</span>
                     <span>{base.pinnedCount} 条重要</span>
@@ -263,7 +232,7 @@ export function KnowledgePage() {
               </div>
 
               {/* tab：知识 / 文件 / 投喂 / 图谱 */}
-              <div className="flex items-center gap-1 mt-2">
+              <div className="knowledge-tabs flex items-center gap-1 mt-2 overflow-x-auto">
                 {(Object.keys(TAB_META) as KnowledgeTab[]).map((t) => {
                   const M = TAB_META[t];
                   const active = activeTab === t;
@@ -272,7 +241,7 @@ export function KnowledgePage() {
                     <button
                       key={t}
                       onClick={() => useKnowledgeStore.getState().setTab(t)}
-                      className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] transition-colors"
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1.5 text-[11px] transition-colors"
                       style={{
                         color: active ? 'var(--accent)' : 'var(--text-secondary)',
                         borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
@@ -357,7 +326,7 @@ export function KnowledgePage() {
            * 内容高于一屏时靠外层滚动：`justify-center` 在滚动容器里会把顶部截掉，
            * 所以用 `min-h-full` 包一层 —— 内容不超过一屏时居中，超过了就从顶部正常排下来。
            */
-          <main className="flex-1 overflow-y-auto px-8 py-6 rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
+          <main className="knowledge-main flex-1 overflow-y-auto px-8 py-6 rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
             <div className="min-h-full flex flex-col items-center justify-center gap-4">
               <Library size={22} style={{ color: 'var(--text-tertiary)' }} />
               {bases.length === 0 ? (
@@ -396,12 +365,6 @@ export function KnowledgePage() {
         )}
       </div>
 
-      {/* 全局状态栏：独立路由也要保留（与会话/工作流等模式一致），否则底部少一条、页面像被截断 */}
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
-
       {dialog.open && (
         <KnowledgeBaseDialog
           base={dialog.baseId ? bases.find((b) => b.id === dialog.baseId) ?? null : null}
@@ -423,6 +386,7 @@ export function KnowledgePage() {
         />
       )}
     </div>
+    </WorkbenchAssetPage>
   );
 }
 

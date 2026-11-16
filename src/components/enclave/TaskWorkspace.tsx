@@ -11,12 +11,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, ListTree, Link2, AlertTriangle, ChevronRight,
-  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Trash2,
+  Info, MessagesSquare, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Trash2,
   Wand2, Loader2, X,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore, type TaskDetailTab } from '../../stores/enclaveTaskStore';
 import { useAccountStore } from '../../stores/accountStore';
+import { useNowSeconds } from '../../hooks/useNowSeconds';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -31,13 +32,13 @@ import type {
 } from '../../types/enclave';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
-const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
+const FIELD_CLASS = 'pd-form-control w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
 const FIELD_STYLE = {
   backgroundColor: 'var(--bg-tertiary)',
   color: 'var(--text-primary)',
   border: '1px solid var(--border)',
 } as const;
-const TEXTAREA_CLASS = 'w-full p-3 rounded-lg text-xs leading-relaxed outline-none resize-y';
+const TEXTAREA_CLASS = 'pd-form-control w-full p-3 rounded-lg text-xs leading-relaxed outline-none resize-y';
 
 const PRIORITY_LABEL: Record<string, string> = {
   low: '低',
@@ -158,7 +159,10 @@ export function TaskWorkspace() {
   const [tplBusy, setTplBusy] = useState(false);
 
   /** 产出目标库候选（直接查主机，不走知识库页的 store —— 避免打开任务页就把知识库"打开"） */
-  const [kbOptions, setKbOptions] = useState<{ id: string; name: string; isImplicit: boolean }[]>([]);
+  const [kbOptionState, setKbOptionState] = useState<{
+    orgId: string;
+    options: { id: string; name: string; isImplicit: boolean }[];
+  }>({ orgId: '', options: [] });
 
   // 本机团队文件根目录：**全局设置**，与具体组织无关（按钮与面板三个页面共用）
   const [rootOpen, setRootOpen] = useState(false);
@@ -172,11 +176,7 @@ export function TaskWorkspace() {
     let cancelled = false;
     void (async () => {
       const st = useEnclaveOrgStore.getState();
-      if (!(await st.ensureIdentity()) || cancelled) return;
-      await st.loadOrgs();
-      if (cancelled) return;
-      const cur = useEnclaveOrgStore.getState();
-      if (cur.orgs.length === 0 && !cur.lastRefresh) await cur.refresh();
+      if (cancelled || !(await st.ensureOrgs())) return;
     })();
     return () => {
       cancelled = true;
@@ -194,23 +194,24 @@ export function TaskWorkspace() {
 
   // 产出目标库候选：按组织拉一次（失败静默，任务照常可用，目标库只显示为未知）
   useEffect(() => {
-    if (!activeOrgId) {
-      setKbOptions([]);
-      return;
-    }
+    if (!activeOrgId) return;
     let cancelled = false;
     void invoke<KbView[]>('enclave_kb_list', { orgId: activeOrgId })
       .then((list) => {
         if (cancelled) return;
-        setKbOptions(list.map((k) => ({ id: k.id, name: k.name, isImplicit: k.isImplicit })));
+        setKbOptionState({
+          orgId: activeOrgId,
+          options: list.map((k) => ({ id: k.id, name: k.name, isImplicit: k.isImplicit })),
+        });
       })
       .catch(() => {
-        if (!cancelled) setKbOptions([]);
+        if (!cancelled) setKbOptionState({ orgId: activeOrgId, options: [] });
       });
     return () => {
       cancelled = true;
     };
   }, [activeOrgId]);
+  const kbOptions = kbOptionState.orgId === activeOrgId ? kbOptionState.options : [];
 
   const members: MemberView[] = detail?.members ?? [];
   const memberLabel = (id: string | null): string => {
@@ -234,7 +235,7 @@ export function TaskWorkspace() {
     `${m.displayName || m.email}${memberLoad[m.userId] ? `（在办 ${memberLoad[m.userId]}）` : ''}`;
 
   /** 任务树筛选：状态 / 负责人 / 是否逾期；默认「活跃」= 不含已归档 */
-  const nowSec = Math.floor(Date.now() / 1000);
+  const nowSec = useNowSeconds();
   const visibleTasks = useMemo(() => {
     let list = tasks;
     if (statusFilter === 'active') list = list.filter((t) => t.status !== 'archived');
@@ -251,6 +252,10 @@ export function TaskWorkspace() {
     }
     return list;
   }, [tasks, statusFilter, assigneeFilter, overdueOnly, nowSec]);
+  const visibleSelectedIds = useMemo(() => {
+    const visible = new Set(visibleTasks.map((item) => item.id));
+    return selectedIds.filter((id) => visible.has(id));
+  }, [selectedIds, visibleTasks]);
   // 单状态 / 负责人 / 逾期筛选时扁平展示（否则父任务被过滤后会丢掉匹配的子任务）
   const isFlatFilter =
     (statusFilter !== 'active' && statusFilter !== 'all') ||
@@ -264,19 +269,14 @@ export function TaskWorkspace() {
     isFlatFilter ? [] : visibleTasks.filter((t) => t.parentTaskId === id);
   const task = tasks.find((t) => t.id === activeTaskId) ?? null;
 
-  // 选中集只在当前可见列表里生效（筛选变化后清掉不可见项）
-  useEffect(() => {
-    setSelectedIds((prev) => prev.filter((id) => visibleTasks.some((t) => t.id === id)));
-  }, [visibleTasks]);
-
   /** 批量改派（`__none__` = 未指派）：逐个调用既有编辑命令，无权修改的任务计入失败 */
   const batchAssign = async (picked: string) => {
-    if (!activeOrgId || !picked || selectedIds.length === 0) return;
+    if (!activeOrgId || !picked || visibleSelectedIds.length === 0) return;
     const assigneeId = picked === '__none__' ? null : picked;
-    const total = selectedIds.length;
+    const total = visibleSelectedIds.length;
     setBatchBusy(true);
     let ok = 0;
-    for (const id of selectedIds) {
+    for (const id of visibleSelectedIds) {
       const done = await useEnclaveTaskStore
         .getState()
         .updateTask(activeOrgId, id, { assigneeId });
@@ -296,11 +296,11 @@ export function TaskWorkspace() {
   /** 批量改期（同一天）；日期按本地日期 00:00 存，和单任务编辑口径一致 */
   const batchSetDue = async () => {
     const due = fromDateInput(batchDue);
-    if (!activeOrgId || due === null || selectedIds.length === 0) return;
-    const total = selectedIds.length;
+    if (!activeOrgId || due === null || visibleSelectedIds.length === 0) return;
+    const total = visibleSelectedIds.length;
     setBatchBusy(true);
     let ok = 0;
-    for (const id of selectedIds) {
+    for (const id of visibleSelectedIds) {
       const done = await useEnclaveTaskStore.getState().updateTask(activeOrgId, id, { dueDate: due });
       if (done) ok += 1;
     }
@@ -320,7 +320,7 @@ export function TaskWorkspace() {
     if (task && !visibleTasks.some((t) => t.id === task.id)) {
       useEnclaveTaskStore.getState().selectTask(null);
     }
-  }, [visibleTasks, task?.id]);
+  }, [visibleTasks, task]);
 
   const submitCreate = async () => {
     if (!activeOrgId) return;
@@ -440,14 +440,10 @@ export function TaskWorkspace() {
   const refreshAll = async () => {
     setRefreshing(true);
     try {
-      const org = useEnclaveOrgStore.getState();
-      if (!(await org.ensureIdentity())) return;
-      await org.loadOrgs();
-      const next = useEnclaveOrgStore.getState().activeOrgId;
-      if (next) {
-        await useEnclaveTaskStore.getState().loadTasks(next);
-        await useEnclaveOrgStore.getState().loadNotifications(next);
-      }
+      const next = await useEnclaveOrgStore.getState().ensureOrgs(true);
+      if (!next) return;
+      await useEnclaveTaskStore.getState().loadTasks(next);
+      await useEnclaveOrgStore.getState().loadNotifications(next);
     } finally {
       setRefreshing(false);
     }
@@ -456,7 +452,7 @@ export function TaskWorkspace() {
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
       <div
-        className="shrink-0 rounded-lg overflow-hidden"
+        className="enclave-surface shrink-0 overflow-hidden"
         style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
       >
         <EnclaveNavBar
@@ -480,7 +476,7 @@ export function TaskWorkspace() {
 
       <div className="flex-1 min-h-0 pt-2 flex flex-col overflow-hidden">
         <div
-          className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
+          className="enclave-surface flex-1 min-h-0 overflow-hidden flex flex-col"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
 
@@ -789,7 +785,7 @@ export function TaskWorkspace() {
                   >
                     <div className="flex flex-col gap-1 pt-0.5">
                       <div className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                        <span>已选 {selectedIds.length}</span>
+                        <span>已选 {visibleSelectedIds.length}</span>
                         <button
                           onClick={() => setSelectedIds(visibleTasks.map((t) => t.id))}
                           style={{ color: 'var(--accent)' }}
@@ -800,7 +796,7 @@ export function TaskWorkspace() {
                         <button
                           onClick={() => setSelectedIds([])}
                           style={{ color: 'var(--text-tertiary)' }}
-                          disabled={selectedIds.length === 0}
+                          disabled={visibleSelectedIds.length === 0}
                         >
                           清空
                         </button>
@@ -829,13 +825,13 @@ export function TaskWorkspace() {
                         />
                         <button
                           onClick={() => void batchSetDue()}
-                          disabled={batchBusy || !batchDue || selectedIds.length === 0}
+                          disabled={batchBusy || !batchDue || visibleSelectedIds.length === 0}
                           className="shrink-0 text-[10px] px-1.5 py-1 rounded"
                           style={{
                             backgroundColor: 'var(--bg-tertiary)',
                             color: 'var(--text-secondary)',
                             border: '1px solid var(--border)',
-                            opacity: batchBusy || !batchDue || selectedIds.length === 0 ? 0.5 : 1,
+                            opacity: batchBusy || !batchDue || visibleSelectedIds.length === 0 ? 0.5 : 1,
                           }}
                           title="把选中任务的截止日期改成该日期"
                         >
@@ -866,7 +862,7 @@ export function TaskWorkspace() {
                           setNewOpen(true);
                         }}
                         selectable={batchMode}
-                        selected={selectedIds.includes(root.id)}
+                        selected={visibleSelectedIds.includes(root.id)}
                         onToggleSelect={() =>
                           setSelectedIds((prev) =>
                             prev.includes(root.id) ? prev.filter((x) => x !== root.id) : [...prev, root.id],
@@ -881,7 +877,7 @@ export function TaskWorkspace() {
                           active={child.id === activeTaskId}
                           onClick={() => useEnclaveTaskStore.getState().selectTask(child.id)}
                           selectable={batchMode}
-                          selected={selectedIds.includes(child.id)}
+                          selected={visibleSelectedIds.includes(child.id)}
                           onToggleSelect={() =>
                             setSelectedIds((prev) =>
                               prev.includes(child.id)
@@ -1046,7 +1042,7 @@ export function TaskWorkspace() {
                                 prev.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)),
                               )
                             }
-                            className="w-full px-1.5 py-0.5 rounded text-xs outline-none"
+                            className="pd-form-control w-full px-1.5 py-0.5 rounded text-xs outline-none"
                             style={{
                               backgroundColor: 'var(--bg-content)',
                               color: 'var(--text-primary)',
@@ -1061,7 +1057,7 @@ export function TaskWorkspace() {
                                 prev.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)),
                               )
                             }
-                            className="w-full px-1.5 py-0.5 rounded text-[11px] outline-none"
+                            className="pd-form-control w-full px-1.5 py-0.5 rounded text-[11px] outline-none"
                             style={{
                               backgroundColor: 'var(--bg-content)',
                               color: 'var(--text-secondary)',
@@ -1456,7 +1452,6 @@ function TaskDetail(props: {
   const logs = useMemo(() => reports.filter((r) => r.status !== 'draft'), [reports]);
   /** 拆分转换后的容器：汇报区只读展示全部历史（含拆分前尚未提交的草稿） */
   const historyReports = isContainer ? reports : logs;
-  const [reportText, setReportText] = useState('');
   // 等待审核或已确认时不允许再编辑 / 提交
   const lockedReport = reports.find((r) => r.status === 'submitted' || r.status === 'confirmed') ?? null;
 
@@ -1545,19 +1540,20 @@ function TaskDetail(props: {
   // 任务收敛（完成 / 归档 / 作废）后，收起可能仍打开的编辑态
   useEffect(() => {
     if (isClosed) {
-      setEditingProps(false);
-      setEditingDesc(false);
+      queueMicrotask(() => {
+        setEditingProps(false);
+        setEditingDesc(false);
+      });
     }
   }, [isClosed]);
 
-  // 草稿到达后填入编辑器（仅首次，避免覆盖用户正在输入的内容）
-  const [seededReportId, setSeededReportId] = useState<string | null>(null);
-  useEffect(() => {
-    if (editable && seededReportId !== editable.id) {
-      setSeededReportId(editable.id);
-      setReportText(editable.content);
-    }
-  }, [editable, seededReportId]);
+  // 草稿编辑器按来源草稿 id 隔离：后端刷新不会覆盖用户正在输入的内容。
+  const [reportDraft, setReportDraft] = useState<{ id: string; text: string } | null>(null);
+  const reportText =
+    editable && reportDraft?.id === editable.id ? reportDraft.text : editable?.content ?? '';
+  const setReportText = (text: string) => {
+    setReportDraft({ id: editable?.id ?? '', text });
+  };
 
   const change = async (status: TaskStatus) => {
     if (status === 'cancelled') {
@@ -2189,172 +2185,6 @@ function TaskDetail(props: {
         </>
       )}
 
-      {activeTab === 'collab' && (
-        <>
-      {/* 沟通层：任务讨论（支持回复与 @ 提及；归档 / 作废后只读） */}
-      <div
-        className="rounded-lg p-3 flex flex-col gap-2"
-        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
-      >
-        <div className="flex items-center gap-2">
-          <Info size={12} style={{ color: 'var(--accent)' }} />
-          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            讨论
-          </span>
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-            {comments.length}
-          </span>
-          <div className="flex-1" />
-          {discussionReadOnly && (
-            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-              任务已归档 / 作废，讨论只读
-            </span>
-          )}
-        </div>
-
-        {comments.length === 0 && (
-          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            还没有讨论。任务相关的问题、决策与澄清都可以留在这里。
-          </div>
-        )}
-
-        {comments.map((c) => {
-          const parent = c.replyToId ? comments.find((x) => x.id === c.replyToId) : null;
-          const canDelete = canManageComments || c.authorId === me;
-          return (
-            <div
-              key={c.id}
-              className="rounded-lg px-2.5 py-2 flex flex-col gap-1"
-              style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
-            >
-              <div className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>
-                  {memberLabel(c.authorId)}
-                </span>
-                <span>{formatDateTime(c.createdAt)}</span>
-                {parent && <span>· 回复 {memberLabel(parent.authorId)}</span>}
-                <div className="flex-1" />
-                {canComment && (
-                  <button
-                    onClick={() => setReplyTo(c)}
-                    className="px-1 rounded"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  >
-                    回复
-                  </button>
-                )}
-                {canDelete && !discussionReadOnly && (
-                  <button
-                    onClick={() => void removeComment(c)}
-                    className="px-1 rounded"
-                    style={{ color: 'var(--status-danger)' }}
-                  >
-                    删除
-                  </button>
-                )}
-              </div>
-              <div
-                className="text-[11px] whitespace-pre-wrap break-words"
-                style={{ color: 'var(--text-primary)' }}
-              >
-                {c.content}
-              </div>
-              {c.mentions.length > 0 && (
-                <div className="text-[10px]" style={{ color: 'var(--accent)' }}>
-                  {c.mentions.map((id) => `@${memberLabel(id)}`).join(' ')}
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {canComment ? (
-          <div className="flex flex-col gap-1.5">
-            {replyTo && (
-              <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                <span>回复 {memberLabel(replyTo.authorId)}</span>
-                <button onClick={() => setReplyTo(null)} style={{ color: 'var(--text-tertiary)' }}>
-                  取消
-                </button>
-              </div>
-            )}
-            {mentionIds.length > 0 && (
-              <div className="flex items-center gap-1 flex-wrap text-[10px]">
-                {mentionIds.map((id) => (
-                  <button
-                    key={id}
-                    onClick={() => setMentionIds((prev) => prev.filter((x) => x !== id))}
-                    className="px-1.5 py-0.5 rounded"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
-                    title="点击移除提及"
-                  >
-                    @{memberLabel(id)} ×
-                  </button>
-                ))}
-              </div>
-            )}
-            <textarea
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder="写下讨论内容（Ctrl+Enter 发送）"
-              rows={2}
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                  e.preventDefault();
-                  void submitComment();
-                }
-              }}
-              className="w-full p-2 rounded-lg text-[11px] leading-relaxed outline-none resize-y"
-              style={{
-                backgroundColor: 'var(--bg-content)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border)',
-              }}
-            />
-            <div className="flex items-center gap-1.5">
-              {mentionable.length > 0 && (
-                <Select
-                  value=""
-                  onChange={(id) => {
-                    if (id && !mentionIds.includes(id)) {
-                      setMentionIds((prev) => [...prev, id]);
-                    }
-                  }}
-                  options={mentionable.map((m) => ({
-                    value: m.userId,
-                    label: m.displayName || m.email || m.userId,
-                  }))}
-                  placeholder="@提及成员"
-                  size="xs"
-                  className="w-[110px]"
-                />
-              )}
-              <div className="flex-1" />
-              <button
-                onClick={() => void submitComment()}
-                disabled={!commentText.trim()}
-                className="h-6 px-2 rounded text-[10px]"
-                style={{
-                  backgroundColor: 'var(--accent)',
-                  color: '#fff',
-                  opacity: commentText.trim() ? 1 : 0.5,
-                }}
-              >
-                发送
-              </button>
-            </div>
-          </div>
-        ) : (
-          !discussionReadOnly && (
-            <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-              只有任务参与者与组织管理者可以参与讨论
-            </div>
-          )
-        )}
-      </div>
-        </>
-      )}
-
       {activeTab === 'overview' && (
         <>
       {/* 汇总容器：状态由子任务派生，全部收敛后可汇总确认 */}
@@ -2439,19 +2269,8 @@ function TaskDetail(props: {
         </div>
       </fieldset>
 
-      {/* 提交任务区：普通任务可写；拆分后的容器只读展示历史记录 */}
+      {/* 过程记录：普通任务可写；拆分后的容器只读展示历史记录 */}
       {activeTab === 'collab' && (!isContainer || hasExecutionHistory) && (
-      <fieldset
-        className="m-0 min-w-0 p-0"
-        style={{
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '10px 12px 12px',
-        }}
-      >
-        <legend className="px-1.5 m-0 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-          {isContainer ? '历史过程记录' : '过程记录'}
-        </legend>
         <div className="flex flex-col gap-3">
       {(!isContainer || (progress?.items.length ?? 0) > 0) && (
       <div
@@ -2461,7 +2280,7 @@ function TaskDetail(props: {
         <div className="flex items-center gap-2">
           <ListChecks size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            过程记录
+            {isContainer ? '历史过程记录' : '过程记录'}
           </span>
           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
             {progress?.items.length ?? 0}
@@ -2611,26 +2430,187 @@ function TaskDetail(props: {
       </div>
       )}
         </div>
-      </fieldset>
+      )}
+
+      {/* 沟通层：讨论输入置顶，记录按最新优先展示；归档 / 作废后只读 */}
+      {activeTab === 'collab' && (
+        <div
+          className="rounded-lg p-3 flex flex-col gap-2"
+          style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+        >
+          <div className="flex items-center gap-2">
+            <MessagesSquare size={12} style={{ color: 'var(--accent)' }} />
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+              讨论
+            </span>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              {comments.length}
+            </span>
+            <div className="flex-1" />
+            {discussionReadOnly && (
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                任务已归档 / 作废，讨论只读
+              </span>
+            )}
+          </div>
+
+          {canComment ? (
+            <div className="flex flex-col gap-1.5">
+              {replyTo && (
+                <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <span>回复 {memberLabel(replyTo.authorId)}</span>
+                  <button onClick={() => setReplyTo(null)} style={{ color: 'var(--text-tertiary)' }}>
+                    取消
+                  </button>
+                </div>
+              )}
+              {mentionIds.length > 0 && (
+                <div className="flex items-center gap-1 flex-wrap text-[10px]">
+                  {mentionIds.map((id) => (
+                    <button
+                      key={id}
+                      onClick={() => setMentionIds((prev) => prev.filter((x) => x !== id))}
+                      className="px-1.5 py-0.5 rounded"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
+                      title="点击移除提及"
+                    >
+                      @{memberLabel(id)} ×
+                    </button>
+                  ))}
+                </div>
+              )}
+              <textarea
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="写下讨论内容（Ctrl+Enter 发送）"
+                rows={2}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    void submitComment();
+                  }
+                }}
+                className="pd-form-control w-full p-2 rounded-lg text-[11px] leading-relaxed outline-none resize-y"
+                style={{
+                  backgroundColor: 'var(--bg-content)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+              />
+              <div className="flex items-center gap-1.5">
+                {mentionable.length > 0 && (
+                  <Select
+                    value=""
+                    onChange={(id) => {
+                      if (id && !mentionIds.includes(id)) {
+                        setMentionIds((prev) => [...prev, id]);
+                      }
+                    }}
+                    options={mentionable.map((m) => ({
+                      value: m.userId,
+                      label: m.displayName || m.email || m.userId,
+                    }))}
+                    placeholder="@提及成员"
+                    size="xs"
+                    className="w-[110px]"
+                  />
+                )}
+                <div className="flex-1" />
+                <button
+                  onClick={() => void submitComment()}
+                  disabled={!commentText.trim()}
+                  className="h-6 px-2 rounded text-[10px]"
+                  style={{
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                    opacity: commentText.trim() ? 1 : 0.5,
+                  }}
+                >
+                  发送
+                </button>
+              </div>
+            </div>
+          ) : (
+            !discussionReadOnly && (
+              <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                只有任务参与者与组织管理者可以参与讨论
+              </div>
+            )
+          )}
+
+          {comments.length === 0 && (
+            <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              还没有讨论。任务相关的问题、决策与澄清都可以留在这里。
+            </div>
+          )}
+
+          {[...comments].reverse().map((c) => {
+            const parent = c.replyToId ? comments.find((x) => x.id === c.replyToId) : null;
+            const canDelete = canManageComments || c.authorId === me;
+            return (
+              <div
+                key={c.id}
+                className="rounded-lg px-2.5 py-2 flex flex-col gap-1"
+                style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+              >
+                <div className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    {memberLabel(c.authorId)}
+                  </span>
+                  <span>{formatDateTime(c.createdAt)}</span>
+                  {parent && <span>· 回复 {memberLabel(parent.authorId)}</span>}
+                  <div className="flex-1" />
+                  {canComment && (
+                    <button
+                      onClick={() => setReplyTo(c)}
+                      className="px-1 rounded"
+                      style={{ color: 'var(--text-tertiary)' }}
+                    >
+                      回复
+                    </button>
+                  )}
+                  {canDelete && !discussionReadOnly && (
+                    <button
+                      onClick={() => void removeComment(c)}
+                      className="px-1 rounded"
+                      style={{ color: 'var(--status-danger)' }}
+                    >
+                      删除
+                    </button>
+                  )}
+                </div>
+                <div
+                  className="text-[11px] whitespace-pre-wrap break-words"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  {c.content}
+                </div>
+                {c.mentions.length > 0 && (
+                  <div className="text-[10px]" style={{ color: 'var(--accent)' }}>
+                    {c.mentions.map((id) => `@${memberLabel(id)}`).join(' ')}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {/* 完成汇报（普通任务可写；容器只读展示历史） */}
       {activeTab === 'delivery' && (!isContainer || reports.length > 0) && (
-      <fieldset
-        className="m-0 min-w-0 p-0"
-        style={{
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '10px 12px 12px',
-        }}
+      <div
+        className="flex flex-col gap-2 rounded-lg p-3"
+        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
       >
-        <legend
-          className="px-1.5 m-0 flex items-center gap-1 text-[11px] font-medium"
-          style={{ color: 'var(--text-secondary)' }}
-        >
+        <div className="flex items-center gap-2">
           <ClipboardCheck size={12} style={{ color: 'var(--accent)' }} />
-          完成汇报
-        </legend>
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            完成汇报
+          </span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            {reports.length}
+          </span>
+        </div>
         <div className="flex flex-col gap-2">
         {!isContainer && lockedReport && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
@@ -2815,7 +2795,7 @@ function TaskDetail(props: {
                 {returningId === r.id && (
                   <div className="flex items-center gap-2">
                     <input
-                      className="flex-1 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+                      className="pd-form-control flex-1 px-2.5 py-1.5 rounded-lg text-xs outline-none"
                       style={{ ...FIELD_STYLE, backgroundColor: 'var(--bg-primary)' }}
                       placeholder="退回原因（记录在汇报留言里）"
                       value={returnReason}
@@ -2922,7 +2902,7 @@ function TaskDetail(props: {
           </div>
         )}
         </div>
-      </fieldset>
+      </div>
       )}
 
       {/* AI 拆解草稿：模型产出先过人工，勾选后才创建。
@@ -2985,7 +2965,7 @@ function TaskDetail(props: {
                           prev.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)),
                         )
                       }
-                      className="w-full px-1.5 py-0.5 rounded text-xs outline-none"
+                      className="pd-form-control w-full px-1.5 py-0.5 rounded text-xs outline-none"
                       style={{
                         backgroundColor: 'var(--bg-content)',
                         color: 'var(--text-primary)',
@@ -3000,7 +2980,7 @@ function TaskDetail(props: {
                           prev.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)),
                         )
                       }
-                      className="w-full px-1.5 py-0.5 rounded text-[11px] outline-none"
+                      className="pd-form-control w-full px-1.5 py-0.5 rounded text-[11px] outline-none"
                       style={{
                         backgroundColor: 'var(--bg-content)',
                         color: 'var(--text-secondary)',

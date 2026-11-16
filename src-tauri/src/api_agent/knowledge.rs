@@ -1731,7 +1731,11 @@ impl KnowledgeStore {
             let mut n = relink_chunks(&tx, kb_id, &rel_path, now)?;
             if n == 0 && !chunks.is_empty() {
                 let origin = if origin.is_empty() {
-                    if url.is_empty() { "file" } else { "url" }
+                    if url.is_empty() {
+                        "file"
+                    } else {
+                        "url"
+                    }
                 } else {
                     origin
                 };
@@ -3390,7 +3394,15 @@ mod tests {
         store.create_base("kb1", "库一", "描述", FIELDS).unwrap();
         for i in 0..5 {
             store
-                .save_entry("kb1", &format!("条目{}", i), "正文", "", "snippet", "", None)
+                .save_entry(
+                    "kb1",
+                    &format!("条目{}", i),
+                    "正文",
+                    "",
+                    "snippet",
+                    "",
+                    None,
+                )
                 .unwrap();
         }
         let page = |offset: usize| {
@@ -3726,11 +3738,9 @@ mod tests {
             .unwrap();
         }
 
-        let mem = super::super::db::MemoryStore::new(
-            &dir,
-            super::super::db::MEMORY_MAX_ENTRIES_DEFAULT,
-        )
-        .unwrap();
+        let mem =
+            super::super::db::MemoryStore::new(&dir, super::super::db::MEMORY_MAX_ENTRIES_DEFAULT)
+                .unwrap();
         assert_eq!(mem.quota_count(), 0, "知识条目不占 600 条配额");
         assert_eq!(mem.count(), 1, "但总数里仍算它一条");
         assert!(

@@ -226,9 +226,7 @@ fn parse_json_stream_events(line: &str) -> Vec<StreamEvent> {
                 let prompt = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
                 let completion = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
                 let cache_read = usage["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32;
-                let cache_write = usage["cache_creation_input_tokens"]
-                    .as_u64()
-                    .unwrap_or(0) as u32;
+                let cache_write = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0) as u32;
                 if prompt + completion + cache_read + cache_write > 0 {
                     out.push(StreamEvent::Usage {
                         prompt,
@@ -571,7 +569,11 @@ mod stream_event_tests {
     fn parses_tool_use_block() {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"a.rs"}}]}}"#;
         match parse_json_stream_events(line).as_slice() {
-            [StreamEvent::ToolStart { tool_id, name, args }] => {
+            [StreamEvent::ToolStart {
+                tool_id,
+                name,
+                args,
+            }] => {
                 assert_eq!(tool_id, "tu_1");
                 assert_eq!(name, "Read");
                 assert!(args.contains("a.rs"));
@@ -597,7 +599,8 @@ mod stream_event_tests {
     /// result 信封的 is_error：优先于 exit code 的失败判据
     #[test]
     fn parses_result_error_envelope() {
-        let line = r#"{"type":"result","subtype":"success","is_error":true,"result":"API Error: 400"}"#;
+        let line =
+            r#"{"type":"result","subtype":"success","is_error":true,"result":"API Error: 400"}"#;
         match parse_json_stream_events(line).as_slice() {
             [StreamEvent::Failed { message }] => assert!(message.contains("API Error")),
             other => panic!("unexpected: {:?}", other),
@@ -608,7 +611,8 @@ mod stream_event_tests {
     #[test]
     fn ignores_noise_line() {
         assert!(
-            parse_json_stream_events("[claude-code:unrecognized_model] {\"model\":\"x\"}").is_empty()
+            parse_json_stream_events("[claude-code:unrecognized_model] {\"model\":\"x\"}")
+                .is_empty()
         );
     }
 

@@ -29,7 +29,7 @@ interface RepoStatus {
 }
 
 interface RepoStatusBarProps {
-  /** 会话 cwd / 房间产物目录；为 null 时后端回退到全局工作区 */
+  /** 当前运行工作根；为 null 时后端回退到全局工作区 */
   cwd: string | null;
   /** 变化时重新拉取（新快照、撤销、切换目录等） */
   refreshToken?: number;

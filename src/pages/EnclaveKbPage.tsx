@@ -30,11 +30,10 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { TitleBar, StatusBar } from '../components/layout';
+import { WorkbenchAssetPage } from '../components/layout';
 import { TagEditor } from '../components/knowledge/TagEditor';
 import { FieldSchemaEditor, MetaEditor } from '../components/knowledge/KnowledgeFieldInputs';
 import { Select } from '../components/common/Select';
-import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { ALL_KB_ID, useEnclaveKbStore } from '../stores/enclaveKbStore';
 import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
@@ -493,7 +492,6 @@ function showCacheHintOnce(): void {
  * 检索走 FTS5 trigram（≥3 字），短词退化为子串匹配。
  */
 export function EnclaveKbPage() {
-  const { viewMode, setMode } = useTerminal();
   const navigate = useNavigate();
 
   const orgs = useEnclaveOrgStore((s) => s.orgs);
@@ -820,10 +818,7 @@ export function EnclaveKbPage() {
   const refreshKb = async () => {
     setRefreshing(true);
     try {
-      const org = useEnclaveOrgStore.getState();
-      if (!(await org.ensureIdentity())) return;
-      await org.loadOrgs();
-      const next = useEnclaveOrgStore.getState().activeOrgId;
+      const next = await useEnclaveOrgStore.getState().ensureOrgs(true);
       if (!next) return;
       await useEnclaveKbStore.getState().loadKbs(next);
       const kbId = useEnclaveKbStore.getState().activeKbId;
@@ -856,7 +851,7 @@ export function EnclaveKbPage() {
     } catch {
       return [];
     }
-  }, [kb?.fieldSchema]);
+  }, [kb]);
 
   /**
    * 专属属性筛选：属性「名」从库定义里选（有限枚举），属性「值」是自由输入 + 包含匹配
@@ -878,8 +873,10 @@ export function EnclaveKbPage() {
   }, [entries, attrField, attrValue]);
   // 切库 / 换组织后属性定义会变，清空筛选
   useEffect(() => {
-    setAttrField('');
-    setAttrValue('');
+    queueMicrotask(() => {
+      setAttrField('');
+      setAttrValue('');
+    });
   }, [activeKbId, activeOrgId]);
 
   /* ── 图谱：团队条目 → 个人库图谱组件认识的 GraphModel（复用 3D 渲染） ── */
@@ -930,12 +927,12 @@ export function EnclaveKbPage() {
     [teamGraph, graphHasMore, graphLoading, graphEntries.length, activeOrgId, activeKbId],
   );
 
-  const memberName = (raw: unknown): string => {
+  const memberName = useCallback((raw: unknown): string => {
     const id = typeof raw === 'string' ? raw : '';
     if (!id) return '';
     const m = members.find((x) => x.userId === id);
     return m?.displayName || m?.email || `${id.slice(0, 8)}…`;
-  };
+  }, [members]);
 
   const metaStr = (entry: KbEntryView | null, key: string): string => {
     const v = entry?.metadata?.[key];
@@ -954,26 +951,24 @@ export function EnclaveKbPage() {
   };
 
   useEffect(() => {
-    setDraftTitle(activeEntry?.title ?? '');
-    setDraftContent(activeEntry?.content ?? '');
-    setDraftTags(splitTags(activeEntry?.tags ?? ''));
-    setDraftMeta(pickFields(activeEntry, kbFields));
+    queueMicrotask(() => {
+      setDraftTitle(activeEntry?.title ?? '');
+      setDraftContent(activeEntry?.content ?? '');
+      setDraftTags(splitTags(activeEntry?.tags ?? ''));
+      setDraftMeta(pickFields(activeEntry, kbFields));
+    });
   }, [activeEntry, kbFields]);
 
   // 切换组织 / 账号 / 知识库：退出定义编辑态
   useEffect(() => {
-    setKbForm(null);
+    queueMicrotask(() => setKbForm(null));
   }, [kb?.id, activeOrgId]);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const st = useEnclaveOrgStore.getState();
-      if (!(await st.ensureIdentity()) || cancelled) return;
-      await st.loadOrgs();
-      if (cancelled) return;
-      const cur = useEnclaveOrgStore.getState();
-      if (cur.orgs.length === 0 && !cur.lastRefresh) await cur.refresh();
+      if (cancelled || !(await st.ensureOrgs())) return;
     })();
     return () => {
       cancelled = true;
@@ -986,11 +981,13 @@ export function EnclaveKbPage() {
 
   // 「全部库」只读：投喂（写）按库，切过去时退回知识列表
   useEffect(() => {
-    if (isAllKb && tab === 'ingest') setTab('entries');
+    if (isAllKb && tab === 'ingest') queueMicrotask(() => setTab('entries'));
   }, [isAllKb, tab]);
 
   // 切库后候选草稿失效：草稿里的属性键来自上一库的 field_schema
-  useEffect(() => setCandDraft(null), [activeKbId]);
+  useEffect(() => {
+    queueMicrotask(() => setCandDraft(null));
+  }, [activeKbId]);
 
   /** 采纳候选：展开态提交人工修正值，折叠态直接按模型原值入库 */
   const adoptCandidate = (c: KbCandidateView) => {
@@ -1030,28 +1027,20 @@ export function EnclaveKbPage() {
 
   // 切换分组维度后旧的折叠状态不再适用
   useEffect(() => {
-    setCollapsedGroups([]);
+    queueMicrotask(() => setCollapsedGroups([]));
   }, [fileGroupBy]);
 
   // 切库后旧库的属性 key 可能已不存在：回到默认维度
   useEffect(() => {
-    setFileGroupBy({ kind: 'entry' });
+    queueMicrotask(() => setFileGroupBy({ kind: 'entry' }));
   }, [activeKbId]);
 
   // 当前库删掉了正在使用的属性：同样退回默认维度（否则整页都归「未标注」）
   useEffect(() => {
     if (fileGroupBy.kind === 'field' && !kbFields.some((f) => f.key === fileGroupBy.key)) {
-      setFileGroupBy({ kind: 'entry' });
+      queueMicrotask(() => setFileGroupBy({ kind: 'entry' }));
     }
   }, [kbFields, fileGroupBy]);
-
-  const handleModeChange = useCallback(
-    (mode: ViewMode) => {
-      setMode(mode);
-      navigate('/');
-    },
-    [setMode, navigate],
-  );
 
   const runSearch = async (value?: string) => {
     if (!activeOrgId) return;
@@ -1401,7 +1390,7 @@ export function EnclaveKbPage() {
       g.files = ordered;
     }
     return groups;
-  }, [files, fileKeyword, fileGroupBy, members, kbFields, kbs, fileRel]);
+  }, [files, fileKeyword, fileGroupBy, memberName, kbFields, kbs, fileRel]);
 
   const matchedFileCount = useMemo(
     () => new Set(fileGroups.flatMap((g) => g.files.map((f) => f.fileId))).size,
@@ -1442,23 +1431,11 @@ export function EnclaveKbPage() {
     );
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <TitleBar
-        mode={viewMode}
-        onModeChange={handleModeChange}
-        rightPanelOpen={false}
-        showBackButton={false}
-        enclaveOpen
-        onOpenEnclave={() => navigate('/enclave')}
-        onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenSettings={() => navigate('/settings')}
-        onOpenMarket={() => navigate('/market')}
-        onOpenInspirations={() => navigate('/inspirations')}
-      />
-
-      <div className="flex-1 min-h-0 px-2 flex flex-col overflow-hidden">
+    <WorkbenchAssetPage contextLabel="飞地 · 团队知识库" activeAsset="enclave" frameless>
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <div
-          className="shrink-0 rounded-lg overflow-hidden"
+          className="enclave-surface shrink-0 overflow-hidden"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
           <EnclaveNavBar
@@ -1489,7 +1466,7 @@ export function EnclaveKbPage() {
 
         <div className="flex-1 min-h-0 pt-2 flex flex-col overflow-hidden">
           <div
-            className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
+            className="enclave-surface flex-1 min-h-0 overflow-hidden flex flex-col"
             style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
           >
             {/* 本机团队文件根目录（全局设置，仅影响本机存放位置；面板与任务页共用） */}
@@ -3320,10 +3297,7 @@ export function EnclaveKbPage() {
         </div>
       </div>
 
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
     </div>
+    </WorkbenchAssetPage>
   );
 }

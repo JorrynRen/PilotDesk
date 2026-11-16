@@ -6,7 +6,7 @@
 //! 命中即注入、两边都 0 命中则不注入。
 //!
 //! 开关：app_settings `memory_intent_enabled`（缺省视为启用；置 "0"/"false" 关闭；
-//! 设置 → 记忆管理 → KV 记忆 中暴露为"启用意图检索注入"）。
+//! 设置 → 记忆管理 → KV 记忆 中暴露为"自动检索记忆与知识库"）。
 //! 模型覆盖：app_settings `memory_intent_model` =
 //! `{"providerId":"...","model":"..."}`（providerId 留空 = 只覆盖模型名、沿用当前会话的
 //! 提供商；整体缺省 = 提供商与模型都跟随当前会话。见 `parse_model_override`）。
@@ -34,7 +34,7 @@ use crate::api_agent::types::{ApiFormat, ChatMessage, ChatRequest, UsageRecord};
 
 /// app_settings key：意图路由开关（"1"/"true" 开；其余关；缺省视为开）。
 pub const SETTING_ENABLED: &str = "memory_intent_enabled";
-/// app_settings key：意图路由模型覆盖（缺省使用当前会话模型）。
+/// app_settings key：检索路由模型覆盖（缺省使用当前会话模型）。
 pub const SETTING_MODEL: &str = "memory_intent_model";
 /// app_settings key：意图路由请求超时（秒）。
 pub const SETTING_TIMEOUT_SECS: &str = "memory_intent_timeout_secs";
@@ -129,7 +129,7 @@ pub struct RetrievalHit {
     pub key: String,
 }
 
-/// 本轮自动记忆检索的可观测轨迹：调用方据此向前端显式展示"是否调用意图路由、
+/// 本轮自动检索记忆与知识库的可观测轨迹：调用方据此向前端显式展示"是否调用意图路由、
 /// 用什么模型与参数、命中哪些 key、是否注入"，使用户对自动注入不再无感。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetrievalTrace {
@@ -167,7 +167,7 @@ pub fn read_enabled(conn: &rusqlite::Connection) -> bool {
     is_enabled(conn)
 }
 
-/// 意图路由模型覆盖（同步读取；None 表示使用当前会话的提供商与模型）。
+/// 检索路由模型覆盖（同步读取；None 表示使用当前会话的提供商与模型）。
 ///
 /// `provider_id` 为空 = 沿用当前会话的提供商，只换模型名（这也是旧值形态的语义）；
 /// 非空 = 连 endpoint / api_format / api_key 一起换成该提供商 —— 与知识库「指定模型」

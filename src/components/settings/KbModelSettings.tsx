@@ -8,12 +8,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Library, Loader2, Info } from 'lucide-react';
+import { Loader2, Info } from 'lucide-react';
 import { useKbModelStore, hasKbModelOverride, type KbModelConfig } from '../../stores/kbModelStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { Select } from '../common/Select';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { SettingsButton, SettingsSection, SettingsToggle } from './index';
 
 interface KbModelInfo {
   providerName: string;
@@ -34,6 +35,7 @@ export function KbModelSettings() {
   /**
    * 自动沉淀开关（app_settings `kb_auto_enabled`，见 `commands/knowledge.rs::KB_AUTO_ENABLED_SETTING`）。
    * **默认开启**；关闭后完全不触发，也就不额外花 token。
+   * App 连续闲时后才触发，每次最多处理一个普通会话；结果只进待确认候选。
    * 目标库不再预设：整理时把**全部知识库**的定义交给模型，由模型逐条选库并填该库专属属性。
    */
   const [autoEnabled, setAutoEnabled] = useState(true);
@@ -143,26 +145,14 @@ export function KbModelSettings() {
   };
 
   return (
-    <div className="space-y-4">
-      <div
-        className="rounded-lg px-3 py-2.5 text-[11px] leading-relaxed"
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+    <div className="settings-page-stack">
+      <SettingsSection
+        title="知识库模型"
+        description="用于文件、网页、云文档与片段投喂，以及 AI 生成和自动沉淀。片段投喂、AI 生成与自动沉淀先进入待确认；明确投喂的文件与云文档整理后直接入库。"
       >
-        <div className="flex items-center gap-1.5 mb-1" style={{ color: 'var(--text-primary)' }}>
-          <Library size={12} />
-          <span className="text-xs font-medium">知识库模型</span>
-        </div>
-        知识库有三处在调模型：<b>文件 / 网页 / 云文档投喂</b>（分块、起标题、抽标签、按专属字段推断属性）、
-        <b>片段投喂与 AI 生成</b>（产出知识草稿）、<b>自动沉淀</b>（把一轮对话整理成候选）。
-        <b>只有片段投喂、AI 生成、自动沉淀的产出先落「待确认」</b>等你核对；
-        文件 / 网页 / 云文档是你明确点下的投喂意图，整理后<b>直接入库</b>。
-        不指定时自动回落——用第一个 OpenAI 兼容、配了 Key 的提供商的第一个模型。
-      </div>
-
       {/* 当前实际生效的模型：不指定时最容易"不知道在用哪个"，这里显式说清 */}
       <div
-        className="rounded-lg px-3 py-2.5 flex items-center gap-2 text-[11px]"
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+        className="pd-settings-inline-note flex flex-wrap items-center gap-2"
       >
         <span className="shrink-0" style={{ color: 'var(--text-tertiary)' }}>当前生效</span>
         {probing ? (
@@ -186,12 +176,15 @@ export function KbModelSettings() {
           </span>
         )}
       </div>
+      </SettingsSection>
 
-      <section>
-        <h3 className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>指定模型（可选）</h3>
+      <SettingsSection
+        title="指定模型（可选）"
+        description="不指定时，自动使用第一个已配置 Key 的 OpenAI 兼容提供商及其首个模型。"
+      >
         <div className="space-y-3">
           <div>
-            <label className="block text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>提供商</label>
+            <label className="pd-settings-field-label">提供商</label>
             <Select
               value={providerId}
               onChange={(v) => { setProviderId(v); setModel(''); }}
@@ -212,7 +205,7 @@ export function KbModelSettings() {
           </div>
 
           <div>
-            <label className="block text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>模型</label>
+            <label className="pd-settings-field-label">模型</label>
             <Select
               value={model}
               onChange={setModel}
@@ -230,79 +223,60 @@ export function KbModelSettings() {
             )}
           </div>
 
-          <div className="flex items-center gap-2 pt-1">
-            <button
+          <div className="pd-settings-actions pt-1">
+            <SettingsButton
+              variant="primary"
               onClick={() => void handleSave()}
               disabled={saving || !dirty || !providerId || !model}
-              className="pd-btn px-3 py-1.5 rounded-lg text-xs"
-              style={{
-                backgroundColor: 'var(--accent)',
-                color: '#fff',
-                border: 'none',
-                opacity: saving || !dirty || !providerId || !model ? 0.5 : 1,
-              }}
             >
               保存
-            </button>
-            <button
+            </SettingsButton>
+            <SettingsButton
               onClick={() => void handleClear()}
               disabled={saving || !hasKbModelOverride(config)}
-              className="pd-btn px-3 py-1.5 rounded-lg text-xs"
-              style={{
-                color: 'var(--text-secondary)',
-                backgroundColor: 'var(--bg-field)',
-                border: '1px solid var(--border)',
-                opacity: saving || !hasKbModelOverride(config) ? 0.5 : 1,
-              }}
               title="取消指定，改为自动回落"
             >
               改为自动回落
-            </button>
+            </SettingsButton>
             {dirty && (
               <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>有未保存的改动</span>
             )}
           </div>
         </div>
-      </section>
+      </SettingsSection>
 
-      <div className="flex items-start gap-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+      <div className="pd-settings-note flex items-start gap-1.5 px-1">
         <Info size={11} className="shrink-0 mt-[1px]" />
         整理与生成都会真的发起网络请求并计入用量；整理失败的条目不会被删除，只是少了标签与属性，可稍后重试。
       </div>
 
-      {/* 自动沉淀：轮末把新增对话整理成候选（默认开启） */}
-      <section className="pt-3" style={{ borderTop: '1px solid var(--border)' }}>
-        <h3 className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>自动沉淀（可选）</h3>
+      {/* 自动沉淀：App 闲时把新增对话整理成候选（默认开启） */}
+      <SettingsSection
+        title="闲时自动整理"
+        description="App 连续 5 分钟无操作，且没有运行中的会话、圆桌、工作流或知识投喂任务时，把普通会话的新增内容整理成知识候选。候选进入对应知识库的待确认区，不会直接入库。"
+      >
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => void toggleAuto()}
+          <SettingsToggle
+            checked={autoEnabled}
+            onChange={() => void toggleAuto()}
             disabled={loadingAuto}
-            className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
-            style={{
-              width: 36,
-              height: 20,
-              backgroundColor: autoEnabled ? '#22c55e' : 'var(--bg-field)',
-              border: '1px solid var(--border)',
-            }}
             title={autoEnabled ? '点击关闭' : '点击开启'}
+          />
+          <span
+            className="text-xs"
+            style={{
+              color: autoEnabled ? 'var(--status-success)' : 'var(--text-tertiary)',
+            }}
           >
-            <div
-              className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-              style={{ left: autoEnabled ? '18px' : '2px' }}
-            />
-          </button>
-          <span className="text-xs" style={{ color: autoEnabled ? '#22c55e' : 'var(--text-tertiary)' }}>
             {loadingAuto ? '读取中…' : autoEnabled ? '已开启' : '已关闭'}
           </span>
         </div>
-        <div className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-          开启后，每轮对话结束会把新增的消息交给上面的模型整理成候选，进对应知识库的「待确认」等你核对
-          —— 不会直接入库，也不会改写你的原文。目标库不再预设：全部知识库的定义会一并交给模型，
-          由模型按内容逐条选库，专属属性也在同一次整理里填好。至少要新增 2 条消息才触发，
-          同一会话两次之间至少间隔 3 分钟；没有知识库时不触发。
-          沉淀消耗的用量计入「用量统计 › 按归因 › 知识库 › 自动沉淀」。
+        <div className="pd-settings-note mt-2">
+          新增至少 4 条消息或 1200 字才整理；同一会话 10 分钟内最多一次，每次闲时最多处理一个会话。
+          没有可用知识库或模型时跳过，不产生额外请求。
+          用量计入「用量统计 › 按归因 › 知识库 › 自动沉淀」。
         </div>
-      </section>
+      </SettingsSection>
     </div>
   );
 }

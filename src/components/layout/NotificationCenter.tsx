@@ -6,6 +6,7 @@
  * 弹层挂载在 App 级，因此会话/群聊/工作流/终端/设置页都能打开。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Bell, X, CheckCheck, Trash2, AlertCircle, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 import { useTerminal } from '../../TerminalManager';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -20,9 +21,21 @@ import {
 } from '../../stores/notificationStore';
 
 const LEVEL_STYLE: Record<NotificationLevel, { color: string; bg: string; icon: ReactNode }> = {
-  error: { color: '#EF4444', bg: 'rgba(239,68,68,0.08)', icon: <AlertCircle size={12} /> },
-  warning: { color: '#F59E0B', bg: 'rgba(245,158,11,0.08)', icon: <AlertTriangle size={12} /> },
-  success: { color: '#10B981', bg: 'rgba(16,185,129,0.08)', icon: <CheckCircle2 size={12} /> },
+  error: {
+    color: 'var(--status-danger)',
+    bg: 'color-mix(in srgb, var(--status-danger) 8%, transparent)',
+    icon: <AlertCircle size={12} />,
+  },
+  warning: {
+    color: 'var(--status-warning)',
+    bg: 'color-mix(in srgb, var(--status-warning) 8%, transparent)',
+    icon: <AlertTriangle size={12} />,
+  },
+  success: {
+    color: 'var(--status-success)',
+    bg: 'color-mix(in srgb, var(--status-success) 8%, transparent)',
+    icon: <CheckCircle2 size={12} />,
+  },
   info: { color: 'var(--accent)', bg: 'var(--accent-light)', icon: <Info size={12} /> },
 };
 
@@ -49,6 +62,7 @@ export function NotificationCenter() {
   const clearAll = useNotificationStore((s) => s.clearAll);
   const dismiss = useNotificationStore((s) => s.dismiss);
   const { setMode } = useTerminal();
+  const navigate = useNavigate();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
   const [filter, setFilter] = useState<FilterKey>('all');
 
@@ -80,6 +94,9 @@ export function NotificationCenter() {
       // 工作流待审批/待输入都在工作流页处理（实例列表 + 待处理横幅）
       setMode('workflow');
     }
+    // 通知中心是 App 级浮层，可能在知识库、设置等独立路由上打开。
+    // 仅切换模式不会显示已经常驻但被隐藏的主工作台，必须同时返回 `/`。
+    navigate('/');
     markRead(item.id);
     setOpen(false);
   };
@@ -117,7 +134,13 @@ export function NotificationCenter() {
           <Bell size={12} style={{ color: 'var(--text-secondary)' }} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>通知</span>
           {unread > 0 && (
-            <span className="text-[10px] px-1.5 rounded-full" style={{ backgroundColor: 'rgba(239,68,68,0.12)', color: '#EF4444' }}>
+            <span
+              className="text-[10px] px-1.5 rounded-full"
+              style={{
+                backgroundColor: 'color-mix(in srgb, var(--status-danger) 12%, transparent)',
+                color: 'var(--status-danger)',
+              }}
+            >
               {unread} 未读
             </span>
           )}
@@ -128,6 +151,7 @@ export function NotificationCenter() {
             className="pd-btn p-1 rounded transition-colors"
             style={{ color: 'var(--text-secondary)', opacity: unread === 0 ? 0.4 : 1 }}
             title="全部标为已读（待处理项除外）"
+            aria-label="全部标为已读（待处理项除外）"
           >
             <CheckCheck size={12} />
           </button>
@@ -137,6 +161,7 @@ export function NotificationCenter() {
             className="pd-btn p-1 rounded transition-colors"
             style={{ color: 'var(--text-secondary)', opacity: items.length === 0 ? 0.4 : 1 }}
             title="清空已通知（保留待处理项）"
+            aria-label="清空已通知（保留待处理项）"
           >
             <Trash2 size={12} />
           </button>
@@ -145,6 +170,7 @@ export function NotificationCenter() {
             className="pd-btn p-1 rounded transition-colors"
             style={{ color: 'var(--text-secondary)' }}
             title="关闭"
+            aria-label="关闭通知中心"
           >
             <X size={12} />
           </button>
@@ -180,7 +206,9 @@ export function NotificationCenter() {
                   onClick={() => { if (!item.read) markRead(item.id); }}
                   style={{
                     borderBottom: '1px solid var(--border)',
-                    backgroundColor: item.pending ? 'rgba(245,158,11,0.06)' : 'transparent',
+                    backgroundColor: item.pending
+                      ? 'color-mix(in srgb, var(--status-warning) 6%, transparent)'
+                      : 'transparent',
                     cursor: item.read ? 'default' : 'pointer',
                   }}
                 >
@@ -191,7 +219,14 @@ export function NotificationCenter() {
                           省略号/截断会让用户还得去别处找原文。整条列表可滚动。 */}
                       <div className="flex items-start gap-1.5">
                         {item.pending && (
-                          <span className="text-[9px] px-1 rounded shrink-0" style={{ backgroundColor: 'rgba(245,158,11,0.16)', color: '#F59E0B', marginTop: 2 }}>
+                          <span
+                            className="text-[9px] px-1 rounded shrink-0"
+                            style={{
+                              backgroundColor: 'color-mix(in srgb, var(--status-warning) 16%, transparent)',
+                              color: 'var(--status-warning)',
+                              marginTop: 2,
+                            }}
+                          >
                             待处理
                           </span>
                         )}
@@ -261,6 +296,7 @@ export function NotificationCenter() {
                       className="shrink-0 p-0.5 rounded transition-colors hover:opacity-80"
                       style={{ color: 'var(--text-tertiary)', lineHeight: 0, marginTop: 2 }}
                       title={item.pending ? '忽略这条提醒（不影响工作流本身，仍可在工作流页处理）' : '移除这条通知'}
+                      aria-label={item.pending ? '忽略这条提醒' : '移除这条通知'}
                     >
                       <X size={10} />
                     </button>

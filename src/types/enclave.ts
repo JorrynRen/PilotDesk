@@ -359,6 +359,289 @@ export interface MemberStat {
   avgHours: number;
 }
 
+// ── API 共享 ────────────────────────────────────────────────────
+
+export interface ApiShareAccessInfo {
+  gatewayUrl: string;
+  port: number;
+  certificateFingerprint: string;
+  enabled: boolean;
+  disabledReason: string;
+}
+
+export interface ApiShareProviderView {
+  id: string;
+  name: string;
+  apiFormat: string;
+  models: string[];
+  apiKeySet: boolean;
+  trustDomain: string;
+}
+
+export interface ApiShareSourceView {
+  id: string;
+  orgId: string;
+  providerId: string;
+  name: string;
+  models: string[];
+  enabled: boolean;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  tokenCount: number;
+  distributionCount: number;
+  requestCount: number;
+  totalTokens: number;
+  canManage: boolean;
+}
+
+export interface CreateApiShareSourceInput {
+  providerId: string;
+  name?: string;
+  models?: string[];
+  enabled?: boolean;
+}
+
+export interface UpdateApiShareSourceInput {
+  name?: string;
+  models?: string[];
+  enabled?: boolean;
+}
+
+export interface ApiShareTokenSourceView {
+  sourceId: string;
+  sourceName: string;
+  sourceEnabled: boolean;
+  /** 对外暴露的不透明模型 ID，不再通过字符串反解来源。 */
+  models: string[];
+}
+
+export interface ApiShareTokenView {
+  id: string;
+  orgId: string;
+  ownerUserId: string;
+  ownerName: string;
+  createdBy: string;
+  name: string;
+  tokenPrefix: string;
+  apiFormat: string;
+  sources: ApiShareTokenSourceView[];
+  allowedModels: string[];
+  enabled: boolean;
+  revokedAt: number | null;
+  archivedAt: number | null;
+  expiresAt: number | null;
+  rpmLimit: number;
+  burstLimit: number;
+  maxConcurrency: number;
+  dailyRequestLimit: number;
+  dailyTokenLimit: number;
+  copiedAt: number | null;
+  firstUsedAt: number | null;
+  lastUsedAt: number | null;
+  requestCount: number;
+  hasUsage: boolean;
+  ownerBlocked: boolean;
+  todayRequests: number;
+  todayTokens: number;
+  todayRateLimited: number;
+  createdAt: number;
+}
+
+export interface IssuedApiShareToken {
+  token: string;
+  baseUrl: string;
+  view: ApiShareTokenView;
+}
+
+export interface ApiShareTokenGrantInput {
+  sourceId: string;
+  models?: string[];
+}
+
+export interface CreateApiShareTokenInput {
+  grants: ApiShareTokenGrantInput[];
+  ownerUserId?: string;
+  name?: string;
+  expiresAt?: number | null;
+  rpmLimit?: number;
+  burstLimit?: number;
+  maxConcurrency?: number;
+  dailyRequestLimit?: number;
+  dailyTokenLimit?: number;
+}
+
+export interface UpdateApiShareTokenInput {
+  name?: string;
+  grants?: ApiShareTokenGrantInput[];
+  expiresAt: number | null;
+  clearExpiry?: boolean;
+  rpmLimit?: number;
+  burstLimit?: number;
+  maxConcurrency?: number;
+  dailyRequestLimit?: number;
+  dailyTokenLimit?: number;
+}
+
+export interface ApiShareTokenSecret {
+  token: string;
+  baseUrl: string;
+  expiresAt: number | null;
+}
+
+export type ApiShareDistributionKind = 'route_token' | 'provider_config';
+
+export interface ApiShareDistributionView {
+  id: string;
+  orgId: string;
+  kind: ApiShareDistributionKind;
+  sourceId: string | null;
+  sourceName: string;
+  tokenId: string | null;
+  tokenName: string;
+  batchId: string;
+  createdBy: string;
+  creatorName: string;
+  recipientUserId: string;
+  recipientName: string;
+  models: string[];
+  messageId: string | null;
+  sentAt: number | null;
+  expiresAt: number | null;
+  revokedAt: number | null;
+  archivedAt: number | null;
+  openedAt: number | null;
+  appliedAt: number | null;
+  createdAt: number;
+  sourceEnabled: boolean;
+  tokenEnabled: boolean;
+  tokenExpiresAt: number | null;
+  recipientBlocked: boolean;
+  tokenOwnerBlocked: boolean;
+}
+
+export interface CreateApiShareDistributionInput {
+  kind: ApiShareDistributionKind;
+  sourceId?: string | null;
+  tokenId?: string | null;
+  recipientUserIds: string[];
+  models?: string[];
+  expiresAt?: number | null;
+}
+
+export interface CreatedApiShareDistributions {
+  batchId: string;
+  items: ApiShareDistributionView[];
+}
+
+export interface OpenedApiShareConnection {
+  distributionId: string;
+  kind: ApiShareDistributionKind;
+  sourceId: string | null;
+  sourceName: string;
+  providerId: string;
+  providerName: string;
+  baseUrl: string;
+  apiFormat: string;
+  apiKey: string;
+  models: string[];
+  modelNotes: Record<string, string>;
+  expiresAt: number | null;
+}
+
+export interface ApiShareUsageView {
+  sourceId: string;
+  granularity: 'day' | 'month';
+  requests: number;
+  successRequests: number;
+  rateLimitedRequests: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  trend: ApiShareUsagePoint[];
+}
+
+export interface ApiShareUsagePoint {
+  startDay: string;
+  endDay: string;
+  label: string;
+  requests: number;
+  successRequests: number;
+  rateLimitedRequests: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface ApiShareUsageQuery {
+  sourceId?: string | null;
+  tokenId?: string | null;
+  fromDay?: string | null;
+  toDay?: string | null;
+}
+
+export interface ApiShareMemberAccessView {
+  userId: string;
+  displayName: string;
+  email: string;
+  role: string;
+  blocked: boolean;
+  reason: string;
+  blockedBy: string;
+  blockedAt: number | null;
+}
+
+// ── 一对一传讯 ──────────────────────────────────────────────────
+
+export interface MessengerSettingsView {
+  retentionDays: 7 | 30 | 90;
+  maxFileBytes: number;
+}
+
+export interface MessengerMemberView {
+  userId: string;
+  displayName: string;
+  email: string;
+  role: string;
+  online: boolean;
+  lastMessageAt: number;
+  lastMessagePreview: string;
+  lastMessageKind: string;
+}
+
+export interface MessengerMessageView {
+  id: string;
+  orgId: string;
+  fromUserId: string;
+  toUserId: string;
+  kind: 'text' | 'reference' | 'file' | 'api-share-distribution';
+  content: string;
+  /** JSON 字符串；引用卡只保存资源 id。 */
+  metadata: string;
+  sensitive: boolean;
+  createdAt: number;
+  recalledAt: number | null;
+  recalledBy: string | null;
+  referenceTitle: string;
+  referenceAvailable: boolean;
+}
+
+export interface SendMessengerMessageInput {
+  peerId: string;
+  kind?: MessengerMessageView['kind'];
+  content?: string;
+  metadata?: string;
+  sensitive?: boolean;
+}
+
+export interface MessengerFileView {
+  fileName: string;
+  mime: string;
+  size: number;
+  dataBase64: string;
+  expiresAt: number;
+}
+
 /** 周期内完成的一条任务（周报正文用） */
 export interface CompletedTaskStat {
   taskId: string;

@@ -2,7 +2,7 @@
 //!
 //! 按 Progressive Disclosure 原则组装 API Agent 的 system prompt：
 //!   1. Base Agent 指令
-//!   2. MEMORY.md（项目级记忆，来自工作区根目录）
+//!   2. AGENTS.md（项目级指令与长期记忆，来自项目记忆根目录）
 //!   3. USER.md（用户级偏好，来自 PilotDesk 配置目录）
 //!   4. Skill 列表（name + description，不注入完整内容）
 //!
@@ -78,7 +78,7 @@ impl GitContext {
 /// System Prompt 构建器
 pub struct SystemPromptBuilder {
     base_prompt: String,
-    memory_md: Option<String>,
+    project_agents_md: Option<String>,
     user_md: Option<String>,
     skills: Vec<SkillEntry>,
     git_context: Option<String>,
@@ -154,7 +154,7 @@ impl SystemPromptBuilder {
     pub fn new(base_prompt: String) -> Self {
         Self {
             base_prompt,
-            memory_md: None,
+            project_agents_md: None,
             user_md: None,
             skills: Vec::new(),
             git_context: None,
@@ -162,10 +162,10 @@ impl SystemPromptBuilder {
         }
     }
 
-    /// 从文件加载 MEMORY.md
-    pub fn with_memory_md(mut self, workspace_root: Option<&str>) -> Self {
-        if let Some(root) = workspace_root {
-            self.memory_md = read_file_if_exists(root, "MEMORY.md");
+    /// 从项目记忆根加载 AGENTS.md。
+    pub fn with_project_agents(mut self, memory_root: Option<&str>) -> Self {
+        if let Some(root) = memory_root {
+            self.project_agents_md = read_file_if_exists(root, "AGENTS.md");
         }
         self
     }
@@ -211,9 +211,9 @@ impl SystemPromptBuilder {
             parts.push(self.base_prompt);
         }
 
-        // 2. MEMORY.md — 项目级记忆
-        if let Some(ref memory) = self.memory_md {
-            parts.push(format!("<project_memory>\n{}\n</project_memory>", memory));
+        // 2. AGENTS.md — 项目级指令与长期记忆
+        if let Some(ref agents) = self.project_agents_md {
+            parts.push(format!("<project_memory>\n{}\n</project_memory>", agents));
         }
 
         // 2.5. Git 仓库上下文
@@ -299,6 +299,28 @@ mod tests {
     fn test_empty_build() {
         let prompt = SystemPromptBuilder::new("You are a helpful assistant.".into()).build();
         assert_eq!(prompt, "You are a helpful assistant.");
+    }
+
+    #[test]
+    fn project_agents_file_is_loaded_from_memory_root() {
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let root = std::env::temp_dir().join(format!(
+            "pilotdesk_agents_prompt_test_{}_{}",
+            std::process::id(),
+            n
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "# Project Rules\nUse Rust.").unwrap();
+
+        let prompt = SystemPromptBuilder::new("Base".into())
+            .with_project_agents(Some(root.to_string_lossy().as_ref()))
+            .build();
+
+        assert!(prompt.contains("<project_memory>\n# Project Rules\nUse Rust.\n</project_memory>"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 知识库摘要：只在非空时注入，且要说清"怎么查" —— 模型知道自己有什么才会去查

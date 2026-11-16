@@ -186,7 +186,10 @@ fn room_group_by(conn: &Connection, room_id: &str, col: &str) -> Result<Vec<Usag
 ///
 /// 名称解析：主持人（或已被移出者）尽量取 `groupchat_participants.display_name`，
 /// 表缺失/查不到时回落 id，房间级那行回落「主席」。
-fn room_group_by_participant(conn: &Connection, room_id: &str) -> Result<Vec<UsageGroup>, AppError> {
+fn room_group_by_participant(
+    conn: &Connection,
+    room_id: &str,
+) -> Result<Vec<UsageGroup>, AppError> {
     let exact = format!("groupchat:{}", room_id);
     let prefix = format!("groupchat:{}:%", room_id);
     let sql =
@@ -212,13 +215,21 @@ fn room_group_by_participant(conn: &Connection, room_id: &str) -> Result<Vec<Usa
              FROM groupchat_participants WHERE room_id = ?1",
         ) {
             if let Ok(ps) = s.query_map(params![room_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             }) {
                 for (id, name, ptype) in ps.flatten() {
                     if ptype == "director" && director_id.is_none() {
                         director_id = Some(id.clone());
                     }
-                    let label = if name.trim().is_empty() { id.clone() } else { name };
+                    let label = if name.trim().is_empty() {
+                        id.clone()
+                    } else {
+                        name
+                    };
                     names.insert(id, label);
                 }
             }
@@ -237,7 +248,10 @@ fn room_group_by_participant(conn: &Connection, room_id: &str) -> Result<Vec<Usa
         }
         // 查不到名字（参与者已被移出）：保留 id，至少还能对上用量归属
     }
-    Ok(rows.into_iter().map(|(name, totals)| UsageGroup { name, totals }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(name, totals)| UsageGroup { name, totals })
+        .collect())
 }
 
 /// 群聊房间用量合计（含多参与者/多模型；room 无记录时返回全 0）。
@@ -529,7 +543,9 @@ fn total(conn: &Connection, w: UsageWindow) -> Result<UsageTotals, AppError> {
          FROM api_usage_log{}",
         filter
     ))?;
-    let t = stmt.query_row(rusqlite::params_from_iter(args), |r| UsageTotals::from_row(r))?;
+    let t = stmt.query_row(rusqlite::params_from_iter(args), |r| {
+        UsageTotals::from_row(r)
+    })?;
     Ok(t)
 }
 
@@ -567,10 +583,7 @@ fn trend(conn: &Connection, w: UsageWindow) -> Result<Vec<UsageDay>, AppError> {
 }
 
 /// 计算用量汇总（显式窗口：本月 / 上月 / 自定义区间走这条）。
-pub fn usage_summary_window(
-    conn: &Connection,
-    w: UsageWindow,
-) -> Result<UsageSummary, AppError> {
+pub fn usage_summary_window(conn: &Connection, w: UsageWindow) -> Result<UsageSummary, AppError> {
     Ok(UsageSummary {
         totals: total(conn, w)?,
         by_provider: group_provider(conn, w)?,
@@ -972,6 +985,9 @@ pub const REPORT_ORG_ID_KEY: &str = "report_org_id";
 /// 自动上报间隔（秒）：每 30 分钟一次。
 const USAGE_REPORT_INTERVAL_SECS: u64 = 30 * 60;
 
+/// 组织必须明确具备团队用量看板能力，才允许接收成员上报的用量。
+const TEAM_USAGE_BOARD_CAPABILITY: &str = "team.usage-board";
+
 /// 平台单次上报的 items 上限（契约：最多 200 条）。
 const USAGE_REPORT_MAX_ITEMS: usize = 200;
 
@@ -1115,6 +1131,9 @@ struct MineOrgRow {
     /// 组织状态（active / suspended / dissolved）；只有 active 才可用
     #[serde(default)]
     status: String,
+    /// 平台按组织档位与到期时间解析后的受限能力集合
+    #[serde(default)]
+    capabilities: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1143,28 +1162,46 @@ fn pick_report_org(configured: Option<i64>, active_ids: &[i64]) -> Option<i64> {
     }
 }
 
+fn is_active_report_org(org: &MineOrgRow) -> bool {
+    org.seat_status == "active" && org.status == "active"
+}
+
+fn is_reportable_org(org: &MineOrgRow) -> bool {
+    is_active_report_org(org)
+        && org
+            .capabilities
+            .iter()
+            .any(|capability| capability == TEAM_USAGE_BOARD_CAPABILITY)
+}
+
 /// 解析本次上报的目标组织 id：拉 `/organizations/mine` 取在用组织（`seatStatus === 'active'`
-/// 且 `status === 'active'`），再按 [`pick_report_org`] 选定（配置失效则回退第一个）。
+/// 且 `status === 'active'` 且具备 `team.usage-board`），再按 [`pick_report_org`] 选定
+/// （配置失效或缺少团队能力则回退第一个可用组织）。
 ///
-/// **必须有在用组织**，否则 `Err`（调用方放弃本次上报）：
+/// **必须有具备团队用量看板能力的在用组织**，否则 `Err`（调用方放弃本次上报）：
 /// 不带 `orgId` 上报会被平台按「权益来源」回退（见平台 `resolveUsageOwner`），
 /// 可能落到**个人维度**——而个人维度在平台侧没有任何展示/消费点，等于写死数据；
 /// 接口失败同样 `Err`，避免把用量静默记错维度。
 async fn resolve_report_org_id(configured: Option<i64>, token: &str) -> Result<i64, AppError> {
     let resp: MineOrgsResp =
         crate::utils::platform::get_json("/api/v1/organizations/mine", Some(token)).await?;
+    let active_count = resp
+        .organizations
+        .iter()
+        .filter(|org| is_active_report_org(org))
+        .count();
     let active: Vec<i64> = resp
         .organizations
         .into_iter()
-        .filter(|o| o.seat_status == "active" && o.status == "active")
+        .filter(is_reportable_org)
         .map(|o| o.id)
         .collect();
     let chosen = pick_report_org(configured, &active);
     if let Some(id) = configured {
         if chosen != Some(id) {
-            // 配置的组织已失效（不再是成员 / 已解散）→ 回退；前端设置页也会给出提示
+            // 配置的组织已失效或缺少团队用量看板能力 → 回退；前端设置页也会给出提示
             log::warn!(
-                "[UsageReport] 配置的上报组织 {} 已失效，回退到 {}",
+                "[UsageReport] 配置的上报组织 {} 已失效或未开通团队用量看板，回退到 {}",
                 id,
                 chosen
                     .map(|v| v.to_string())
@@ -1173,7 +1210,12 @@ async fn resolve_report_org_id(configured: Option<i64>, token: &str) -> Result<i
         }
     }
     chosen.ok_or_else(|| {
-        AppError::Config("当前账号没有在用组织，向组织上报无归属目标".to_string())
+        let message = if active_count > 0 {
+            "当前组织未开通团队用量看板，无法上报用量"
+        } else {
+            "当前账号没有在用组织，向组织上报无归属目标"
+        };
+        AppError::Config(message.to_string())
     })
 }
 
@@ -1207,11 +1249,7 @@ async fn post_report(
 ) -> Result<ReportResp, AppError> {
     crate::utils::platform::post_json(
         "/api/v1/usage/report",
-        &ReportBody {
-            day,
-            org_id,
-            items,
-        },
+        &ReportBody { day, org_id, items },
         Some(token),
     )
     .await
@@ -1523,10 +1561,7 @@ mod tests {
         let s = summary(&conn, None);
         let by_provider: std::collections::BTreeMap<String, &UsageGroup> =
             s.by_provider.iter().map(|g| (g.name.clone(), g)).collect();
-        assert!(
-            by_provider.contains_key("DeepSeek"),
-            "应显示 display_name"
-        );
+        assert!(by_provider.contains_key("DeepSeek"), "应显示 display_name");
         assert!(
             by_provider.contains_key("custom"),
             "未注册 provider 回落 id"
@@ -2061,7 +2096,8 @@ mod tests {
         assert!(usage_report_enabled(&conn));
         crate::commands::app_settings::set_setting(&conn, USAGE_REPORT_ENABLED_KEY, "0").unwrap();
         assert!(!usage_report_enabled(&conn));
-        crate::commands::app_settings::set_setting(&conn, USAGE_REPORT_ENABLED_KEY, "FALSE").unwrap();
+        crate::commands::app_settings::set_setting(&conn, USAGE_REPORT_ENABLED_KEY, "FALSE")
+            .unwrap();
         assert!(!usage_report_enabled(&conn));
     }
 
@@ -2078,6 +2114,42 @@ mod tests {
         // 无任何在用组织：None
         assert_eq!(pick_report_org(Some(99), &[]), None);
         assert_eq!(pick_report_org(None, &[]), None);
+    }
+
+    /// 只有在用且明确具备 team.usage-board 的组织才可接收上报。
+    #[test]
+    fn usage_report_org_requires_team_usage_board() {
+        let org = |id, seat_status: &str, status: &str, capabilities: &[&str]| MineOrgRow {
+            id,
+            seat_status: seat_status.to_string(),
+            status: status.to_string(),
+            capabilities: capabilities.iter().map(|v| v.to_string()).collect(),
+        };
+
+        assert!(is_reportable_org(&org(
+            10,
+            "active",
+            "active",
+            &[TEAM_USAGE_BOARD_CAPABILITY],
+        )));
+        assert!(!is_reportable_org(&org(
+            20,
+            "active",
+            "active",
+            &["team.members"],
+        )));
+        assert!(!is_reportable_org(&org(
+            30,
+            "active",
+            "suspended",
+            &[TEAM_USAGE_BOARD_CAPABILITY],
+        )));
+        assert!(!is_reportable_org(&org(
+            40,
+            "removed",
+            "active",
+            &[TEAM_USAGE_BOARD_CAPABILITY],
+        )));
     }
 
     /// 主库设置读取：缺省 / 空 / 非法 → None；写入数字 → 读回。

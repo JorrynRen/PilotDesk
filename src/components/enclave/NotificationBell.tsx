@@ -101,12 +101,10 @@ export function NotificationBell({
       <button
         ref={btnRef}
         onClick={toggle}
-        className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
-        style={{
-          backgroundColor: open ? 'var(--bg-tertiary)' : 'transparent',
-          color: 'var(--text-secondary)',
-          border: '1px solid var(--border)',
-        }}
+        className="enclave-navbar-action"
+        data-active={open}
+        aria-expanded={open}
+        aria-haspopup="dialog"
         title="团队通知：任务指派 / 汇报提交、确认、退回 / 新讨论 / 截止提醒"
       >
         <Bell size={12} />

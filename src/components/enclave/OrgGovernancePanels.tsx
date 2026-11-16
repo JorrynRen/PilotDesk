@@ -5,7 +5,7 @@
  * 前端不做角色推断；`policy.write` / `emergency.set` 不在列表里就一律禁用。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight, CheckCircle2, XCircle } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
@@ -14,6 +14,7 @@ import { useEnclaveOrgStore, AUDIT_PAGE_SIZE } from '../../stores/enclaveOrgStor
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { normalizeDisplayPath } from '../../utils/path';
 import type { TransferExportOutcome, TransferPhase, TransferView } from '../../types/enclave';
 
 /** 表单控件口径：与任务页 / 知识库页一致（Select 用 size="sm" 对应 28px 高度） */
@@ -26,7 +27,7 @@ const FIELD_STYLE = {
 
 const ACTION_LABEL: Record<string, string> = {
   'policy.allow_cloud_model': '数据出境策略',
-  'host.emergency': '主机应急开关',
+  'host.emergency': '对外服务状态',
   'host.transfer': '主机转移',
   'files.root': '本机团队文件根目录',
   'file.download': '文件下载（成员拉取原件）',
@@ -76,9 +77,7 @@ function formatDetail(action: string, detail: string): string {
     return `状态：${obj.from} → ${obj.to}`;
   }
   if (obj && typeof obj.from === 'string' && typeof obj.to === 'string') {
-    // 历史留痕可能带 Windows 扩展长度前缀（`\\?\` / `\\?\UNC\`），展示时统一剥掉
-    const clean = (p: string) => p.replace(/^\\\\\?\\UNC\\/, '\\\\').replace(/^\\\\\?\\/, '');
-    return `本机基础目录：${clean(obj.from)} → ${clean(obj.to)}`;
+    return `本机基础目录：${normalizeDisplayPath(obj.from)} → ${normalizeDisplayPath(obj.to)}`;
   }
   if (obj && typeof obj.from === 'boolean' && typeof obj.to === 'boolean') {
     // `host.emergency` 落库的是 `disabled`（true = 关闭），展示口径要翻转成「对外服务 开/关」
@@ -157,6 +156,49 @@ function SwitchRow(props: {
 }
 
 /**
+ * 治理卡片统一壳层：标题、状态和操作只占独立标题栏，正文从分隔线下开始。
+ * 这样开关、表单、列表不会和标题挤在同一视觉层里。
+ */
+function GovernanceCard({
+  icon,
+  title,
+  description,
+  badge,
+  actions,
+  bodyClassName = '',
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  description?: ReactNode;
+  badge?: ReactNode;
+  actions?: ReactNode;
+  bodyClassName?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="enclave-governance-card">
+      <header className="enclave-governance-card-head">
+        <div className="enclave-governance-card-head-main">
+          <div className="enclave-governance-card-title-row">
+            <span className="enclave-governance-card-icon">{icon}</span>
+            <strong className="enclave-governance-card-title">{title}</strong>
+            {badge}
+          </div>
+          {description && (
+            <div className="enclave-governance-card-description">{description}</div>
+          )}
+        </div>
+        {actions && <div className="enclave-governance-card-actions">{actions}</div>}
+      </header>
+      <div className={`enclave-governance-card-body ${bodyClassName}`.trim()}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/**
  * 主机与连接（M7）：主机侧展示对外服务的监听状态；成员侧展示发现结果与手动地址。
  *
  * 手动地址是成员**本机**设置，优先于 UDP 自动发现（局域网广播常被 Windows 防火墙拦截）。
@@ -165,21 +207,24 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
   const host = useEnclaveOrgStore((s) => s.host);
   const cache = useEnclaveOrgStore((s) => s.cache);
   const caps = useEnclaveOrgStore((s) => s.caps);
-  const [addr, setAddr] = useState('');
+  const addrSource = `${orgId}\u0000${host?.manualAddr ?? ''}`;
+  const [addrDraft, setAddrDraft] = useState({ source: '', value: '' });
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [limitMb, setLimitMb] = useState('');
+  const limitSource = String(cache?.maxBytes ?? '');
+  const [limitDraft, setLimitDraft] = useState({ source: '', value: '' });
   const [hostBusy, setHostBusy] = useState<'' | 'claim' | 'takeover' | 'force'>('');
 
-  // 组织切换 / 状态刷新后回填已保存的手动地址
-  useEffect(() => {
-    setAddr(host?.manualAddr ?? '');
-  }, [host?.manualAddr, orgId]);
-
-  // 缓存上限回填（仅在服务端值变化时覆盖输入框）
-  useEffect(() => {
-    if (cache) setLimitMb(String(Math.round(cache.maxBytes / 1024 / 1024)));
-  }, [cache?.maxBytes]);
+  // 输入稿按服务端值作用域隔离：服务端刷新时自动采用新值，用户编辑期间不被覆盖。
+  const addr = addrDraft.source === addrSource ? addrDraft.value : host?.manualAddr ?? '';
+  const setAddr = (value: string) => setAddrDraft({ source: addrSource, value });
+  const limitMb =
+    limitDraft.source === limitSource
+      ? limitDraft.value
+      : cache
+        ? String(Math.round(cache.maxBytes / 1024 / 1024))
+        : '';
+  const setLimitMb = (value: string) => setLimitDraft({ source: limitSource, value });
 
   const saveAddr = async () => {
     setBusy(true);
@@ -243,19 +288,18 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
   const roleColor = host?.role === 'host' ? 'var(--accent)' : 'var(--text-tertiary)';
 
   return (
-    <div
-      className="rounded-lg px-3 py-2"
-      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
-    >
-      <div className="flex items-center gap-2">
-        <Server size={13} style={{ color: roleColor }} />
-        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-          主机与连接
-        </span>
-        <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: roleColor }}>
+    <GovernanceCard
+      icon={<Server size={13} style={{ color: roleColor }} />}
+      title="主机与连接"
+      badge={(
+        <span
+          className="text-[11px] px-1.5 py-0.5 rounded"
+          style={{ backgroundColor: 'var(--bg-tertiary)', color: roleColor }}
+        >
           {roleText}
         </span>
-        <div className="flex-1" />
+      )}
+      actions={(
         <button
           onClick={() => void refresh()}
           disabled={refreshing}
@@ -265,7 +309,8 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
           {refreshing ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
           刷新状态
         </button>
-      </div>
+      )}
+    >
 
       {/* 主机设备登记：owner 在非登记设备上看到接管入口 */}
       {isOwner && host && !registeredHere && (
@@ -525,7 +570,7 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
           本机尚无该组织的治理快照；请先点上方「刷新」同步组织与成员。
         </div>
       )}
-    </div>
+    </GovernanceCard>
   );
 }
 
@@ -799,24 +844,11 @@ function TransferCard({ orgId }: { orgId: string }) {
   const inputStyle = FIELD_STYLE;
 
   return (
-    <div
-      className="rounded-lg px-3 py-2"
-      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+    <GovernanceCard
+      icon={<ArrowLeftRight size={13} style={{ color: 'var(--accent)' }} />}
+      title="主机转移"
+      description="数据只走内网或线下介质，不经云；必须按“校验通过 → 云端生效 → 销毁旧机数据”推进。"
     >
-      <div className="flex items-center gap-2">
-        <ArrowLeftRight size={13} style={{ color: 'var(--accent)' }} />
-        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-          主机转移
-        </span>
-        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          数据只走内网或线下介质，不经云
-        </span>
-      </div>
-      <div className="mt-1 text-[10px] leading-4" style={{ color: 'var(--text-tertiary)' }}>
-        两种方式任选其一：方式① 局域网自动迁移（同一局域网）；方式② 线下加密迁移包（异地 / 需人工搬运介质）。
-        顺序均为：校验通过（verified）→ 云端完成所有权转让（completed）→ 旧主机销毁数据；
-        未校验不得生效，云端未生效不得销毁。
-      </div>
 
       {/* 转出 / 接管互斥：owner = 主机 → 转出；成员 → 接管 */}
       {!caps && (
@@ -826,7 +858,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       )}
 
       {caps && canTransfer && (
-        <div className="mt-2 flex flex-col gap-1.5">
+        <div className="enclave-governance-subsection flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
             方式① 局域网自动迁移
           </div>
@@ -863,7 +895,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       )}
 
       {caps && canTransfer && (
-        <div className="mt-2 flex flex-col gap-1.5">
+        <div className="enclave-governance-subsection flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
             方式② 线下加密迁移包（异地兜底）
           </div>
@@ -917,7 +949,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       )}
 
       {caps && !canTransfer && (
-        <div className="mt-2 flex flex-col gap-1.5">
+        <div className="enclave-governance-subsection flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
               方式① 局域网自动迁移 · 待接收请求
@@ -978,7 +1010,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       )}
 
       {caps && !canTransfer && (
-        <div className="mt-2 flex flex-col gap-1.5">
+        <div className="enclave-governance-subsection flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
             方式② 线下加密迁移包（异地兜底）
           </div>
@@ -1028,7 +1060,7 @@ function TransferCard({ orgId }: { orgId: string }) {
 
       {/* 记录 */}
       {transfers.length > 0 && (
-        <div className="mt-2 flex flex-col gap-1">
+        <div className="enclave-governance-subsection flex flex-col gap-1">
           {transfers.slice(0, 5).map((t) => (
             <div key={t.id} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
               <span
@@ -1053,7 +1085,7 @@ function TransferCard({ orgId }: { orgId: string }) {
           ))}
         </div>
       )}
-    </div>
+    </GovernanceCard>
   );
 }
 
@@ -1067,21 +1099,21 @@ function BackupCard() {
   const host = useEnclaveOrgStore((s) => s.host);
   const backup = useEnclaveOrgStore((s) => s.backup);
   const [busy, setBusy] = useState(false);
-  const [intervalHours, setIntervalHours] = useState('24');
-  const [keep, setKeep] = useState('2');
+  const backupSource = backup ? `${backup.intervalHours}:${backup.keep}` : '';
+  const [intervalDraft, setIntervalDraft] = useState({ source: '', value: '' });
+  const [keepDraft, setKeepDraft] = useState({ source: '', value: '' });
 
   useEffect(() => {
     if (host?.role === 'host') void useEnclaveOrgStore.getState().loadBackup();
   }, [host?.role]);
 
-  useEffect(() => {
-    if (!backup) return;
-    setIntervalHours(String(backup.intervalHours));
-    setKeep(String(backup.keep));
-  }, [backup?.intervalHours, backup?.keep]);
-
   if (host?.role !== 'host') return null;
 
+  const intervalHours =
+    intervalDraft.source === backupSource ? intervalDraft.value : String(backup?.intervalHours ?? 24);
+  const keep = keepDraft.source === backupSource ? keepDraft.value : String(backup?.keep ?? 2);
+  const setIntervalHours = (value: string) => setIntervalDraft({ source: backupSource, value });
+  const setKeep = (value: string) => setKeepDraft({ source: backupSource, value });
   const enabled = !!backup?.enabled;
   const intervalNum = Number(intervalHours);
   const keepNum = Number(keep);
@@ -1113,19 +1145,11 @@ function BackupCard() {
   };
 
   return (
-    <div
-      className="rounded-lg px-3 py-2"
-      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+    <GovernanceCard
+      icon={<History size={13} style={{ color: 'var(--accent)' }} />}
+      title="主机自动备份"
+      description="本机兜底：数据库快照 + 团队文件，按份数滚动保留。"
     >
-      <div className="flex items-center gap-2">
-        <History size={13} style={{ color: 'var(--accent)' }} />
-        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-          主机自动备份
-        </span>
-        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          本机兜底：数据库快照 + 团队文件，按份数滚动保留
-        </span>
-      </div>
       <SwitchRow
         title="自动备份"
         desc="仅在本机承载组织时执行；备份包为普通 zip，落在本机备份目录，不含云端同步。"
@@ -1190,7 +1214,7 @@ function BackupCard() {
           最近一次失败：{backup.lastError}
         </div>
       )}
-    </div>
+    </GovernanceCard>
   );
 }
 
@@ -1206,71 +1230,59 @@ function PlatformCheckCard({ orgId }: { orgId: string }) {
   const caps = useEnclaveOrgStore((s) => s.caps);
   const orgName = useEnclaveOrgStore((s) => s.detail?.org.name ?? '');
   const isOwner = caps?.role === 'owner';
-  const [busy, setBusy] = useState<'' | 'check' | 'host'>('');
-  const [rows, setRows] = useState<PlatformCheckRow[] | null>(null);
+  const [busyState, setBusyState] = useState<{ orgId: string; value: '' | 'check' | 'host' }>({
+    orgId: '',
+    value: '',
+  });
+  const [rowsState, setRowsState] = useState<{
+    orgId: string;
+    rows: PlatformCheckRow[] | null;
+  }>({ orgId: '', rows: null });
+  const busy = busyState.orgId === orgId ? busyState.value : '';
+  const rows = rowsState.orgId === orgId ? rowsState.rows : null;
   /** 自检代次：切组织后旧请求回来不能覆盖新组织的结果 */
   const seq = useRef(0);
 
-  const run = async (registerHost: boolean) => {
+  const run = useCallback(async (registerHost: boolean) => {
     const my = ++seq.current;
-    setBusy(registerHost ? 'host' : 'check');
+    setBusyState({ orgId, value: registerHost ? 'host' : 'check' });
     try {
       const out = await invoke<PlatformCheckRow[]>('enclave_platform_check', {
         orgId,
         registerHost,
       });
-      if (my === seq.current) setRows(out);
+      if (my === seq.current) setRowsState({ orgId, rows: out });
     } catch (e) {
       if (my === seq.current) {
-        setRows([{ key: 'error', label: '自检失败', ok: false, detail: errorMessage(e) }]);
+        setRowsState({
+          orgId,
+          rows: [{ key: 'error', label: '自检失败', ok: false, detail: errorMessage(e) }],
+        });
       }
     } finally {
-      if (my === seq.current) setBusy('');
+      if (my === seq.current) setBusyState({ orgId, value: '' });
     }
-  };
+  }, [orgId]);
 
   // 切换组织：上一个组织的自检结果不能留在新组织下 —— 清空后自动跑一轮只读自检
   useEffect(() => {
-    setRows(null);
-    seq.current += 1;
-    setBusy('');
-    if (orgId) void run(false);
-    // 只有组织变化才重跑；run 的闭包会随渲染更新
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId]);
+    if (orgId) queueMicrotask(() => void run(false));
+  }, [orgId, run]);
 
   return (
-    <div
-      className="rounded-lg px-3 py-2"
-      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
-    >
-      <div className="flex items-center gap-2 flex-wrap">
-        <ShieldCheck size={13} style={{ color: 'var(--accent)' }} />
-        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-          平台联调自检
-        </span>
-        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+    <GovernanceCard
+      icon={<ShieldCheck size={13} style={{ color: 'var(--accent)' }} />}
+      title="平台联调自检"
+      description={(
+        <>
           依次探测登录凭证 / 组织列表 / 成员名单{isOwner ? ' / 主机地址登记' : ''}
           {orgName ? ` · 当前组织「${orgName}」` : ''}
-        </span>
-        <div className="flex-1" />
-        <button
-          onClick={() => void run(false)}
-          disabled={busy !== ''}
-          className="text-[11px] px-1.5 py-0.5 rounded flex items-center gap-1"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-            opacity: busy !== '' ? 0.6 : 1,
-          }}
-        >
-          {busy === 'check' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-          开始自检
-        </button>
-        {isOwner && (
+        </>
+      )}
+      actions={(
+        <>
           <button
-            onClick={() => void run(true)}
+            onClick={() => void run(false)}
             disabled={busy !== ''}
             className="text-[11px] px-1.5 py-0.5 rounded flex items-center gap-1"
             style={{
@@ -1279,15 +1291,32 @@ function PlatformCheckCard({ orgId }: { orgId: string }) {
               border: '1px solid var(--border)',
               opacity: busy !== '' ? 0.6 : 1,
             }}
-            title="会真的调用平台主机登记接口（地址 / 端口 / 设备名），仅 owner 有意义"
           >
-            {busy === 'host' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-            自检并重登记主机
+            {busy === 'check' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+            开始自检
           </button>
-        )}
-      </div>
-      {rows && (
-        <div className="mt-2 flex flex-col gap-1">
+          {isOwner && (
+            <button
+              onClick={() => void run(true)}
+              disabled={busy !== ''}
+              className="text-[11px] px-1.5 py-0.5 rounded flex items-center gap-1"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                opacity: busy !== '' ? 0.6 : 1,
+              }}
+              title="会真的调用平台主机登记接口（地址 / 端口 / 设备名），仅 owner 有意义"
+            >
+              {busy === 'host' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+              自检并重登记主机
+            </button>
+          )}
+        </>
+      )}
+    >
+      {rows ? (
+        <div className="flex flex-col gap-1">
           {rows.map((r) => (
             <div key={r.key} className="flex items-start gap-1.5 text-[11px] min-w-0">
               {r.ok ? (
@@ -1308,8 +1337,12 @@ function PlatformCheckCard({ orgId }: { orgId: string }) {
             </div>
           ))}
         </div>
+      ) : (
+        <div className="text-[11px] py-1" style={{ color: 'var(--text-tertiary)' }}>
+          {busy ? '正在执行平台联通检查…' : '尚未运行自检。'}
+        </div>
       )}
-    </div>
+    </GovernanceCard>
   );
 }
 
@@ -1393,23 +1426,24 @@ export function OrgGovernanceSection({
       {showSecurity && (
         <>
       {/* 数据出境总闸 */}
-      <div
-        className="rounded-lg px-3 py-2"
-        style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+      <GovernanceCard
+        icon={allowCloud
+          ? <ShieldAlert size={13} style={{ color: 'var(--status-danger)' }} />
+          : <ShieldCheck size={13} style={{ color: 'var(--status-success, var(--accent))' }} />}
+        title="数据出境闸门"
+        description="控制团队数据是否可经云端 Provider 出境；本地与内网模型不受此开关限制。"
+        badge={(
+          <span
+            className="text-[11px] px-1.5 py-0.5 rounded"
+            style={{
+              backgroundColor: allowCloud ? 'var(--status-danger-bg)' : 'var(--bg-tertiary)',
+              color: allowCloud ? 'var(--status-danger)' : 'var(--text-tertiary)',
+            }}
+          >
+            {allowCloud ? '已允许' : '默认禁止'}
+          </span>
+        )}
       >
-        <div className="flex items-center gap-2">
-          {allowCloud ? (
-            <ShieldAlert size={13} style={{ color: 'var(--status-danger)' }} />
-          ) : (
-            <ShieldCheck size={13} style={{ color: 'var(--status-success, var(--accent))' }} />
-          )}
-          <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-            数据出境闸门
-          </span>
-          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            {allowCloud ? '团队数据可发送至云端模型' : '团队数据不得发送至云端模型（默认）'}
-          </span>
-        </div>
         <SwitchRow
           title="团队数据可发送至云端模型"
           desc="组织级总闸，默认关闭；只管 enclave.db 内的团队数据，个人数据不受影响。本地/内网模型（internal Provider）不受限制，仅经「云端」Provider 出境时受此闸门约束。策略随主机/数据库迁移。"
@@ -1426,25 +1460,28 @@ export function OrgGovernanceSection({
             仅组织所有者（owner）可修改
           </div>
         )}
-      </div>
+      </GovernanceCard>
 
-      {/* 主机应急开关 */}
-      <div
-        className="rounded-lg px-3 py-2"
-        style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+      {/* 对外服务状态（内部仍由应急开关控制） */}
+      <GovernanceCard
+        icon={<Power size={13} style={{ color: emergencyOn ? 'var(--status-danger)' : 'var(--accent)' }} />}
+        title="对外服务状态"
+        description="控制成员连接与 API 路由共享；关闭只影响外部访问，本机使用保持正常。"
+        badge={(
+          <span
+            className="text-[11px] px-1.5 py-0.5 rounded"
+            style={{
+              backgroundColor: emergencyOn ? 'var(--status-danger-bg)' : 'var(--bg-tertiary)',
+              color: emergencyOn ? 'var(--status-danger)' : 'var(--text-secondary)',
+            }}
+          >
+            {emergencyOn ? '临时关闭' : '运行正常'}
+          </span>
+        )}
       >
-        <div className="flex items-center gap-2">
-          <Power size={13} style={{ color: emergencyOn ? 'var(--status-danger)' : 'var(--accent)' }} />
-          <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-            主机应急
-          </span>
-          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            {emergencyOn ? '对外服务已临时关闭（本机照常）' : '对外服务正常'}
-          </span>
-        </div>
         <SwitchRow
-          title="对外服务"
-          desc="开启时成员可连接本机；关闭后立即断开全部外部连接（成员端无法访问）。本机使用不受影响；纯本地、断网可用、不改云端数据，操作留痕。"
+          title="允许成员连接本机"
+          desc="包含成员连接与 API 路由共享。关闭后立即停止新的外部连接和网关请求；本机使用不受影响，操作留痕。"
           on={!emergencyOn}
           canEdit={canEmergency}
           busy={busy === 'emergency'}
@@ -1458,7 +1495,7 @@ export function OrgGovernanceSection({
             仅组织所有者（owner）可操作
           </div>
         )}
-      </div>
+      </GovernanceCard>
         </>
       )}
 
@@ -1480,22 +1517,16 @@ export function OrgGovernanceSection({
 
       {/* 审计流水（仅 owner / admin；member 不渲染） */}
       {showSecurity && canAudit && (
-      <div
-        className="rounded-lg flex flex-col overflow-hidden"
-        style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+      <GovernanceCard
+        icon={<History size={12} style={{ color: 'var(--accent)' }} />}
+        title="变更审计"
+        badge={(
+          <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+            {audit.length} 条
+          </span>
+        )}
+        bodyClassName="is-flush"
       >
-        <div
-          className="shrink-0 h-8 px-3 flex items-center gap-2"
-          style={{ borderBottom: '1px solid var(--border)' }}
-        >
-          <History size={12} style={{ color: 'var(--accent)' }} />
-          <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-            变更审计
-          </span>
-          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            {audit.length}
-          </span>
-        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
             <thead>
@@ -1564,7 +1595,7 @@ export function OrgGovernanceSection({
             下一页
           </button>
         </div>
-      </div>
+      </GovernanceCard>
       )}
     </div>
   );

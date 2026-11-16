@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Star, Search, Send, Trash2, Edit3, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Settings2, Star, Search, Send, Trash2, Edit3, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
@@ -14,6 +15,7 @@ import { TagFilterBar } from '../inspiration/TagFilterBar';
 import { EMOJI_OPTIONS } from '../../constants';
 
 export function InspirationPanel() {
+  const navigate = useNavigate();
   const { viewMode } = useTerminal();
   const isTerminalMode = viewMode === 'terminal';
 
@@ -145,18 +147,15 @@ export function InspirationPanel() {
           >
             <Star size={12} fill={favoriteOnly ? '#FBBF24' : 'none'} />
           </button>
-          {/* New button */}
+          {/* Manage button */}
           <button
-            onClick={() => {
-              setEditingInspiration(null);
-              setShowForm(true);
-            }}
+            onClick={() => navigate('/inspirations')}
             className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px]  shrink-0 transition-colors"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-            title="新建灵感"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="前往灵感库管理"
           >
-            <Plus size={11} />
-            新建
+            <Settings2 size={11} />
+            管理
           </button>
         </div>
         {/* 标签筛选：与独立页同一套外观（紧凑档 = 单行横向滚动，适配侧栏宽度） */}
@@ -190,7 +189,7 @@ export function InspirationPanel() {
           <div className="flex flex-col items-center justify-center h-20 gap-1.5">
             <span className="text-lg">💡</span>
             <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-              {searchQuery ? '未找到匹配的灵感' : '还没有灵感，点击新建开始收集'}
+              {searchQuery ? '未找到匹配的灵感' : '还没有灵感，到灵感库添加'}
             </p>
           </div>
         ) : (

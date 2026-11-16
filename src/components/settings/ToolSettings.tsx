@@ -3,6 +3,7 @@ import { Search, Lock, Save, RotateCcw, Wrench, Loader2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { Select } from '../common/Select';
 import { errorMessage } from '../../utils/errorMessage';
+import { SettingsButton, SettingsSection, SettingsToggle } from './index';
 
 // ============================================================
 // 工具管理（后端打通版）
@@ -108,7 +109,7 @@ function ToolDescription({ text }: { text: string }) {
       <p
         ref={measureRef}
         aria-hidden
-        className="invisible absolute top-0 left-0 w-full text-[11px] leading-relaxed pointer-events-none"
+        className="pd-settings-note invisible absolute top-0 left-0 w-full pointer-events-none"
         style={{
           display: '-webkit-box',
           WebkitLineClamp: 3,
@@ -116,7 +117,7 @@ function ToolDescription({ text }: { text: string }) {
           overflow: 'hidden',
         }}
       />
-      <p className="text-[11px] mt-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+      <p className="pd-settings-note mt-1">
         {expanded || !overflow ? text : clamped}
         {overflow && (
           <button
@@ -252,9 +253,14 @@ export function ToolSettings() {
     r === 'high' ? '#dc2626' : r === 'medium' ? '#d97706' : '#16a34a';
 
   return (
-    <div className="space-y-4">
+    <div className="settings-page-stack">
+      <SettingsSection
+        title="工具管理"
+        description="按会话模式与圆桌模式分别控制可用工具。开关修改在新会话或新圆桌启动时生效。"
+      >
+      <div className="space-y-3">
       {/* 场景切换 */}
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {(['session', 'groupchat'] as Scene[]).map((s) => (
           <button
             key={s}
@@ -304,25 +310,22 @@ export function ToolSettings() {
       </div>
 
       {/* 操作按钮 */}
-      <div className="flex items-center gap-2">
-        <button
+      <div className="pd-settings-actions">
+        <SettingsButton
+          variant="primary"
           onClick={handleSave}
           disabled={saving || loading}
-          className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors disabled:opacity-50"
-          style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+          icon={saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
         >
-          {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
           保存修改
-        </button>
-        <button
+        </SettingsButton>
+        <SettingsButton
           onClick={handleReset}
           disabled={saving || loading}
-          className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors disabled:opacity-50"
-          style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          icon={<RotateCcw size={12} />}
         >
-          <RotateCcw size={12} />
           重置（恢复默认）
-        </button>
+        </SettingsButton>
         {savedTip === 'saved' && (
           <span className="text-xs" style={{ color: 'var(--success)' }}>已保存（新会话生效）</span>
         )}
@@ -332,7 +335,7 @@ export function ToolSettings() {
       </div>
 
       {loadError && (
-        <div className="px-3 py-2 rounded-lg text-xs" style={{ backgroundColor: 'rgba(239,68,68,0.08)', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.2)' }}>
+        <div className="pd-settings-inline-note" style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}>
           加载工具目录失败：{loadError}
         </div>
       )}
@@ -343,17 +346,15 @@ export function ToolSettings() {
           <Loader2 size={20} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
           {sceneItems.map((t) => {
             const locked = isLocked(t);
             const off = isDisabled(t);
             return (
               <div
                 key={t.name}
-                className="px-3 py-2.5 rounded-lg transition-colors"
+                className="pd-settings-card px-3 py-2.5 rounded-md transition-colors"
                 style={{
-                  backgroundColor: 'var(--bg-raised)', // 与 SettingsCard（环境检测等 tab）统一
-                  border: '1px solid transparent',
                   opacity: off && !locked ? 0.7 : 1,
                 }}
               >
@@ -374,26 +375,16 @@ export function ToolSettings() {
                       锁定
                     </span>
                   )}
-                  <button
-                    onClick={() => !locked && toggle(t.name)}
+                  <SettingsToggle
+                    checked={!off}
+                    onChange={() => toggle(t.name)}
                     disabled={locked}
                     title={locked ? '架构性禁用，不可启用' : off ? '点击启用' : '点击禁用'}
-                    className="ml-auto relative shrink-0 w-9 h-5 rounded-full transition-colors disabled:opacity-50"
-                    style={{
-                      backgroundColor: off ? 'var(--bg-field)' : 'var(--accent)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <span
-                      className="absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all"
-                      style={{
-                        backgroundColor: off ? 'var(--text-tertiary)' : '#fff',
-                        left: off ? 3 : 18,
-                      }}
-                    />
-                  </button>
+                    className="ml-auto"
+                    aria-label={off ? `启用${t.name}` : `禁用${t.name}`}
+                  />
                 </div>
-                {/* 描述：独立块级元素，占满整行；默认折叠 4 行，溢出时「详细 / 收起」切换 */}
+                {/* 描述：独立块级元素，占满整行；默认折叠 3 行，溢出时「详细 / 收起」切换 */}
                 <ToolDescription text={t.description} />
                 {/* 标签：同样占满整行 */}
                 <div className="flex items-center gap-1 mt-1.5 flex-wrap">
@@ -407,7 +398,7 @@ export function ToolSettings() {
             );
           })}
           {sceneItems.length === 0 && !loading && (
-            <div className="text-center py-8 col-span-2">
+            <div className="pd-settings-empty col-span-full">
               <Wrench size={20} style={{ color: 'var(--text-tertiary)' }} className="mx-auto mb-2" />
               <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>没有匹配的工具</p>
             </div>
@@ -416,7 +407,7 @@ export function ToolSettings() {
       )}
 
       {/* 底部说明 */}
-      <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+      <p className="pd-settings-note pt-1">
         - 工具开关仅在「{scene === 'session' ? '会话模式' : '圆桌模式'}」生效；修改将在<b>新会话 / 新圆桌</b>启动时生效，当前会话不受影响。
         <br />
         - 锁定的工具为架构性禁用（如圆桌中的子代理/记忆/任务等，与其场景语义冲突），不可启用。
@@ -427,6 +418,8 @@ export function ToolSettings() {
         <br />
         - 技能（skills）由「技能目录」设置管理，不在本页开关范围。
       </p>
+      </div>
+      </SettingsSection>
     </div>
   );
 }

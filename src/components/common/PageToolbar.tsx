@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { MoreHorizontal } from 'lucide-react';
+import { ChevronDown, MoreHorizontal } from 'lucide-react';
 
 /**
  * 页面顶部工具栏的统一容器：优先级 + 宽度感知折叠 + 溢出菜单。
@@ -16,6 +16,8 @@ export interface ToolbarAction {
   key: string;
   label: string;
   icon?: ReactNode;
+  /** 有值时按钮展开二级操作菜单，不直接执行 onClick。 */
+  menuItems?: ToolbarMenuItem[];
   /** 0 主操作 / 1 常用 / 2 低频，默认 1。 */
   priority?: 0 | 1 | 2;
   /** 强制只显示图标（例如行尾关闭按钮），不受优先级影响。 */
@@ -32,6 +34,15 @@ export interface ToolbarAction {
   disabled?: boolean;
   /** 文字/图标颜色覆盖（如危险操作用 --status-danger）。 */
   tone?: string;
+  onClick?: () => void;
+}
+
+export interface ToolbarMenuItem {
+  key: string;
+  label: string;
+  icon?: ReactNode;
+  title?: string;
+  disabled?: boolean;
   onClick: () => void;
 }
 
@@ -52,6 +63,7 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
   const rootRef = useRef<HTMLDivElement>(null);
   const [hostWidth, setHostWidth] = useState(9999);
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
 
   // 观察宿主工具栏行的宽度（本组件自身宽度由内容决定，不能作为折叠依据）。
   useEffect(() => {
@@ -66,14 +78,20 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
     return () => ro.disconnect();
   }, []);
 
-  // 溢出菜单：点击外部 / Esc 关闭
+  // 工具栏菜单与溢出菜单共用一套关闭行为。
   useEffect(() => {
-    if (!overflowOpen) return;
+    if (!overflowOpen && openMenuKey === null) return;
     const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOverflowOpen(false);
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOverflowOpen(false);
+        setOpenMenuKey(null);
+      }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOverflowOpen(false);
+      if (e.key === 'Escape') {
+        setOverflowOpen(false);
+        setOpenMenuKey(null);
+      }
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -81,7 +99,7 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [overflowOpen]);
+  }, [openMenuKey, overflowOpen]);
 
   const isCompact = (action: ToolbarAction) => {
     if (action.iconOnly) return true;
@@ -107,42 +125,85 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
       {inline.map((action) => {
         const compact = isCompact(action);
         const primary = action.variant === 'primary';
+        const menuOpen = openMenuKey === action.key;
+        const hasMenu = Boolean(action.menuItems?.length);
         const tone = primary
           ? '#fff'
-          : action.tone ?? (action.active ? 'var(--accent)' : 'var(--text-secondary)');
+          : action.tone ??
+            (action.active || menuOpen ? 'var(--accent)' : 'var(--text-secondary)');
         return (
-          <button
-            key={action.key}
-            type="button"
-            onClick={action.onClick}
-            disabled={action.disabled}
-            title={action.title ?? action.label}
-            aria-label={action.label}
-            aria-pressed={action.active}
-            className={`pd-btn flex items-center shrink-0 rounded transition-colors ${
-              compact ? 'justify-center w-6 h-6' : 'gap-1 px-1.5 h-6'
-            }`}
-            style={{
-              color: tone,
-              backgroundColor: primary
-                ? 'var(--accent)'
-                : action.active
-                  ? 'var(--accent-light)'
-                  : 'transparent',
-              opacity: action.disabled ? 0.4 : 1,
-              fontSize: 10,
-            }}
-          >
-            {action.icon}
-            {!compact && <span>{action.label}</span>}
-          </button>
+          <div key={action.key} className="relative flex shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                if (hasMenu) {
+                  setOverflowOpen(false);
+                  setOpenMenuKey(menuOpen ? null : action.key);
+                  return;
+                }
+                setOpenMenuKey(null);
+                action.onClick?.();
+              }}
+              disabled={action.disabled}
+              title={action.title ?? action.label}
+              aria-label={action.label}
+              aria-pressed={hasMenu ? undefined : action.active}
+              aria-haspopup={hasMenu ? 'menu' : undefined}
+              aria-expanded={hasMenu ? menuOpen : undefined}
+              className={`pd-btn flex items-center shrink-0 rounded transition-colors ${
+                compact ? 'justify-center w-6 h-6' : 'gap-1 px-1.5 h-6'
+              }`}
+              style={{
+                color: tone,
+                backgroundColor: primary
+                  ? 'var(--accent)'
+                  : action.active || menuOpen
+                    ? 'var(--accent-light)'
+                    : 'transparent',
+                opacity: action.disabled ? 0.4 : 1,
+                fontSize: 10,
+              }}
+            >
+              {action.icon}
+              {!compact && <span>{action.label}</span>}
+              {!compact && hasMenu && <ChevronDown size={10} />}
+            </button>
+            {hasMenu && menuOpen && (
+              <div
+                role="menu"
+                aria-label={action.label}
+                className="pd-menu absolute right-0 top-full z-50 mt-1 min-w-[168px]"
+              >
+                {action.menuItems?.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="menuitem"
+                    title={item.title ?? item.label}
+                    disabled={item.disabled}
+                    className="pd-menu-item disabled:opacity-40"
+                    onClick={() => {
+                      setOpenMenuKey(null);
+                      item.onClick();
+                    }}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         );
       })}
 
       {overflow.length > 0 && (
         <button
           type="button"
-          onClick={() => setOverflowOpen((v) => !v)}
+          onClick={() => {
+            setOpenMenuKey(null);
+            setOverflowOpen((v) => !v);
+          }}
           title="更多操作"
           aria-label="更多操作"
           aria-expanded={overflowOpen}
@@ -158,29 +219,26 @@ export function PageToolbar({ actions, className, collapseAll = false }: Props) 
 
       {overflowOpen && overflow.length > 0 && (
         <div
-          className="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-lg py-1 text-[11px] min-w-[140px]"
-          style={{
-            backgroundColor: 'var(--bg-primary)',
-            border: '1px solid var(--border)',
-            color: 'var(--text-primary)',
-          }}
+          role="menu"
+          className="pd-menu absolute right-0 top-full mt-1 z-50 min-w-[140px]"
         >
           {overflow.map((action) => (
             <button
               key={action.key}
               type="button"
+              role="menuitem"
               onClick={() => {
                 setOverflowOpen(false);
-                action.onClick();
+                action.onClick?.();
               }}
               disabled={action.disabled}
-              className="pd-btn w-full flex items-center gap-2 px-2 py-1.5 transition-colors hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
-              style={{ color: action.tone ?? 'var(--text-secondary)', textAlign: 'left' }}
+              className="pd-menu-item disabled:opacity-40"
+              style={action.tone ? { color: action.tone } : undefined}
             >
               {action.icon}
               <span className="flex-1">{action.label}</span>
               {action.shortcut && (
-                <span style={{ color: 'var(--text-tertiary)' }}>{action.shortcut}</span>
+                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{action.shortcut}</span>
               )}
             </button>
           ))}

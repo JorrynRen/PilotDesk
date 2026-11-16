@@ -8,19 +8,34 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
-import { ListTree, Building2, Library, BarChart3, RefreshCw, Loader2, WifiOff, CloudOff, LogIn } from 'lucide-react';
+import {
+  ListTree,
+  Building2,
+  Library,
+  BarChart3,
+  RefreshCw,
+  Loader2,
+  WifiOff,
+  CloudOff,
+  LogIn,
+  KeyRound,
+  MessagesSquare,
+} from 'lucide-react';
 import { Select } from '../common/Select';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { ALL_KB_ID, useEnclaveKbStore } from '../../stores/enclaveKbStore';
+import { useEnclaveApiShareStore } from '../../stores/enclaveApiShareStore';
+import { useEnclaveMessengerStore } from '../../stores/enclaveMessengerStore';
 import { NotificationBell } from './NotificationBell';
 
-export type EnclaveNavKey = 'tasks' | 'kb' | 'report' | 'org';
+export type EnclaveNavKey = 'tasks' | 'kb' | 'api-share' | 'report' | 'org';
 
 const TABS: { key: EnclaveNavKey; label: string; path: string; icon: typeof ListTree }[] = [
   { key: 'tasks', label: '任务管理', path: '/enclave', icon: ListTree },
   { key: 'kb', label: '团队知识库', path: '/enclave/kb', icon: Library },
+  { key: 'api-share', label: 'API 共享', path: '/enclave/api-share', icon: KeyRound },
   { key: 'report', label: '团队报告', path: '/enclave/reports', icon: BarChart3 },
   { key: 'org', label: '组织与权限', path: '/enclave/org', icon: Building2 },
 ];
@@ -53,8 +68,9 @@ export function EnclaveNavBar({
    * 但本机身份快照仍有效、团队空间照常可用，此时该显示「离线」而不是「未登录」。
    */
   const notLoggedIn = accountLoaded && !account && !identityVerified;
-  /** 成员端与主机的实时通道是否断开（owner 不走常驻通道，永远是 false） */
-  const [realtimeDown, setRealtimeDown] = useState(false);
+  /** 成员端与主机的实时通道是否断开（按组织记录；owner 不走常驻通道，永远是 false） */
+  const [realtimeByOrg, setRealtimeByOrg] = useState<Record<string, boolean>>({});
+  const realtimeDown = !!activeOrgId && !!realtimeByOrg[activeOrgId];
 
   /**
    * 实时变更：主机广播 / 本机写入都会发 `enclave:changed`（只带主题，不带业务数据）。
@@ -67,7 +83,6 @@ export function EnclaveNavBar({
     let disposed = false;
     let unlisten: (() => void) | null = null;
     const lastAt = new Map<string, number>();
-    setRealtimeDown(false);
     void listen<{
       orgId: string;
       topic?: string;
@@ -80,7 +95,7 @@ export function EnclaveNavBar({
       if (orgId !== activeOrgId) return;
       // 连接状态：不走业务刷新，只更新提示
       if (type === 'realtime') {
-        setRealtimeDown(!connected);
+        setRealtimeByOrg((prev) => ({ ...prev, [orgId]: !connected }));
         return;
       }
       if (!topic) return;
@@ -110,6 +125,21 @@ export function EnclaveNavBar({
           void kb.loadQueue(orgId, kb.activeKbId);
           if (kb.files.length > 0) void kb.loadFiles(orgId, kb.activeKbId);
         }
+      } else if (topic === 'api-share') {
+        const orgStore = useEnclaveOrgStore.getState();
+        const role =
+          orgStore.orgs.find((item) => item.orgId === orgId)?.myRole
+          ?? orgStore.detail?.org.myRole
+          ?? '';
+        void useEnclaveApiShareStore
+          .getState()
+          .load(orgId, role === 'owner' || role === 'admin');
+      } else if (topic === 'im') {
+        const messenger = useEnclaveMessengerStore.getState();
+        void messenger.loadMembers(orgId);
+        if (messenger.open && messenger.orgId === orgId && messenger.peerId) {
+          void messenger.loadThread(orgId, messenger.peerId);
+        }
       }
     }).then((fn) => {
       if (disposed) fn();
@@ -124,7 +154,7 @@ export function EnclaveNavBar({
   return (
     // 导航条本身**不画底边框**：四个页面都把它放在「带 1px 边框 + 圆角」的卡片里，
     // 这里的 borderBottom 会紧贴卡片自身的下边框，视觉上叠成一条更粗的横线。
-    <div className="shrink-0 min-h-10 px-3 py-1 flex items-center gap-1.5 flex-wrap">
+    <div className="enclave-navbar shrink-0 min-h-10 min-w-0 px-3 py-1 flex items-center gap-1.5 flex-nowrap overflow-x-auto">
       {TABS.map((t) => {
         const Icon = t.icon;
         const on = active === t.key;
@@ -132,15 +162,16 @@ export function EnclaveNavBar({
           <button
             key={t.key}
             onClick={() => navigate(t.path)}
-            className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1"
+            className="enclave-navbar-tab text-xs px-2.5 py-1 rounded-lg flex shrink-0 items-center gap-1 whitespace-nowrap"
             style={{
               backgroundColor: on ? 'var(--accent)' : 'transparent',
               color: on ? '#fff' : 'var(--text-secondary)',
               border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
             }}
+            title={t.label}
           >
             <Icon size={12} />
-            {t.label}
+            <span className="enclave-navbar-label">{t.label}</span>
           </button>
         );
       })}
@@ -159,7 +190,7 @@ export function EnclaveNavBar({
             options={orgs.map((o) => ({ value: o.orgId, label: o.name || o.orgId }))}
             placeholder="选择组织"
             size="sm"
-            className="w-[160px] shrink-0"
+            className="enclave-org-select w-[150px] shrink-0"
             title="切换组织"
           />
         </>
@@ -172,7 +203,7 @@ export function EnclaveNavBar({
           title="平台不可达：本机团队数据仍可读写，主机对外服务不受影响；组织 / 成员 / 角色快照停在最后一次同步，治理类操作可能已过期"
         >
           <CloudOff size={10} />
-          离线（快照可能过期）
+          离线快照
         </span>
       )}
 
@@ -187,7 +218,7 @@ export function EnclaveNavBar({
           }
         >
           <LogIn size={10} />
-          未登录 · 去登录
+          去登录
         </button>
       )}
 
@@ -198,36 +229,51 @@ export function EnclaveNavBar({
           title="与主机的实时通道已断开，正在自动重连；期间数据不会自动刷新，可点右侧「刷新」手动拉取"
         >
           <WifiOff size={10} />
-          实时连接中断
+          实时断连
         </span>
       )}
 
-      <div className="flex-1" />
       {right}
-      <NotificationBell
-        orgId={activeOrgId}
-        onOpenTask={(taskId) => {
-          useEnclaveTaskStore.getState().selectTask(taskId);
-          navigate('/enclave');
-        }}
-      />
-      {onRefresh && (
+      <div className="flex-1" />
+      <div className="enclave-navbar-actions shrink-0 flex items-center gap-1.5">
         <button
-          onClick={() => void onRefresh()}
-          disabled={refreshing}
-          className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-            opacity: refreshing ? 0.6 : 1,
+          type="button"
+          className="enclave-navbar-action shrink-0"
+          title={activeOrgId ? '与团队成员一对一传讯' : '选择组织后可使用传讯'}
+          aria-label="打开传讯"
+          disabled={!activeOrgId}
+          onClick={() => {
+            if (activeOrgId) void useEnclaveMessengerStore.getState().openWith(activeOrgId);
           }}
-          title="重新校验本机身份，并刷新组织、权限与本页数据"
         >
-          {refreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-          刷新
+          <MessagesSquare size={12} />
+          <span>传讯</span>
         </button>
-      )}
+        <NotificationBell
+          orgId={activeOrgId}
+          onOpenTask={(taskId) => {
+            useEnclaveTaskStore.getState().selectTask(taskId);
+            navigate('/enclave');
+          }}
+        />
+        {onRefresh && (
+          <button
+            onClick={() => void onRefresh()}
+            disabled={refreshing}
+            className="enclave-icon-button shrink-0 flex items-center justify-center rounded-lg"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+              opacity: refreshing ? 0.6 : 1,
+            }}
+            title="刷新"
+            aria-label="刷新"
+          >
+            {refreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

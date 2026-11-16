@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { X, Settings, Plus, HelpCircle } from 'lucide-react';
+import { Settings, HelpCircle, Workflow as WorkflowIcon } from 'lucide-react';
 import type { WorkflowDefinition, TriggerConfig } from '../../types/workflow';
 import type { JsonValue } from '../../types/plugin';
 import { Select } from '../common/Select';
+import { ProjectSelect } from '../project/ProjectPicker';
+import { WorkCreateDialogShell } from '../project/WorkCreateDialogShell';
+import { useProjectStore } from '../../stores/projectStore';
+import { errorMessage } from '../../utils/errorMessage';
+import { projectLinkedDirectories, projectPrimaryDirectory } from '../../utils/project';
 
 /** 定时任务数量的技术保护上限（与后端 `commands::workflow::MAX_SCHEDULES` 对齐） */
 const MAX_SCHEDULES = 1000;
@@ -23,10 +29,11 @@ interface Props {
     version: string;
     trigger: TriggerConfig;
     enabled: boolean;
-    icon?: string;
+    icon?: string | null;
+    projectId?: string;
     inputSchema?: Record<string, InputSchemaField>;
     outputSchema?: Record<string, OutputSchemaField>;
-  }) => void;
+  }) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -53,7 +60,11 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
   const [name, setName] = useState(initial?.name || '');
   const [description, setDescription] = useState(initial?.description || '');
   const [version, setVersion] = useState(initial?.version || '1.0.0');
-  const [icon, setIcon] = useState<string | undefined>(initial?.icon);
+  const [icon, setIcon] = useState<string | undefined>(initial?.icon ?? undefined);
+  const [projectId, setProjectId] = useState(initial?.projectId ?? '');
+  const projects = useProjectStore((state) => state.projects);
+  const selectedProject = projects.find((project) => project.id === projectId);
+  const selectedProjectDirectory = projectPrimaryDirectory(selectedProject);
   const [triggerType, setTriggerType] = useState<'manual' | 'cron' | 'event'>(initial?.trigger?.triggerType || 'manual');
   const [cronExpr, setCronExpr] = useState(initial?.trigger?.cron || '');
   const [eventName, setEventName] = useState(initial?.trigger?.eventName || '');
@@ -66,6 +77,77 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
   const [outputSchemaText, setOutputSchemaText] = useState(initial?.outputSchema ? JSON.stringify(initial.outputSchema, null, 2) : '');
   const [error, setError] = useState<string | null>(null);
   const [showCronHelp, setShowCronHelp] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(Boolean(
+    initial?.inputSchema || initial?.outputSchema,
+  ));
+  const [showIconPicker, setShowIconPicker] = useState(false);
+  const [iconPickerStyle, setIconPickerStyle] = useState<CSSProperties>({});
+  const iconPickerTriggerRef = useRef<HTMLButtonElement>(null);
+  const iconPickerPanelRef = useRef<HTMLDivElement>(null);
+
+  const openIconPicker = () => {
+    if (showIconPicker) {
+      setShowIconPicker(false);
+      return;
+    }
+
+    const trigger = iconPickerTriggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(430, window.innerWidth - 24);
+    const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+    const openUp = spaceBelow < 320 && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(180, Math.min(420, openUp ? spaceAbove : spaceBelow));
+
+    setIconPickerStyle({
+      position: 'fixed',
+      zIndex: 100,
+      left,
+      width,
+      maxHeight,
+      ...(openUp
+        ? { bottom: window.innerHeight - rect.top + 6 }
+        : { top: rect.bottom + 6 }),
+    });
+    setShowIconPicker(true);
+  };
+
+  useEffect(() => {
+    if (!showIconPicker) return;
+
+    const closeOnOutsidePointer = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        iconPickerTriggerRef.current?.contains(target)
+        || iconPickerPanelRef.current?.contains(target)
+      ) return;
+      setShowIconPicker(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setShowIconPicker(false);
+    };
+    const closeOnViewportChange = (event: Event) => {
+      if (event.type === 'scroll' && iconPickerPanelRef.current?.contains(event.target as Node)) return;
+      setShowIconPicker(false);
+    };
+
+    document.addEventListener('mousedown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape, true);
+    document.addEventListener('scroll', closeOnViewportChange, true);
+    window.addEventListener('resize', closeOnViewportChange);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape, true);
+      document.removeEventListener('scroll', closeOnViewportChange, true);
+      window.removeEventListener('resize', closeOnViewportChange);
+    };
+  }, [showIconPicker]);
 
   // 事件名清单来自后端内置事件表（只有列在这里的事件才会被真正派发，
   // 因此不给自由输入——否则用户会订阅到一个永远不会响的名字）
@@ -150,7 +232,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
     if (cronHelpTimer.current !== null) window.clearTimeout(cronHelpTimer.current);
   }, []);
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
       setError('请输入工作流名称');
@@ -178,20 +260,28 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
       catch { setError('输出 Schema JSON 格式错误'); return; }
     }
 
-    onConfirm({
-      name: trimmedName,
-      description: description.trim(),
-      version: version.trim() || '1.0.0',
-      icon,
-      trigger: triggerType === 'manual'
-        ? { triggerType: 'manual' }
-        : triggerType === 'cron'
-          ? { triggerType: 'cron', cron: cronExpr.trim() }
-          : { triggerType: 'event', eventName },
-      inputSchema,
-      outputSchema,
-      enabled,
-    });
+    setSubmitting(true);
+    try {
+      await onConfirm({
+        name: trimmedName,
+        description: description.trim(),
+        version: version.trim() || '1.0.0',
+        icon: icon ?? null,
+        projectId: projectId || undefined,
+        trigger: triggerType === 'manual'
+          ? { triggerType: 'manual' }
+          : triggerType === 'cron'
+            ? { triggerType: 'cron', cron: cronExpr.trim() }
+            : { triggerType: 'event', eventName },
+        inputSchema,
+        outputSchema,
+        enabled,
+      });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const insertCronPreset = (expr: string) => {
@@ -200,72 +290,106 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-    >
-      <div
-        className="w-[540px] max-h-[85vh] rounded-xl shadow-2xl flex flex-col"
-        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+    <>
+      <WorkCreateDialogShell
+        icon={mode === 'create'
+          ? <WorkflowIcon size={14} />
+          : <Settings size={14} />}
+        kicker="工作流"
+        title={mode === 'create' ? '新建工作流' : '编辑工作流属性'}
+        project={selectedProject ? {
+          name: selectedProject.name,
+          icon: selectedProject.icon,
+          primaryDirectory: selectedProjectDirectory,
+          linkedDirectoryCount: projectLinkedDirectories(selectedProject).length,
+        } : null}
+        submitting={submitting}
+        onClose={onClose}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleConfirm();
+        }}
+        submitLabel={mode === 'create' ? '创建' : '保存'}
+        submittingLabel={mode === 'create' ? '创建中…' : '保存中…'}
+        submitIcon={mode === 'create'
+          ? <WorkflowIcon size={12} />
+          : <Settings size={12} />}
+        headerAction={(
+          <div className="work-create-header-toggle">
+            <span>{enabled ? '已启用' : '已禁用'}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              aria-label={enabled ? '禁用工作流' : '启用工作流'}
+              onClick={() => setEnabled((value) => !value)}
+              className="work-create-switch"
+              data-active={enabled}
+              disabled={submitting}
+            >
+              <span />
+            </button>
+          </div>
+        )}
+        error={error}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-          <div className="flex items-center gap-2">
-            <Settings size={16} style={{ color: 'var(--accent)' }} />
-            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-              {mode === 'create' ? '新建工作流' : '编辑工作流属性'}
-            </span>
-          </div>
-          <button onClick={onClose} className="pd-btn p-1 rounded hover:opacity-80" style={{ color: 'var(--text-tertiary)' }}>
-            <X size={14} />
-          </button>
-        </div>
+        <>
+        <label className="projects-field">
+          <span>项目归属 <small>可选</small></span>
+          <ProjectSelect value={projectId} onChange={setProjectId} />
+        </label>
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 pd-scroll-stable">
-          {/* 名称 */}
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              工作流名称 <span style={{ color: '#EF4444' }}>*</span>
-            </label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-lg outline-none transition-colors"
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                color: 'var(--text-primary)',
-                border: error && !name.trim() ? '1px solid #EF4444' : '1px solid var(--border)',
-              }}
-              placeholder="输入工作流名称"
-              autoFocus
-            />
+        <div className="work-create-section">
+          <div className="work-create-section-head">
+            <strong>基础信息</strong>
+            <span>名称、版本与图标会显示在工作流列表中</span>
           </div>
-
-          {/* 图标选择 */}
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              图标
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {EMOJI_GROUPS.map((group) => (
-                <div key={group.label} className="flex items-center gap-1.5">
-                  <span className="text-[10px] shrink-0 w-14 text-right" style={{ color: 'var(--text-tertiary)' }}>{group.label}</span>
-                  <div className="flex gap-0.5">
-                    {group.emojis.map((emoji) => (
-                      <button
-                        key={emoji}
-                        onClick={() => setIcon(emoji === icon ? undefined : emoji)}
-                        className="w-6 h-6 flex items-center justify-center rounded text-xs transition-colors"
-                        style={{
-                          backgroundColor: icon === emoji ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-                          border: icon === emoji ? '1.5px solid var(--accent)' : '1px solid transparent',
-                        }}
-                      >{emoji}</button>
-                    ))}
-                  </div>
-                </div>
-              ))}
+          {/* 图标紧邻名称输入框，版本号继续并行以节省纵向空间 */}
+          <div className="work-create-title-row">
+            <button
+              ref={iconPickerTriggerRef}
+              type="button"
+              className="work-create-title-icon-button"
+              data-open={showIconPicker}
+              aria-label={icon ? `当前图标 ${icon}，点击更换` : '选择工作流图标'}
+              aria-haspopup="listbox"
+              aria-expanded={showIconPicker}
+              onClick={openIconPicker}
+            >
+              {icon || <WorkflowIcon size={15} />}
+            </button>
+            <div className="min-w-0">
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                工作流名称 <span style={{ color: '#EF4444' }}>*</span>
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded-lg outline-none transition-colors"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  border: error && !name.trim() ? '1px solid #EF4444' : '1px solid var(--border)',
+                }}
+                placeholder="输入工作流名称"
+                autoFocus
+              />
+            </div>
+            <div className="min-w-0">
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                版本号
+              </label>
+              <input
+                value={version}
+                onChange={(e) => setVersion(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded-lg outline-none"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+                placeholder="1.0.0"
+              />
             </div>
           </div>
 
@@ -288,29 +412,14 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
             />
           </div>
 
-          {/* 版本 */}
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              版本号
-            </label>
-            <input
-              value={version}
-              onChange={(e) => setVersion(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-lg outline-none"
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border)',
-              }}
-              placeholder="1.0.0"
-            />
-          </div>
+        </div>
 
-          {/* 触发器 */}
+        <div className="work-create-section">
+          <div className="work-create-section-head">
+            <strong>触发方式</strong>
+            <span>手动运行、按 Cron 定时运行，或响应平台事件</span>
+          </div>
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              触发器类型
-            </label>
             <div className="flex gap-2">
               {([
                 { value: 'manual', label: '手动触发' },
@@ -319,6 +428,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
               ] as const).map((opt) => (
                 <button
                   key={opt.value}
+                  type="button"
                   onClick={() => setTriggerType(opt.value)}
                   className="flex-1 px-3 py-2 text-xs rounded-lg transition-colors"
                   style={{
@@ -385,6 +495,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
                     {CRON_PRESETS.map((preset) => (
                       <button
                         key={preset.expr}
+                        type="button"
                         onClick={() => insertCronPreset(preset.expr)}
                         className="shrink-0 px-1.5 py-0.5 rounded text-[10px] transition-colors"
                         style={{
@@ -523,110 +634,115 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
               </div>
             )}
           </div>
+        </div>
 
-          {/* 启用状态 */}
-          <div className="flex items-center gap-3">
-            <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-              启用状态
-            </label>
-            <button
-              onClick={() => setEnabled(!enabled)}
-              className="relative w-9 h-5 rounded-full transition-colors"
-              style={{
-                backgroundColor: enabled ? 'var(--accent)' : 'var(--border)',
-              }}
-            >
-              <div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-                style={{ left: enabled ? '18px' : '2px' }}
-              />
-            </button>
-            <span className="text-xs" style={{ color: enabled ? '#22c55e' : 'var(--text-tertiary)' }}>
-              {enabled ? '已启用' : '已禁用'}
-            </span>
+        <div className="work-create-section">
+          <div className="work-create-section-head">
+            <strong>高级配置</strong>
+            <span>输入输出 Schema 用于约束运行参数，通常可留空</span>
           </div>
 
-          {/* Schema 配置：两个框必须各自带标题——只写"输入/输出 Schema"时看不出哪个是哪个 */}
-          <div className="space-y-3 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
-            <span className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-              Schema（JSON，均可不填）
-            </span>
-
-            <div>
-              <label className="block text-[10px] font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+          <details
+            className="work-create-advanced"
+            open={advancedOpen}
+            onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+          >
+            <summary>Schema 配置（JSON，均可不填）</summary>
+            <div className="work-create-advanced-body">
+              <label className="projects-field">
+                <span>
                 输入 Schema
-                <span className="ml-1.5 font-normal" style={{ color: 'var(--text-tertiary)' }}>
+                <small>
                   入参字段：手动运行时弹表单填写（预填 default）；作为子工作流被调用时按 required / type 强制校验
+                </small>
                 </span>
+                <textarea
+                  value={inputSchemaText}
+                  onChange={(e) => setInputSchemaText(e.target.value)}
+                  placeholder='{"topic": {"type": "string", "required": true, "default": "人工智能"}}'
+                  style={{ minHeight: 54, fontFamily: 'var(--font-mono)' }}
+                />
               </label>
-              <textarea
-                value={inputSchemaText}
-                onChange={(e) => setInputSchemaText(e.target.value)}
-                placeholder='{"topic": {"type": "string", "required": true, "default": "人工智能"}}'
-                className="w-full rounded px-2 py-1 text-[11px] resize-none"
-                style={{
-                  backgroundColor: 'var(--bg-tertiary)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border)',
-                  fontFamily: 'monospace',
-                  height: 48,
-                }}
-              />
-            </div>
 
-            <div>
-              <label className="block text-[10px] font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+              <label className="projects-field">
+                <span>
                 输出 Schema
-                <span className="ml-1.5 font-normal" style={{ color: 'var(--text-tertiary)' }}>
+                <small>
                   产出字段：只保留列出的键（缺的补 null / default），供下游以{' '}
                   <span className="font-mono">{'{{节点.字段}}'}</span> 引用
+                </small>
                 </span>
+                <textarea
+                  value={outputSchemaText}
+                  onChange={(e) => setOutputSchemaText(e.target.value)}
+                  placeholder='{"summary": {"type": "string", "description": "最终摘要"}}'
+                  style={{ minHeight: 54, fontFamily: 'var(--font-mono)' }}
+                />
               </label>
-              <textarea
-                value={outputSchemaText}
-                onChange={(e) => setOutputSchemaText(e.target.value)}
-                placeholder='{"summary": {"type": "string", "description": "最终摘要"}}'
-                className="w-full rounded px-2 py-1 text-[11px] resize-none"
-                style={{
-                  backgroundColor: 'var(--bg-tertiary)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border)',
-                  fontFamily: 'monospace',
-                  height: 48,
-                }}
-              />
             </div>
+          </details>
+        </div>
+
+        </>
+      </WorkCreateDialogShell>
+
+      {showIconPicker && createPortal(
+        <div
+          ref={iconPickerPanelRef}
+          id="workflow-icon-popover"
+          className="work-create-icon-popover"
+          style={iconPickerStyle}
+          role="listbox"
+          aria-label="选择工作流图标"
+        >
+          <button
+            type="button"
+            role="option"
+            aria-selected={!icon}
+            className="work-create-icon-default"
+            data-active={!icon}
+            onClick={() => {
+              setIcon(undefined);
+              setShowIconPicker(false);
+            }}
+          >
+            <span className="work-create-icon-default-preview" aria-hidden="true">
+              <WorkflowIcon size={14} />
+            </span>
+            <span>
+              <strong>默认图标</strong>
+              <small>未选择个性图标时使用</small>
+            </span>
+          </button>
+          <div className="work-create-icon-grid">
+            {EMOJI_GROUPS.map((group) => (
+              <div key={group.label} className="work-create-icon-group">
+                <span>{group.label}</span>
+                <div>
+                  {group.emojis.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      role="option"
+                      aria-selected={icon === emoji}
+                      onClick={() => {
+                        setIcon(emoji);
+                        setShowIconPicker(false);
+                      }}
+                      className="work-create-icon-option"
+                      data-active={icon === emoji}
+                      aria-label={`选择图标 ${emoji}`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
-
-          {/* 错误提示 */}
-          {error && (
-            <div className="p-2 rounded text-xs" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
-              {error}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
-          <button
-            onClick={onClose}
-            className="pd-btn px-4 py-1.5 text-xs rounded"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-          >
-            取消
-          </button>
-          <button
-            onClick={handleConfirm}
-            className="pd-btn px-4 py-1.5 text-xs rounded flex items-center gap-1.5"
-            /* 与「取消」保持同高：对方有 1px 边框，这里必须补一条同色边框，
-               否则 auto 高度下主按钮会比次按钮矮 2px */
-            style={{ backgroundColor: 'var(--accent)', color: '#fff', border: '1px solid var(--accent)' }}
-          >
-            {mode === 'create' ? <Plus size={14} /> : <Settings size={14} />}
-            {mode === 'create' ? '创建' : '保存'}
-          </button>
-        </div>
-      </div>
-    </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }

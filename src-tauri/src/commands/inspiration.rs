@@ -431,8 +431,8 @@ pub fn export_inspirations_zip(
 
     let file = std::fs::File::create(dest).map_err(|e| format!("创建压缩包失败: {}", e))?;
     let mut zip = zip::ZipWriter::new(file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
 
     let mut count = 0usize;
     for insp in &list {
@@ -545,10 +545,11 @@ fn dedup_entries_by_id(entries: Vec<ValidEntry>) -> Vec<ValidEntry> {
 }
 
 /// 在一个事务里落库：按 `market_id` 判重，命中则覆盖更新（仅 title/icon/content/tags，不动创建时间），
-/// 否则新建（来源标记 `market`）。返回 `(created, updated)`。
-fn apply_import_entries(
+/// 否则按调用方给定的来源新建。返回 `(created, updated)`。
+fn apply_import_entries_with_source(
     conn: &mut Connection,
     entries: &[ValidEntry],
+    source_agent: &str,
 ) -> Result<(usize, usize), AppError> {
     use rusqlite::OptionalExtension;
 
@@ -579,7 +580,7 @@ fn apply_import_entries(
                 let local_id = crate::utils::new_id();
                 tx.execute(
                     "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at, market_id) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6, ?7)",
-                    params![local_id, e.icon, e.title, e.content, "market", now, e.id],
+                    params![local_id, e.icon, e.title, e.content, source_agent, now, e.id],
                 )?;
                 created += 1;
                 local_id
@@ -614,11 +615,37 @@ fn finalize_import(
     entries: Vec<ValidEntry>,
     result: &mut InspirationImportResult,
 ) -> Result<(), String> {
+    finalize_import_with_source(conn, entries, result, "market")
+}
+
+fn finalize_import_with_source(
+    conn: &mut Connection,
+    entries: Vec<ValidEntry>,
+    result: &mut InspirationImportResult,
+    source_agent: &str,
+) -> Result<(), String> {
     let deduped = dedup_entries_by_id(entries);
-    let (created, updated) = apply_import_entries(conn, &deduped).map_err(|e| e.to_string())?;
+    let (created, updated) = apply_import_entries_with_source(conn, &deduped, source_agent)
+        .map_err(|e| e.to_string())?;
     result.created += created;
     result.updated += updated;
     Ok(())
+}
+
+/// 导入一份市场格式的灵感 JSON。
+///
+/// 组织共享空间与本地文件导入共用同一套字段校验、`market_id` 判重和标签替换逻辑。
+pub(crate) fn import_market_json_with_conn(
+    conn: &mut Connection,
+    text: &str,
+) -> Result<InspirationImportResult, String> {
+    let entry = parse_and_validate_market_entry(text).map_err(|error| match error {
+        EntryError::Parse(message) => format!("共享灵感解析失败：{}", message),
+        EntryError::Invalid(message) => format!("共享灵感内容不合规：{}", message),
+    })?;
+    let mut result = InspirationImportResult::default();
+    finalize_import_with_source(conn, vec![entry], &mut result, "organization")?;
+    Ok(result)
 }
 
 /// 从 zip 归档收集导入条目（与 `export_inspirations_zip` 的布局同构：`inspirations/<id>/<id>.json`）。
@@ -788,15 +815,24 @@ mod tests {
     fn suggest_from_english_title() {
         assert_eq!(derive_market_inspiration_id("Hello World"), "hello-world");
         // 连续的非字母数字折叠成单个 -
-        assert_eq!(derive_market_inspiration_id("Hello   World!!!"), "hello-world");
+        assert_eq!(
+            derive_market_inspiration_id("Hello   World!!!"),
+            "hello-world"
+        );
         // 去首尾 -（中间的仍旧保留）
         assert_eq!(derive_market_inspiration_id("  ===Hello==="), "hello");
-        assert_eq!(derive_market_inspiration_id("  Hello---World  "), "hello-world");
+        assert_eq!(
+            derive_market_inspiration_id("  Hello---World  "),
+            "hello-world"
+        );
     }
 
     #[test]
     fn suggest_from_mixed_title_strips_non_latin() {
-        assert_eq!(derive_market_inspiration_id("中文Hello啊World"), "hello-world");
+        assert_eq!(
+            derive_market_inspiration_id("中文Hello啊World"),
+            "hello-world"
+        );
     }
 
     #[test]
@@ -819,9 +855,19 @@ mod tests {
 
     #[test]
     fn suggest_always_yields_valid_id() {
-        for title in ["Hello World", "中文Hello啊World", "a-1_2.3", &"x".repeat(200)] {
+        for title in [
+            "Hello World",
+            "中文Hello啊World",
+            "a-1_2.3",
+            &"x".repeat(200),
+        ] {
             let id = derive_market_inspiration_id(title);
-            assert!(validate_market_inspiration_id(&id).is_ok(), "title={} id={}", title, id);
+            assert!(
+                validate_market_inspiration_id(&id).is_ok(),
+                "title={} id={}",
+                title,
+                id
+            );
         }
     }
 
@@ -847,7 +893,13 @@ mod tests {
         // 只有 5 个字段，且不含任何本地元数据
         let obj = v.as_object().unwrap();
         assert_eq!(obj.len(), 5);
-        for k in ["source_agent", "is_favorite", "created_at", "updated_at", "market_id"] {
+        for k in [
+            "source_agent",
+            "is_favorite",
+            "created_at",
+            "updated_at",
+            "market_id",
+        ] {
             assert!(!obj.contains_key(k), "不应写入本地字段 {}", k);
         }
     }
@@ -866,7 +918,8 @@ mod tests {
     /// 内存库 + 终态 schema（导入用例只依赖 inspirations / inspiration_tags 两张表）。
     fn import_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL).unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
         conn
     }
 
@@ -930,7 +983,30 @@ mod tests {
         // 来源标记与市场导入一致（InspirationMarketTab: sourceAgent: 'market'）
         assert_eq!(source, "market");
         assert_eq!(is_fav, 0);
-        assert_eq!(tags_of(&conn, "new-tip"), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            tags_of(&conn, "new-tip"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn organization_import_marks_new_entry_as_organization() {
+        let mut conn = import_conn();
+        let result = import_market_json_with_conn(
+            &mut conn,
+            &market_json("team-tip", "团队灵感", "团队正文", &["团队"]),
+        )
+        .unwrap();
+
+        assert_eq!((result.created, result.updated), (1, 0));
+        let source: String = conn
+            .query_row(
+                "SELECT source_agent FROM inspirations WHERE market_id = 'team-tip'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source, "organization");
     }
 
     #[test]
@@ -975,7 +1051,10 @@ mod tests {
         assert_eq!(title, "新标题");
         assert_eq!(content, "新正文");
         assert_eq!(cat, created_at, "创建时间不应被改动");
-        assert_eq!(tags_of(&conn, "tip"), vec!["新1".to_string(), "新2".to_string()]);
+        assert_eq!(
+            tags_of(&conn, "tip"),
+            vec!["新1".to_string(), "新2".to_string()]
+        );
     }
 
     #[test]
@@ -1091,7 +1170,10 @@ mod tests {
     #[test]
     fn corrupted_zip_returns_error() {
         let mut result = InspirationImportResult::default();
-        let err = read_zip_entries(std::io::Cursor::new(b"definitely not a zip".to_vec()), &mut result);
+        let err = read_zip_entries(
+            std::io::Cursor::new(b"definitely not a zip".to_vec()),
+            &mut result,
+        );
         assert!(err.is_err(), "损坏的压缩包应返回 Err");
     }
 
@@ -1117,7 +1199,13 @@ mod tests {
     #[test]
     fn search_matches_chinese_substring_in_title_content_and_tag() {
         let conn = import_conn();
-        insert_inspiration(&conn, "a", "写作助手：先给结论", "把要点放在最前面", &["写作"]);
+        insert_inspiration(
+            &conn,
+            "a",
+            "写作助手：先给结论",
+            "把要点放在最前面",
+            &["写作"],
+        );
         insert_inspiration(&conn, "b", "代码评审清单", "先给结论再给依据", &["编程"]);
 
         // 中文两字子串（FTS5 默认 unicode61 分词器会把整串汉字当一个 token，这种查询必定搜不到）

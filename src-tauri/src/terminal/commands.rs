@@ -9,7 +9,6 @@ use super::TerminalManager;
 /// Create a new terminal session
 #[tauri::command]
 pub async fn terminal_create(
-    app: AppHandle,
     terminal_mgr: tauri::State<'_, AsyncMutex<TerminalManager>>,
     session_id: Option<String>,
     shell_type: Option<String>,
@@ -27,12 +26,14 @@ pub async fn terminal_create(
     });
 
     let mut mgr = terminal_mgr.lock().await;
-    mgr.create_session(id.clone(), &shell, &cwd_dir, app, cols, rows)
+    let pid = mgr
+        .create_session(id.clone(), &shell, &cwd_dir, cols, rows)
         .await?;
 
     Ok(serde_json::json!({
         "session_id": id,
         "shell_type": shell,
+        "pid": pid,
     }))
 }
 

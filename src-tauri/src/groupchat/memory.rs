@@ -125,6 +125,9 @@ impl LayeredMemory {
             roster: Vec::new(),
             user_language: self.detect_user_language(user_id),
             output_dir: String::new(),
+            workspace_root: String::new(),
+            linked_roots: Vec::new(),
+            workspace: None,
             // 时钟锚点由 RoomRuntime 在派发本轮发言前写入（房间级、每轮一个值）
             clock: String::new(),
         }

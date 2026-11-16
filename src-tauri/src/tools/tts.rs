@@ -198,7 +198,7 @@ impl ToolHandler for TtsTool {
         let dir = if self.session_id.is_empty() {
             std::path::PathBuf::from(&self.cwd)
         } else {
-            std::path::PathBuf::from(format!("{}/attachments/{}", self.cwd, self.session_id))
+            crate::utils::paths::resolve_attachments_dir(&self.cwd, &self.session_id)
         };
         std::fs::create_dir_all(&dir).map_err(|e| format!("创建音频目录失败: {}", e))?;
         let ts = std::time::SystemTime::now()
@@ -210,7 +210,10 @@ impl ToolHandler for TtsTool {
         } else {
             &response_format
         };
-        let path = dir.join(format!("tts_{}.{}", ts, ext));
+        let path = crate::utils::paths::normalize_absolute_path(
+            &dir.join(format!("tts_{}.{}", ts, ext)).to_string_lossy(),
+            &self.cwd,
+        );
         std::fs::write(&path, &audio_bytes).map_err(|e| format!("写入音频文件失败: {}", e))?;
 
         Ok(format!(

@@ -37,19 +37,32 @@ pub fn add_agent(
 #[tauri::command]
 pub fn update_agent(
     state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     payload: UpdateAgentPayload,
 ) -> Result<AgentConfig, AppError> {
     let conn = state.get_conn()?;
-    update_agent_inner(&conn, payload)
+    let updated = update_agent_inner(&conn, payload)?;
+    // 配置已变：池内按旧配置 spawn 的进程不可复用，硬清。
+    // 同步命令运行在主线程（非 tokio 上下文），blocking_lock 安全（lib.rs setup 同例）。
+    agent_mgr
+        .blocking_lock()
+        .evict_acp_pool(&updated.agent_type);
+    crate::agent::host_sessions::evict_agent(&updated.agent_type);
+    Ok(updated)
 }
 
 #[tauri::command]
 pub fn delete_agent(
     state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
 ) -> Result<(), AppError> {
     let conn = state.get_conn()?;
-    delete_agent_inner(&conn, &agent_type)
+    delete_agent_inner(&conn, &agent_type)?;
+    // Agent 已删：池内进程立即硬清（否则要空闲 10/30min 才回收）
+    agent_mgr.blocking_lock().evict_acp_pool(&agent_type);
+    crate::agent::host_sessions::evict_agent(&agent_type);
+    Ok(())
 }
 
 // ──────────────────────────────────────────────
@@ -75,9 +88,14 @@ pub fn export_agents_json(
             // ACP 配置导出成兼容模式；conn 以原始 JSON 导出，便于人工查看。
             if let Ok(info) = get_agent_transport_inner(&conn, &agent.agent_type) {
                 obj.insert("transport".to_string(), serde_json::json!(info.transport));
-                if let Some(raw) = info.conn.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                    let parsed = serde_json::from_str(raw)
-                        .unwrap_or_else(|_| serde_json::json!(raw));
+                if let Some(raw) = info
+                    .conn
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    let parsed =
+                        serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!(raw));
                     obj.insert("conn".to_string(), parsed);
                 }
             }
@@ -99,6 +117,7 @@ pub fn export_agents_json(
 #[tauri::command]
 pub fn import_agents_json(
     state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     file_path: String,
 ) -> Result<ImportResult, AppError> {
     let conn = state.get_conn()?;
@@ -248,10 +267,24 @@ pub fn import_agents_json(
         }
         // 接入方式与连接参数在独立列：配置本体落库后再写，失败只影响该条
         if let Some(t) = transport {
-            if let Err(e) = set_agent_transport_inner(&conn, &agent.agent_type, t, conn_json.as_deref())
+            if let Err(e) =
+                set_agent_transport_inner(&conn, &agent.agent_type, t, conn_json.as_deref())
             {
                 errors.push(format!("{}: 接入方式写入失败 - {}", agent.agent_type, e));
             }
+        }
+    }
+
+    // 导入改动了配置（含 __action 删除）：受影响 Agent 的池内旧进程不可复用，硬清
+    {
+        let mgr = agent_mgr.blocking_lock();
+        let affected = delete_targets
+            .iter()
+            .cloned()
+            .chain(imported.iter().map(|(a, _, _)| a.agent_type.clone()));
+        for agent_type in affected {
+            mgr.evict_acp_pool(&agent_type);
+            crate::agent::host_sessions::evict_agent(&agent_type);
         }
     }
 
@@ -695,12 +728,17 @@ pub fn get_agent_transport_inner(
 #[tauri::command]
 pub fn set_agent_transport(
     state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
     transport: String,
     conn_json: Option<String>,
 ) -> Result<(), AppError> {
     let conn = state.get_conn()?;
-    set_agent_transport_inner(&conn, &agent_type, &transport, conn_json.as_deref())
+    set_agent_transport_inner(&conn, &agent_type, &transport, conn_json.as_deref())?;
+    // 接入方式/连接参数已变：池内旧进程不可复用，硬清
+    agent_mgr.blocking_lock().evict_acp_pool(&agent_type);
+    crate::agent::host_sessions::evict_agent(&agent_type);
+    Ok(())
 }
 
 /// 落库实现（可单测）：
@@ -734,7 +772,8 @@ mod transport_tests {
 
     fn seed() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL).unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL)
+            .unwrap();
         conn.execute(
             "INSERT INTO agents (agent_type, display_name, created_at, updated_at) VALUES ('hermes','Hermes',0,0)",
             [],
@@ -810,7 +849,10 @@ mod transport_tests {
             .into_iter()
             .map(|a| a.agent_type)
             .collect();
-        assert!(listed.contains(&"hermes".to_string()), "subprocess 行应可见");
+        assert!(
+            listed.contains(&"hermes".to_string()),
+            "subprocess 行应可见"
+        );
         assert!(listed.contains(&"myacp".to_string()), "ACP 行必须可见");
         assert!(
             !listed.contains(&"api:p1".to_string()),
