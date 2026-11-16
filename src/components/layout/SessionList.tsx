@@ -26,7 +26,6 @@ import {
   ProjectFilter,
   ProjectMembershipDialog,
 } from '../project/ProjectPicker';
-import { ProjectWorkspaceContext } from '../project/ProjectWorkspaceContext';
 import { HEADER_ICON_BTN_STYLE } from './sessionListStyles';
 import { NewSessionDialog } from '../session/NewSessionDialog';
 import type { ProjectCreateContext } from '../../types/project';
@@ -1127,12 +1126,6 @@ function SessionListFn({
               {getDisplayName(hostAgents[0])}
             </div>
           ) : null}
-          <ProjectWorkspaceContext
-            projectId={hostProjectId}
-            workRoot={hostCwd || null}
-            rootSourceLabel={hostCwd ? '宿主会话目录' : undefined}
-            className="w-full"
-          />
           <div className="relative">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
             <input
