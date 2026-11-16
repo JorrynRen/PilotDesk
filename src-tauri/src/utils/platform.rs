@@ -6,16 +6,18 @@
 
 use crate::utils::errors::AppError;
 
-/// 平台 API 基址：默认**写死在代码里，不开放给用户配置** ——
-/// 可配置（环境变量 / 设置项）会让用户分流到不同后端，客服与数据统计都无从对齐。
-/// 换环境 = 改这一行 + 重新发版。
+/// 平台 API 基址：默认取官网基址（`utils::site::OFFICIAL_SITE`）——
+/// 登录、会员、升级等页面与官网共用同一个域名，换域名只改 `site.rs` 一行。
+///
+/// 不开放给用户配置：可配置（环境变量 / 设置项）会让用户分流到不同后端，
+/// 客服与数据统计都无从对齐。
 ///
 /// 局域网联调例外：允许在**构建时**用 `PILOTDESK_PLATFORM_API_BASE` 覆盖
 /// （例如 `http://192.168.31.187:8000`），用于多设备、多账号测试。
-/// 这是构建决策而不是用户配置：正式包不设置该变量，仍固定回环地址。
+/// 这是构建决策而不是用户配置：正式包不设置该变量，固定走官网。
 pub const PLATFORM_API_BASE: &str = match option_env!("PILOTDESK_PLATFORM_API_BASE") {
     Some(v) => v,
-    None => "http://127.0.0.1:8000",
+    None => crate::utils::site::OFFICIAL_SITE,
 };
 
 /// OAuth 客户端标识：必须在平台 `app/src/services/entitlements/clients.ts` 里登记过，
