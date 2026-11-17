@@ -105,7 +105,8 @@ export function AgentConfigMarket() {
   const { refresh: refreshEnv } = useEnvInfo();
   // 两个市场各自独立保存加载态：任一来源超时只影响自己的 Tab，不会让另一个市场空白。
   const [market, setMarket] = useState<Record<MarketCategory, MarketCategoryState>>(MARKET_STATE_INITIAL);
-  const [busyType, setBusyType] = useState<string | null>(null);
+  // 动作级忙碌状态：`动作:agentType`，避免同条目的其他按钮一起转圈
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [category, setCategory] = useState<MarketCategory>('acp');
   const [keyword, setKeyword] = useState('');
 
@@ -160,7 +161,7 @@ export function AgentConfigMarket() {
 
   /** 「获取」：落草稿后立刻跳去集成配置完成安装（ACP 需要装适配器，不能在这里静默完成）。 */
   const handleAcquire = async (agent: MarketAgent) => {
-    setBusyType(agent.agentType);
+    setBusyAction(`acquire:${agent.agentType}`);
     try {
       await invoke('agent_market_acquire', { agentType: agent.agentType });
       // 先刷新全局 Agent 列表：配置页的深层链接要靠它找到这条草稿。
@@ -170,7 +171,7 @@ export function AgentConfigMarket() {
     } catch (err) {
       showToast(`获取失败: ${errorMessage(err)}`, 'error');
     }
-    setBusyType(null);
+    setBusyAction(null);
   };
 
   const openInConfig = (agentType: string) => {
@@ -179,14 +180,14 @@ export function AgentConfigMarket() {
 
   /** 「升级」：用市场里的新版本规格覆盖本地配置并重新安装（ACP 适配器 / 宿主 CLI）。 */
   const handleUpdate = async (agent: MarketAgent) => {
-    setBusyType(agent.agentType);
+    setBusyAction(`update:${agent.agentType}`);
     try {
       await invoke('agent_market_update', { agentType: agent.agentType });
       showToast(`${agent.displayName} 已升级`, 'success');
     } catch (err) {
       showToast(`升级失败: ${errorMessage(err)}`, 'error');
     }
-    setBusyType(null);
+    setBusyAction(null);
     // 更新只影响该条目所在市场，按需刷新即可；
     // 同时刷新全局环境信息，否则「运行与策略」还显示更新前的版本。
     await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
@@ -195,7 +196,7 @@ export function AgentConfigMarket() {
 
   /** 「升级配置」：只同步市场清单里的配置，不安装、不升级宿主或适配器。 */
   const handleApplyConfig = async (agent: MarketAgent) => {
-    setBusyType(agent.agentType);
+    setBusyAction(`config:${agent.agentType}`);
     try {
       await invoke('agent_market_apply_config', { agentType: agent.agentType });
       await fetchAgents();
@@ -203,21 +204,21 @@ export function AgentConfigMarket() {
     } catch (err) {
       showToast(`配置升级失败: ${errorMessage(err)}`, 'error');
     }
-    setBusyType(null);
+    setBusyAction(null);
     await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
     void refreshEnv();
   };
 
   /** 「重装」：版本未知时的唯一操作入口，按当前清单重新执行安装命令（不以「更新」名义执行）。 */
   const handleReinstall = async (agent: MarketAgent) => {
-    setBusyType(agent.agentType);
+    setBusyAction(`reinstall:${agent.agentType}`);
     try {
       await invoke('agent_market_install', { agentType: agent.agentType });
       showToast(`${agent.displayName} 已重新安装`, 'success');
     } catch (err) {
       showToast(`重装失败: ${errorMessage(err)}`, 'error');
     }
-    setBusyType(null);
+    setBusyAction(null);
     await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
     void refreshEnv();
   };
@@ -230,14 +231,18 @@ export function AgentConfigMarket() {
         </SettingsButton>
       );
     }
-    const busy = busyType === agent.agentType;
+    const anyBusy = busyAction?.endsWith(`:${agent.agentType}`) ?? false;
+    const acquiring = busyAction === `acquire:${agent.agentType}`;
+    const updating = busyAction === `update:${agent.agentType}`;
+    const configuring = busyAction === `config:${agent.agentType}`;
+    const reinstalling = busyAction === `reinstall:${agent.agentType}`;
     // 未获取：只是把配置拉下来
     if (!agent.installed) {
       return (
         <SettingsButton
           variant="primary"
-          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
-          disabled={busy}
+          icon={acquiring ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+          disabled={anyBusy}
           onClick={() => handleAcquire(agent)}
         >
           获取
@@ -265,12 +270,12 @@ export function AgentConfigMarket() {
         <SettingsButton
           key="update"
           variant="update"
-          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-          disabled={busy}
+          icon={updating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={anyBusy}
           onClick={() => handleUpdate(agent)}
           title={`将${upgradeTarget}升级到 v${agent.catalogVersion || agent.version}`}
         >
-          {busy ? '升级中' : `升级${upgradeTarget}`}
+          {updating ? '升级中' : `升级${upgradeTarget}`}
         </SettingsButton>
       );
     } else if (agent.forceUpdateAvailable) {
@@ -280,15 +285,15 @@ export function AgentConfigMarket() {
         <SettingsButton
           key="force"
           variant="secondary"
-          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-          disabled={busy}
+          icon={updating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={anyBusy}
           onClick={() => handleUpdate(agent)}
           title={
             `无法比较版本（市场 v${agent.catalogVersion || agent.version}，本机 ${agent.installedVersion ? `v${agent.installedVersion}` : '未知'}）；` +
             '点击按市场规格强制升级（Agent 配置保留）'
           }
         >
-          {busy ? '升级中' : '强制升级'}
+          {updating ? '升级中' : '强制升级'}
         </SettingsButton>
       );
     }
@@ -298,12 +303,12 @@ export function AgentConfigMarket() {
         <SettingsButton
           key="config"
           variant="update"
-          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-          disabled={busy}
+          icon={configuring ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={anyBusy}
           onClick={() => handleApplyConfig(agent)}
           title={`升级本地配置清单到 ${agent.version}，不重装、不升级本机 Agent`}
         >
-          {busy ? '升级中' : '升级配置'}
+          {configuring ? '升级中' : '升级配置'}
         </SettingsButton>
       );
     }
@@ -313,12 +318,12 @@ export function AgentConfigMarket() {
         <SettingsButton
           key="reinstall"
           variant="secondary"
-          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-          disabled={busy}
+          icon={reinstalling ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={anyBusy}
           onClick={() => handleReinstall(agent)}
           title="无法获知最新版本；按当前市场清单重新安装（覆盖本机安装）"
         >
-          {busy ? '重装中' : '重装'}
+          {reinstalling ? '重装中' : '重装'}
         </SettingsButton>
       );
     }
