@@ -376,10 +376,20 @@ impl MarketEntry {
             && has_catalog_version
             && newer.is_none()
             && installed.installed_version.as_deref() != Some(self.version.as_str());
-        // 配置清单更新：只比较市场条目的配置版本与本地快照，和已安装的 Agent 版本无关
+        // 配置清单更新：只比对**该条目自身**的配置版本，与清单顶层 version 无关。
+        // 历史配置没有 presetVersion，按本地实际配置内容比对，避免一升级清单就全体误报。
         let config_update_available = self.source == SOURCE_PRESET
             && installed.exists
-            && installed.preset_version.as_deref() != Some(self.version.as_str());
+            && match installed.preset_version.as_deref() {
+                Some(local) => local != self.version,
+                None => installed
+                    .lifecycle
+                    .as_ref()
+                    .map(|local| {
+                        serde_json::to_value(local).ok() != serde_json::to_value(&self.lifecycle).ok()
+                    })
+                    .unwrap_or(false),
+            };
         MarketAgent {
             agent_type: self.agent_type.clone(),
             display_name: self.display_name.clone(),
@@ -439,11 +449,13 @@ struct InstalledInfo {
     pkg_status: Option<String>,
     /// 本地记录的预置配置版本（`dist_source.presetVersion`）
     preset_version: Option<String>,
+    /// 本地配置清单（用于没有 `presetVersion` 的历史配置按内容比对）
+    lifecycle: Option<LifecycleSpec>,
 }
 
 fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, InstalledInfo>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT agent_type, pkg_state_json, version, dist_source_json FROM agents WHERE transport <> 'http'",
+        "SELECT agent_type, pkg_state_json, version, dist_source_json, lifecycle_json FROM agents WHERE transport <> 'http'",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
@@ -451,17 +463,21 @@ fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, Install
             r.get::<_, Option<String>>(1)?,
             r.get::<_, String>(2)?,
             r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<String>>(4)?,
         ))
     })?;
     let mut out = BTreeMap::new();
     for row in rows {
-        let (agent_type, pkg_text, version, dist_text) = row?;
+        let (agent_type, pkg_text, version, dist_text, lifecycle_text) = row?;
         let state = pkg_text
             .as_deref()
             .and_then(|s| serde_json::from_str::<PkgState>(s).ok());
         let dist_source = dist_text
             .as_deref()
             .and_then(|s| serde_json::from_str::<DistSource>(s).ok());
+        let lifecycle = lifecycle_text
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<LifecycleSpec>(s).ok());
         let installed_version = state
             .as_ref()
             .and_then(|s| s.installed_version.clone())
@@ -473,6 +489,7 @@ fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, Install
                 installed_version,
                 pkg_status: state.map(|s| s.status),
                 preset_version: dist_source.and_then(|d| d.preset_version),
+                lifecycle,
             },
         );
     }
@@ -574,6 +591,7 @@ pub async fn agent_market_list(
                 installed_version: None,
                 pkg_status: None,
                 preset_version: None,
+                lifecycle: None,
             }))
         })
         .collect())
