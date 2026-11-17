@@ -3421,8 +3421,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             </div>
         </div>
 
-        <div className="w-px h-5 shrink-0" style={{ background: 'var(--border)' }} />
-
         <button
             onClick={handleAddStage}
             className="pd-btn px-2 py-1 text-[11px] rounded"
