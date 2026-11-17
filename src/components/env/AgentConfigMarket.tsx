@@ -177,14 +177,14 @@ export function AgentConfigMarket() {
     navigate(`/settings?tab=agents&agent=${encodeURIComponent(agentType)}`);
   };
 
-  /** 「更新」：用市场里的新版本规格覆盖本地配置并重新安装（仅 ACP 官方目录条目可用）。 */
+  /** 「升级」：用市场里的新版本规格覆盖本地配置并重新安装（ACP 适配器 / 宿主 CLI）。 */
   const handleUpdate = async (agent: MarketAgent) => {
     setBusyType(agent.agentType);
     try {
       await invoke('agent_market_update', { agentType: agent.agentType });
-      showToast(`${agent.displayName} 已更新`, 'success');
+      showToast(`${agent.displayName} 已升级`, 'success');
     } catch (err) {
-      showToast(`更新失败: ${errorMessage(err)}`, 'error');
+      showToast(`升级失败: ${errorMessage(err)}`, 'error');
     }
     setBusyType(null);
     // 更新只影响该条目所在市场，按需刷新即可；
@@ -193,15 +193,15 @@ export function AgentConfigMarket() {
     void refreshEnv();
   };
 
-  /** 「配置更新」：只同步市场清单里的配置，不安装、不升级宿主或适配器。 */
+  /** 「升级配置」：只同步市场清单里的配置，不安装、不升级宿主或适配器。 */
   const handleApplyConfig = async (agent: MarketAgent) => {
     setBusyType(agent.agentType);
     try {
       await invoke('agent_market_apply_config', { agentType: agent.agentType });
       await fetchAgents();
-      showToast(`${agent.displayName} 的配置清单已更新`, 'success');
+      showToast(`${agent.displayName} 的配置已升级`, 'success');
     } catch (err) {
-      showToast(`配置更新失败: ${errorMessage(err)}`, 'error');
+      showToast(`配置升级失败: ${errorMessage(err)}`, 'error');
     }
     setBusyType(null);
     await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
@@ -257,7 +257,8 @@ export function AgentConfigMarket() {
         </SettingsButton>
       );
     }
-    // 已就绪：宿主/适配器更新、配置更新、重装相互独立，可能同时出现，避免互相顶掉
+    // 已就绪：宿主/适配器升级、配置升级、重装相互独立，可能同时出现，避免互相顶掉
+    const upgradeTarget = agent.category === 'acp' ? '适配器' : '宿主';
     const actions: ReactNode[] = [];
     if (agent.updateAvailable) {
       actions.push(
@@ -267,9 +268,9 @@ export function AgentConfigMarket() {
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
           onClick={() => handleUpdate(agent)}
-          title={`更新到 v${agent.catalogVersion || agent.version}`}
+          title={`将${upgradeTarget}升级到 v${agent.catalogVersion || agent.version}`}
         >
-          {busy ? '更新中' : '更新'}
+          {busy ? '升级中' : `升级${upgradeTarget}`}
         </SettingsButton>
       );
     } else if (agent.forceUpdateAvailable) {
@@ -284,10 +285,10 @@ export function AgentConfigMarket() {
           onClick={() => handleUpdate(agent)}
           title={
             `无法比较版本（市场 v${agent.catalogVersion || agent.version}，本机 ${agent.installedVersion ? `v${agent.installedVersion}` : '未知'}）；` +
-            '点击按市场规格强制重装（Agent 配置保留）'
+            '点击按市场规格强制升级（Agent 配置保留）'
           }
         >
-          {busy ? '更新中' : '强制更新'}
+          {busy ? '升级中' : '强制升级'}
         </SettingsButton>
       );
     }
@@ -300,9 +301,9 @@ export function AgentConfigMarket() {
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
           onClick={() => handleApplyConfig(agent)}
-          title={`同步市场配置清单到本地（配置版本 ${agent.version}），不重装、不升级本机 Agent`}
+          title={`升级本地配置清单到 ${agent.version}，不重装、不升级本机 Agent`}
         >
-          {busy ? '同步中' : '更新配置'}
+          {busy ? '升级中' : '升级配置'}
         </SettingsButton>
       );
     }
@@ -514,7 +515,7 @@ export function AgentConfigMarket() {
                                 : `市场 v${agent.catalogVersion || agent.version}`
                             }
                           >
-                            可更新
+                            可升级
                           </span>
                         )}
                       </div>
