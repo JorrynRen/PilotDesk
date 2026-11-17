@@ -3375,7 +3375,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                     role="menuitem"
                     className="pd-menu-item cursor-grab select-none"
                     style={{ border: `1px solid ${nt.color}44`, background: `${nt.color}15`, color: 'var(--text-primary)' }}
-                    title={nt.label}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       toolbarDragRef.current = nt.type;
