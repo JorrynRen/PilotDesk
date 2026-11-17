@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
 import { Download, RefreshCw, Search, CheckCircle2, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
@@ -256,10 +257,12 @@ export function AgentConfigMarket() {
         </SettingsButton>
       );
     }
-    // 已就绪且市场有更新版本：直接更新
+    // 已就绪：宿主/适配器更新、配置更新、重装相互独立，可能同时出现，避免互相顶掉
+    const actions: ReactNode[] = [];
     if (agent.updateAvailable) {
-      return (
+      actions.push(
         <SettingsButton
+          key="update"
           variant="update"
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
@@ -269,12 +272,12 @@ export function AgentConfigMarket() {
           {busy ? '更新中' : '更新'}
         </SettingsButton>
       );
-    }
-    // 版本无法比较（非标准版本号 / 本机没有版本记录）：仍给一个明确标注的强制重装入口，
-    // 否则这类条目会因"无法判定是否最新"而彻底失去更新手段。
-    if (agent.forceUpdateAvailable) {
-      return (
+    } else if (agent.forceUpdateAvailable) {
+      // 版本无法比较（非标准版本号 / 本机没有版本记录）：仍给一个明确标注的强制重装入口，
+      // 否则这类条目会因"无法判定是否最新"而彻底失去更新手段。
+      actions.push(
         <SettingsButton
+          key="force"
           variant="secondary"
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
@@ -290,8 +293,9 @@ export function AgentConfigMarket() {
     }
     // 配置清单有新版：只更新本地配置快照，不重装本机 Agent
     if (agent.configUpdateAvailable) {
-      return (
+      actions.push(
         <SettingsButton
+          key="config"
           variant="update"
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
@@ -304,8 +308,9 @@ export function AgentConfigMarket() {
     }
     // 版本未知（无 registryVersion、也没有可用的最新版本探测）：不判断更新，只提供重装
     if (agent.versionSource === 'none') {
-      return (
+      actions.push(
         <SettingsButton
+          key="reinstall"
           variant="secondary"
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
@@ -316,11 +321,14 @@ export function AgentConfigMarket() {
         </SettingsButton>
       );
     }
-    return (
-      <SettingsButton variant="secondary" onClick={() => openInConfig(agent.agentType)}>
-        管理
-      </SettingsButton>
-    );
+    if (actions.length === 0) {
+      return (
+        <SettingsButton variant="secondary" onClick={() => openInConfig(agent.agentType)}>
+          管理
+        </SettingsButton>
+      );
+    }
+    return <div className="flex items-center gap-1.5">{actions}</div>;
   };
 
   return (
