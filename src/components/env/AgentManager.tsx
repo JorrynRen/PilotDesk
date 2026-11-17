@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Terminal, Repeat, RefreshCw, BookOpen, Store as StoreIcon, Play, Package } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, Loader2, Download, Upload, Info, Terminal, Repeat, RefreshCw, BookOpen, Store as StoreIcon, Play, Package } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -12,7 +12,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { needsUnverifiedConsent } from '../../utils/agentIntegrity';
 
 import type { AgentConfig, LifecycleSpec, PkgState } from '../../types';
-import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
+import { SettingsSection, SettingsCard, SettingsButton, SettingsToggle } from '../settings';
 import { Select } from '../common/Select';
 import {
   DndContext,
@@ -1469,14 +1469,12 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
                   {busy ? '安装中' : status.tone === 'error' ? '重试' : '安装'}
                 </SettingsButton>
               )}
-              <SettingsButton
-                onClick={() => handleToggleEnabled(agent)}
-                variant={agent.isEnabled ? 'primary' : 'secondary'}
-                icon={agent.isEnabled ? <Check size={11} /> : <X size={11} />}
+              <SettingsToggle
+                checked={agent.isEnabled}
+                onChange={() => handleToggleEnabled(agent)}
                 title={agent.isEnabled ? '点击禁用此 Agent' : '点击启用此 Agent'}
-              >
-                {agent.isEnabled ? '已启用' : '已禁用'}
-              </SettingsButton>
+                aria-label={agent.isEnabled ? '已启用，点击禁用' : '已禁用，点击启用'}
+              />
               <SettingsButton
                 onClick={() => handleEdit(agent)}
                 variant="secondary"
