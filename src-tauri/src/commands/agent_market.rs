@@ -1700,7 +1700,6 @@ pub async fn readiness_gate(
             transport,
             conn_json,
             None,
-            &[],
         )
         .await;
         crate::commands::env::remember_agent_health(&config.agent_type, &probe.health);

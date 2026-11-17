@@ -97,7 +97,11 @@ pub(crate) async fn probe_launch_command(
     if is_path_command(cleaned) {
         return std::path::Path::new(cleaned).is_file();
     }
+    // PATH 优先；找不到再看包管理器约定目录（npm 全局前缀、pnpm/Volta/Scoop 等）。
+    // 这些目录同时登记进进程级命令索引，spawn 时会按同样的顺序解析，
+    // 因此这里判「可用」与真正能不能起来是同一口径。
     probe_command_ok(agent_mgr, &resolve_command_probe(cleaned)).await
+        || crate::utils::process::program_available_outside_path(cleaned)
 }
 
 /// 通用兜底搜索目录：**只按环境变量与包管理器约定推导，不含任何 Agent 专属路径**。
@@ -107,111 +111,22 @@ pub(crate) async fn probe_launch_command(
 fn generic_command_dirs(npm_prefix: Option<&str>) -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
 
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    let mut push = |p: PathBuf| {
-        if !p.as_os_str().is_empty() {
-            dirs.push(p);
-        }
-    };
+    // 环境变量约定目录（与是否装了对应工具无关，启动早期即可推导）
+    let mut dirs = crate::utils::process::default_command_dirs();
 
     // npm 全局前缀：Windows 可执行垫片直接落在 prefix，类 Unix 在 prefix/bin
     if let Some(prefix) = npm_prefix.map(str::trim).filter(|p| !p.is_empty()) {
         let prefix = PathBuf::from(prefix);
         if cfg!(windows) {
-            push(prefix);
+            dirs.push(prefix);
         } else {
-            push(prefix.join("bin"));
+            dirs.push(prefix.join("bin"));
         }
-    }
-
-    // 各类包管理器/运行时约定目录（通用，与环境里是否装了对应工具无关）
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        push(PathBuf::from(appdata).join("npm"));
-    }
-    if let Ok(pnpm) = std::env::var("PNPM_HOME") {
-        push(PathBuf::from(pnpm));
-    }
-    if let Ok(volta) = std::env::var("VOLTA_HOME") {
-        push(PathBuf::from(volta).join("bin"));
-    }
-    if let Ok(scoop) = std::env::var("SCOOP") {
-        push(PathBuf::from(scoop).join("shims"));
-    }
-    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-        let home = PathBuf::from(home);
-        push(home.join(".local").join("bin"));
-        push(home.join(".cargo").join("bin"));
-        push(home.join("scoop").join("shims"));
     }
 
     dirs.sort();
     dirs.dedup();
     dirs
-}
-
-/// 在兜底目录里按「命令名 + PATHEXT」找可执行文件（不做任何 Agent 语义判断）。
-fn find_command_in_dirs(command: &str, dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
-    let name = command.trim().trim_matches('"');
-    if name.is_empty() || name.contains('/') || name.contains('\\') {
-        return None;
-    }
-
-    let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
-            .split(';')
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    for dir in dirs {
-        let direct = dir.join(name);
-        if cfg!(windows) {
-            // 调用方传的是裸命令名：优先按 PATHEXT 拼扩展名
-            for ext in &exts {
-                let candidate = dir.join(format!("{}{}", name, ext));
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
-            if direct.is_file() {
-                return Some(direct);
-            }
-        } else if direct.is_file() {
-            return Some(direct);
-        }
-    }
-    None
-}
-
-/// 解析「会话真正 spawn 的启动命令」：PATH 优先，失败后走通用目录兜底。
-///
-/// 返回 `(能否直接调用, 兜底命中的实际路径)`。
-/// 兜底命中时第二个值为 `Some`、第一个值仍为 `false`——说明机器上确实装了，
-/// 但当前进程的 PATH 里没有它，直接 spawn 依然会失败，不能谎报「可用」。
-async fn resolve_launch_command(
-    agent_mgr: &crate::agent::AgentManager,
-    command: &str,
-    extra_dirs: &[std::path::PathBuf],
-) -> (bool, Option<std::path::PathBuf>) {
-    let cleaned = command.trim().trim_matches('"');
-    if cleaned.is_empty() {
-        return (false, None);
-    }
-    if is_path_command(cleaned) {
-        let path = std::path::Path::new(cleaned);
-        return (path.is_file(), None);
-    }
-    if probe_command_ok(agent_mgr, &resolve_command_probe(cleaned)).await {
-        return (true, None);
-    }
-    match find_command_in_dirs(cleaned, extra_dirs) {
-        Some(path) => (false, Some(path)),
-        None => (false, None),
-    }
 }
 
 /// 单个 Agent 的检测结果（版本用于列表展示，health 用于状态与门禁）。
@@ -244,7 +159,6 @@ pub(crate) async fn probe_agent(
     transport: &str,
     conn_json: Option<&str>,
     npm_inventory: Option<&serde_json::Value>,
-    extra_dirs: &[std::path::PathBuf],
 ) -> AgentProbe {
     let lifecycle = agent.lifecycle.as_ref();
     let bins = agent
@@ -327,39 +241,23 @@ pub(crate) async fn probe_agent(
         .map(|c| matches!(c, "npm" | "npm.cmd" | "npx" | "npx.cmd"))
         .unwrap_or(false);
 
-    let mut launch_path: Option<std::path::PathBuf> = None;
     let launch_ok = match launch.as_deref() {
         None => false,
         Some(cmd) => {
             if via_pkg_manager && bins.is_empty() {
                 false
             } else {
-                // PATH 优先，失败后按通用包管理器目录兜底（不含 Agent 专属逻辑）
-                let (ok, path) = resolve_launch_command(agent_mgr, cmd, extra_dirs).await;
-                launch_path = path;
-                ok
+                // PATH 优先，失败后按通用包管理器目录兜底（不含 Agent 专属逻辑）。
+                // 兜底命中的目录会登记到进程级命令索引，spawn 时同样能找到。
+                probe_launch_command(agent_mgr, cmd).await
             }
         }
     };
 
     // 「已安装」只看能不能找到依赖/启动命令，不看版本号能否解析：
     // 版本探测失败要单独记成 broken，而不是把已装的东西判成「未安装」。
-    let installed = version.is_some() || launch_ok || launch_path.is_some();
-    let broken = if !installed {
-        None
-    } else if version_error.is_some() {
-        version_error
-    } else if !launch_ok && launch_path.is_some() {
-        // 只在兜底目录里找到：确实装了，但当前进程 PATH 调不起来
-        launch_path.as_ref().map(|p| {
-            format!(
-                "已找到可执行文件 {}，但当前进程的 PATH 无法解析该命令（重启客户端后生效）",
-                p.display()
-            )
-        })
-    } else {
-        None
-    };
+    let installed = version.is_some() || launch_ok;
+    let broken = if installed { version_error } else { None };
 
     let health = if transport == "acp" {
         // 适配器之外再查宿主 Agent：ACP 适配器通常只是协议壳，真正干活的是宿主 CLI。
@@ -761,13 +659,15 @@ async fn detect_env_with_console(
 
     // 通用兜底目录只推导一次：PATH 探测失败时用于找 npm/pnpm/Volta 等安装的 CLI。
     // 不针对任何具体 Agent，命令名照旧来自各 Agent 的启动配置。
+    // 推导结果登记到进程级命令索引——spawn 时按同样的顺序解析，
+    // 因此「装完 CLI 不重启客户端也能用」。
     let npm_prefix = agent_mgr
         .execute_command_output_async("npm prefix -g", "", 10, "npm 全局前缀")
         .await
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let extra_dirs = std::sync::Arc::new(generic_command_dirs(npm_prefix.as_deref()));
+    crate::utils::process::set_extra_command_dirs(generic_command_dirs(npm_prefix.as_deref()));
 
     let mut agent_futures = Vec::new();
     for agent in &db_agents {
@@ -783,7 +683,6 @@ async fn detect_env_with_console(
             .ok()
             .and_then(|info| info.conn);
         let agent = agent.clone();
-        let dirs = std::sync::Arc::clone(&extra_dirs);
         agent_futures.push(async move {
             let probe = probe_agent(
                 agent_mgr,
@@ -791,7 +690,6 @@ async fn detect_env_with_console(
                 &transport,
                 conn_json.as_deref(),
                 npm_inventory_ref,
-                &dirs,
             )
             .await;
             (agent.agent_type, probe)

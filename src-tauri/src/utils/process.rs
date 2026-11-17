@@ -269,6 +269,109 @@ pub fn hidden_command(program: &str) -> std::process::Command {
 //  Windows 可执行文件解析
 // ──────────────────────────────────────────────
 
+// ──────────────────────────────────────────────
+//  PATH 之外的命令目录
+// ──────────────────────────────────────────────
+
+/// 检测阶段发现的额外命令目录（如 npm 自定义全局前缀）。
+///
+/// 只影响本进程内的命令解析，**不改动 PATH 环境变量**：
+/// 桌面端常从 explorer / IDE 继承到旧的 PATH，装完新 CLI 后不重启就找不到，
+/// 把目录记在这里可以让「装完即可用」，且不会给子进程留下全局副作用。
+static EXTRA_COMMAND_DIRS: std::sync::LazyLock<std::sync::RwLock<Vec<std::path::PathBuf>>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(Vec::new()));
+
+/// 由环境变量推导的通用命令目录（无需执行任何命令，启动早期即可用）。
+pub fn default_command_dirs() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut push = |p: PathBuf| {
+        if !p.as_os_str().is_empty() {
+            dirs.push(p);
+        }
+    };
+
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        push(PathBuf::from(appdata).join("npm"));
+    }
+    if let Ok(pnpm) = std::env::var("PNPM_HOME") {
+        push(PathBuf::from(pnpm));
+    }
+    if let Ok(volta) = std::env::var("VOLTA_HOME") {
+        push(PathBuf::from(volta).join("bin"));
+    }
+    if let Ok(scoop) = std::env::var("SCOOP") {
+        push(PathBuf::from(scoop).join("shims"));
+    }
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        let home = PathBuf::from(home);
+        push(home.join(".local").join("bin"));
+        push(home.join(".cargo").join("bin"));
+        push(home.join("scoop").join("shims"));
+    }
+
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// 记录检测阶段发现的额外目录（PATH 探测失败后的兜底来源）。
+pub fn set_extra_command_dirs(dirs: Vec<std::path::PathBuf>) {
+    if let Ok(mut guard) = EXTRA_COMMAND_DIRS.write() {
+        *guard = dirs;
+    }
+}
+
+fn extra_command_dirs() -> Vec<std::path::PathBuf> {
+    EXTRA_COMMAND_DIRS
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
+
+/// PATH 之外的候选目录：环境约定目录 + 检测阶段发现的目录。
+fn outside_path_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = default_command_dirs();
+    for dir in extra_command_dirs() {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+/// PATH 之外是否存在该命令。
+///
+/// Windows 按 `.exe/.cmd/.bat/.ps1` 判断（npm 全局安装只产垫片），
+/// 其他平台看文件是否存在。
+pub fn program_available_outside_path(program: &str) -> bool {
+    let name = program.trim().trim_matches('"');
+    if name.is_empty() || name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    for dir in outside_path_dirs() {
+        #[cfg(windows)]
+        {
+            for ext in ["exe", "cmd", "bat", "ps1"] {
+                if dir.join(format!("{}.{}", name, ext)).is_file() {
+                    return true;
+                }
+            }
+            if dir.join(name).is_file() {
+                return true;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if dir.join(name).is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// 把裸命令名解析为**可被 CreateProcess 真正启动**的目标。
 ///
 /// 背景：Windows 的 `CreateProcess` **只自动补 `.exe`**，不会走 `PATHEXT`。
@@ -293,12 +396,19 @@ pub fn resolve_windows_program(program: &str) -> (String, Vec<String>) {
         return (program.to_string(), Vec::new());
     }
 
-    let dirs: Vec<PathBuf> = std::env::var("PATH")
+    let mut dirs: Vec<PathBuf> = std::env::var("PATH")
         .unwrap_or_default()
         .split(';')
         .filter(|s| !s.trim().is_empty())
         .map(PathBuf::from)
         .collect();
+
+    // PATH 可能因进程继承而偏旧：补上环境约定目录与检测阶段发现的目录
+    for dir in outside_path_dirs() {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
 
     // 2) name.exe 直连
     for d in &dirs {
@@ -350,9 +460,19 @@ pub fn resolve_windows_program(program: &str) -> (String, Vec<String>) {
     (program.to_string(), Vec::new())
 }
 
-/// 非 Windows：无需解析（POSIX 由 execvp 走 PATH，可直接执行脚本）。
+/// 非 Windows：PATH 之外的目录要显式解析成绝对路径，否则 execvp 找不到。
 #[cfg(not(target_os = "windows"))]
 pub fn resolve_windows_program(program: &str) -> (String, Vec<String>) {
+    let name = program.trim().trim_matches('"');
+    if name.is_empty() || name.contains('/') || name.contains('\\') {
+        return (program.to_string(), Vec::new());
+    }
+    for dir in outside_path_dirs() {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return (candidate.to_string_lossy().to_string(), Vec::new());
+        }
+    }
     (program.to_string(), Vec::new())
 }
 
