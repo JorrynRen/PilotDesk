@@ -246,6 +246,10 @@ pub struct DistSource {
     pub registry_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry_version: Option<String>,
+    /// 预置条目的配置版本（市场清单里的 `version`）：仅表示配置快照的新旧，
+    /// 与 Agent 自身的安装版本无关；本地落后时可提示「配置更新」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_url: Option<String>,
     #[serde(default)]

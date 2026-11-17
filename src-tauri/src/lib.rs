@@ -2922,6 +2922,7 @@ pub fn run() {
             commands::agent_market::agent_market_acquire,
             commands::agent_market::agent_market_install,
             commands::agent_market::agent_market_update,
+            commands::agent_market::agent_market_apply_config,
             commands::agent_market::agent_market_remove,
             plugin::agent::plugin_agent_create_session,
             plugin::agent::plugin_agent_send_message,

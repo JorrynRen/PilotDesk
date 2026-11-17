@@ -74,6 +74,9 @@ pub struct MarketAgent {
     /// 版本无法比较（非标准版本号 / 缺本机版本）但确有目录条目：给「强制更新」入口，
     /// 由用户自行决定是否按目录规格重装（避免因无法判定而彻底失去更新手段）。
     pub force_update_available: bool,
+    /// 预置配置清单有新版（本地记录的 `presetVersion` 落后）：只更新本地配置，
+    /// 与「宿主更新」「适配器更新」是两回事，不触发安装。
+    pub config_update_available: bool,
 }
 
 // ──────────────────────────────────────────────
@@ -373,6 +376,10 @@ impl MarketEntry {
             && has_catalog_version
             && newer.is_none()
             && installed.installed_version.as_deref() != Some(self.version.as_str());
+        // 配置清单更新：只比较市场条目的配置版本与本地快照，和已安装的 Agent 版本无关
+        let config_update_available = self.source == SOURCE_PRESET
+            && installed.exists
+            && installed.preset_version.as_deref() != Some(self.version.as_str());
         MarketAgent {
             agent_type: self.agent_type.clone(),
             display_name: self.display_name.clone(),
@@ -396,6 +403,7 @@ impl MarketEntry {
             pkg_status: installed.pkg_status.clone(),
             update_available,
             force_update_available,
+            config_update_available,
         }
     }
 }
@@ -429,25 +437,31 @@ struct InstalledInfo {
     exists: bool,
     installed_version: Option<String>,
     pkg_status: Option<String>,
+    /// 本地记录的预置配置版本（`dist_source.presetVersion`）
+    preset_version: Option<String>,
 }
 
 fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, InstalledInfo>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT agent_type, pkg_state_json, version FROM agents WHERE transport <> 'http'",
+        "SELECT agent_type, pkg_state_json, version, dist_source_json FROM agents WHERE transport <> 'http'",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, Option<String>>(1)?,
             r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?,
         ))
     })?;
     let mut out = BTreeMap::new();
     for row in rows {
-        let (agent_type, pkg_text, version) = row?;
+        let (agent_type, pkg_text, version, dist_text) = row?;
         let state = pkg_text
             .as_deref()
             .and_then(|s| serde_json::from_str::<PkgState>(s).ok());
+        let dist_source = dist_text
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<DistSource>(s).ok());
         let installed_version = state
             .as_ref()
             .and_then(|s| s.installed_version.clone())
@@ -458,6 +472,7 @@ fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, Install
                 exists: true,
                 installed_version,
                 pkg_status: state.map(|s| s.status),
+                preset_version: dist_source.and_then(|d| d.preset_version),
             },
         );
     }
@@ -558,6 +573,7 @@ pub async fn agent_market_list(
                 exists: false,
                 installed_version: None,
                 pkg_status: None,
+                preset_version: None,
             }))
         })
         .collect())
@@ -618,6 +634,7 @@ pub async fn agent_market_acquire(
             source: entry.source.clone(),
             registry_id: entry.registry_id.clone(),
             registry_version: entry.registry_version.clone(),
+            preset_version: (entry.source == SOURCE_PRESET).then(|| entry.version.clone()),
             icon_url: entry.icon_url.clone(),
             installed_at: now_ts,
         }),
@@ -1360,6 +1377,7 @@ pub(crate) async fn adopt_preset_spec(
                     source: entry.source.clone(),
                     registry_id: None,
                     registry_version: None,
+                    preset_version: Some(entry.version.clone()),
                     icon_url: entry.icon_url.clone(),
                     installed_at: now_ts,
                 }),
@@ -1483,6 +1501,7 @@ pub async fn agent_market_update(
                     source: entry.source.clone(),
                     registry_id: entry.registry_id.clone(),
                     registry_version: entry.registry_version.clone(),
+                    preset_version: (entry.source == SOURCE_PRESET).then(|| entry.version.clone()),
                     icon_url: entry.icon_url.clone(),
                     installed_at: now_ts,
                 }),
@@ -1523,6 +1542,84 @@ pub async fn agent_market_update(
         true,
     )
     .await?;
+
+    let conn = state.get_conn()?;
+    agents::get_agent_inner(&conn, &agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))
+}
+
+/// 「配置更新」：只把市场清单里的配置（生命周期规格）同步到本地。
+///
+/// 与「宿主更新」「适配器更新」是两回事：不执行安装命令、不改本机安装状态，
+/// 仅更新配置快照与 `presetVersion`，让后续检测/更新使用新渠道。
+#[tauri::command]
+pub async fn agent_market_apply_config(
+    state: tauri::State<'_, crate::DbState>,
+    agent_type: String,
+) -> Result<AgentConfig, AppError> {
+    let (config, transport) = {
+        let conn = state.get_conn()?;
+        let config = agents::get_agent_inner(&conn, &agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
+        let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
+        (config, transport)
+    };
+
+    let category = if transport == "acp" { "acp" } else { "cli" };
+    let entries = load_entries(Some(category)).await?;
+    let entry = entries
+        .into_iter()
+        .find(|e| {
+            e.agent_type == agent_type && e.source == SOURCE_PRESET && e.transport == transport
+        })
+        .ok_or_else(|| {
+            AppError::NotFound(format!("市场中未找到 Agent「{}」的预置配置", agent_type))
+        })?;
+
+    // 老版预置没有安装规格，无从同步
+    if entry.lifecycle.packages.is_empty() && entry.lifecycle.install_cmd.is_none() {
+        return Err(AppError::InvalidInput(
+            "该条目没有可同步的配置清单".to_string(),
+        ));
+    }
+
+    let version = entry.version.clone();
+    let icon_url = entry.icon_url.clone();
+    let source = entry.source.clone();
+    let installed_at = config
+        .dist_source
+        .as_ref()
+        .map(|d| d.installed_at)
+        .filter(|t| *t > 0)
+        .unwrap_or_else(crate::utils::now);
+    let registry_id = config.dist_source.as_ref().and_then(|d| d.registry_id.clone());
+    let registry_version = config
+        .dist_source
+        .as_ref()
+        .and_then(|d| d.registry_version.clone());
+
+    {
+        let conn = state.get_conn()?;
+        agents::update_agent_inner(
+            &conn,
+            UpdateAgentPayload {
+                agent_type: agent_type.clone(),
+                lifecycle: Some(entry.lifecycle),
+                dist_source: Some(DistSource {
+                    source,
+                    registry_id,
+                    registry_version,
+                    preset_version: Some(version),
+                    icon_url,
+                    installed_at,
+                }),
+                ..Default::default()
+            },
+        )?;
+    }
+
+    // 规格变了，旧的健康探测结果不再可信
+    crate::commands::env::clear_env_cache();
 
     let conn = state.get_conn()?;
     agents::get_agent_inner(&conn, &agent_type)?

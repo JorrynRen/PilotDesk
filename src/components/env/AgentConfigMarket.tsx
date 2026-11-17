@@ -55,6 +55,8 @@ interface MarketAgent {
   updateAvailable: boolean;
   /** 版本无法比较（非标准版本号 / 缺本机版本）：给「强制更新」入口 */
   forceUpdateAvailable?: boolean;
+  /** 市场配置清单有新版：只同步配置，与宿主/适配器版本更新无关 */
+  configUpdateAvailable?: boolean;
 }
 
 const CATEGORY_TABS: { key: MarketCategory; label: string; hint: string }[] = [
@@ -178,6 +180,21 @@ export function AgentConfigMarket() {
     void refreshEnv();
   };
 
+  /** 「配置更新」：只同步市场清单里的配置，不安装、不升级宿主或适配器。 */
+  const handleApplyConfig = async (agent: MarketAgent) => {
+    setBusyType(agent.agentType);
+    try {
+      await invoke('agent_market_apply_config', { agentType: agent.agentType });
+      await fetchAgents();
+      showToast(`${agent.displayName} 的配置清单已更新`, 'success');
+    } catch (err) {
+      showToast(`配置更新失败: ${errorMessage(err)}`, 'error');
+    }
+    setBusyType(null);
+    await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
+    void refreshEnv();
+  };
+
   const renderAction = (agent: MarketAgent) => {
     if (!agent.supported) {
       return (
@@ -242,6 +259,20 @@ export function AgentConfigMarket() {
           }
         >
           {busy ? '更新中' : '强制更新'}
+        </SettingsButton>
+      );
+    }
+    // 配置清单有新版：只更新本地配置快照，不重装本机 Agent
+    if (agent.configUpdateAvailable) {
+      return (
+        <SettingsButton
+          variant="secondary"
+          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={busy}
+          onClick={() => handleApplyConfig(agent)}
+          title={`同步市场配置清单到本地（配置版本 ${agent.version}），不重装、不升级本机 Agent`}
+        >
+          {busy ? '同步中' : '更新配置'}
         </SettingsButton>
       );
     }
