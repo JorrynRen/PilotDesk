@@ -535,10 +535,12 @@ fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, Install
             .as_deref()
             .and_then(|s| serde_json::from_str::<LifecycleSpec>(s).ok());
         let config_version = Some(version.clone()).filter(|v| !v.trim().is_empty());
+        // 安装版本只认安装记录：绝不能回落到配置版本（`agents.version`），
+        // 否则升级配置把 1.0 改成 1.1 后，会被当成"本机已装 v1.1"，宿主升级突然消失。
         let installed_version = state
             .as_ref()
             .and_then(|s| s.installed_version.clone())
-            .or_else(|| config_version.clone());
+            .filter(|v| !v.trim().is_empty());
         out.insert(
             agent_type,
             InstalledInfo {
@@ -1690,9 +1692,8 @@ pub async fn agent_market_apply_config(
         )?;
     }
 
-    // 规格变了，旧的健康探测结果不再可信
-    crate::commands::env::clear_env_cache();
-
+    // 只刷新配置清单：本机已安装的版本没有变化，不能清环境检测缓存，
+    // 否则市场侧会失去「本机版本」，宿主/适配器升级入口随之消失。
     let conn = state.get_conn()?;
     agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))

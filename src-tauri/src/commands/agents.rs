@@ -35,18 +35,26 @@ pub fn add_agent(
 }
 
 #[tauri::command]
-pub fn update_agent(
+pub async fn update_agent(
     state: tauri::State<'_, crate::DbState>,
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     payload: UpdateAgentPayload,
 ) -> Result<AgentConfig, AppError> {
-    let conn = state.get_conn()?;
-    let updated = update_agent_inner(&conn, payload)?;
-    // 配置已变：池内按旧配置 spawn 的进程不可复用，硬清。
-    // 同步命令运行在主线程（非 tokio 上下文），blocking_lock 安全（lib.rs setup 同例）。
-    agent_mgr
-        .blocking_lock()
-        .evict_acp_pool(&updated.agent_type);
+    let updated = {
+        let conn = state.get_conn()?;
+        update_agent_inner(&conn, payload)?
+    };
+    // 配置已变：池内按旧配置 spawn 的进程不可复用，需要硬清。
+    // 会话进行中该锁可能被长时间持有，因此最多等 2s：等不到就跳过，
+    // 避免同步阻塞 IPC 线程导致「保存卡死」。
+    if let Ok(guard) = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        agent_mgr.lock(),
+    )
+    .await
+    {
+        guard.evict_acp_pool(&updated.agent_type);
+    }
     crate::agent::host_sessions::evict_agent(&updated.agent_type);
     Ok(updated)
 }
@@ -726,17 +734,26 @@ pub fn get_agent_transport_inner(
 /// 位置参数一旦错位，rusqlite 只会在**运行时**报错（能编译通过），
 /// 在那个语句上加列的风险与收益不成比例。
 #[tauri::command]
-pub fn set_agent_transport(
+pub async fn set_agent_transport(
     state: tauri::State<'_, crate::DbState>,
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
     agent_type: String,
     transport: String,
     conn_json: Option<String>,
 ) -> Result<(), AppError> {
-    let conn = state.get_conn()?;
-    set_agent_transport_inner(&conn, &agent_type, &transport, conn_json.as_deref())?;
-    // 接入方式/连接参数已变：池内旧进程不可复用，硬清
-    agent_mgr.blocking_lock().evict_acp_pool(&agent_type);
+    {
+        let conn = state.get_conn()?;
+        set_agent_transport_inner(&conn, &agent_type, &transport, conn_json.as_deref())?;
+    }
+    // 接入方式/连接参数已变：池内旧进程不可复用，硬清；同样限时等待，避免阻塞 IPC 线程。
+    if let Ok(guard) = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        agent_mgr.lock(),
+    )
+    .await
+    {
+        guard.evict_acp_pool(&agent_type);
+    }
     crate::agent::host_sessions::evict_agent(&agent_type);
     Ok(())
 }
