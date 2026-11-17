@@ -74,6 +74,14 @@ pub struct MarketAgent {
     pub catalog_version: Option<String>,
     /// 目录版本来源：`registry`（registryVersion）/ `probe`（latestVersionCmd）/ `none`（版本未知）
     pub version_source: String,
+    /// ACP 官方目录的适配器版本（`registryVersion`）；预置条目为空
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_version: Option<String>,
+    /// 适配器是否内置于宿主（单包，或 adapter 与 host 同包）：内置时两者版本同源
+    pub adapter_embedded: bool,
+    /// 宿主最新版本（运行时探测）；内置型 ACP 条目不重复导出
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_latest_version: Option<String>,
     /// 目录版本**明确高于**本机安装版本（方向感知；版本无法比较时一律为 false）
     pub update_available: bool,
     /// 版本无法比较（非标准版本号 / 缺本机版本）但确有目录条目：给「强制更新」入口，
@@ -337,6 +345,29 @@ impl MarketEntry {
         }
     }
 
+    /// 适配器是否内置于宿主：无 adapter 包、只有一个包，或 adapter 与 host 同包。
+    /// 内置时“适配器版本”就是宿主版本，不能再单独给适配器升级入口。
+    fn adapter_embedded(&self) -> bool {
+        let adapters: Vec<String> = self
+            .lifecycle
+            .packages
+            .iter()
+            .filter(|p| p.role == PackageRole::Adapter)
+            .map(|p| crate::agent::lifecycle::package_without_version(&p.package))
+            .collect();
+        if adapters.is_empty() {
+            return true;
+        }
+        let hosts: Vec<String> = self
+            .lifecycle
+            .packages
+            .iter()
+            .filter(|p| p.role == PackageRole::Host)
+            .map(|p| crate::agent::lifecycle::package_without_version(&p.package))
+            .collect();
+        adapters.iter().all(|a| hosts.iter().any(|h| h == a))
+    }
+
     fn to_market_agent(&self, installed: &InstalledInfo, probed_latest: Option<&str>) -> MarketAgent {
         // 没有包名、没有安装命令、也没有平台制品 = 老版预置/只能手工配置，不能给「获取」入口
         let has_install_spec = !self.lifecycle.packages.is_empty()
@@ -361,18 +392,31 @@ impl MarketEntry {
             })
             .collect();
         // 版本源优先级：ACP 官方 `registryVersion` > 运行时探测（`latestVersionCmd`）> 未知。
+        // 适配器内置宿主时两者同源，优先用探测值（能反映目录快照之后的发布）。
         // 未知不等于「已是最新」，也不强行给更新入口；市场侧只保留「重装」。
+        let probed = probed_latest.filter(|v| !v.trim().is_empty());
+        let embedded = self.adapter_embedded();
         let registry_catalog = self
             .registry_version
             .as_deref()
             .filter(|v| !v.trim().is_empty());
-        let catalog_version = registry_catalog.or(probed_latest.filter(|v| !v.trim().is_empty()));
+        let catalog_version = if embedded {
+            probed.or(registry_catalog)
+        } else {
+            registry_catalog
+        };
         let version_source = if registry_catalog.is_some() {
             "registry"
         } else if catalog_version.is_some() {
             "probe"
         } else {
             "none"
+        };
+        // 内置型 ACP 条目的“适配器版本”就是配置版本，宿主版本不再重复展示
+        let host_latest_version = if embedded && self.source != SOURCE_PRESET {
+            None
+        } else {
+            probed.map(|v| v.to_string())
         };
         // 方向感知：只有目录版本严格高于本机版本才算可更新。
         // 用 `!=` 会在目录快照落后于包管理器最新版时永久误报，点更新还会把本机降级。
@@ -424,6 +468,9 @@ impl MarketEntry {
             pkg_status: installed.pkg_status.clone(),
             catalog_version: catalog_version.map(|v| v.to_string()),
             version_source: version_source.to_string(),
+            registry_version: self.registry_version.clone().filter(|v| !v.trim().is_empty()),
+            adapter_embedded: embedded,
+            host_latest_version,
             update_available,
             force_update_available,
             config_update_available,

@@ -55,6 +55,12 @@ interface MarketAgent {
   catalogVersion?: string | null;
   /** 目录版本来源：registry / probe / none（版本未知） */
   versionSource?: 'registry' | 'probe' | 'none' | string;
+  /** ACP 官方目录的适配器版本；预置条目为空 */
+  registryVersion?: string | null;
+  /** 适配器是否内置于宿主（内置时适配器版本 == 配置版本） */
+  adapterEmbedded?: boolean;
+  /** 宿主最新版本（运行时探测）；内置型 ACP 条目不重复导出 */
+  hostLatestVersion?: string | null;
   /** 目录版本明确高于本机版本（方向感知，不会因"不相等"误报） */
   updateAvailable: boolean;
   /** 版本无法比较（非标准版本号 / 缺本机版本）：给「强制更新」入口 */
@@ -433,9 +439,30 @@ export function AgentConfigMarket() {
                         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                           {agent.displayName}
                         </span>
-                        {agent.catalogVersion && (
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            v{agent.catalogVersion}
+                        {/* 配置版本：ACP 条目取适配器版本，预置条目取清单版本 */}
+                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          v{agent.version || '—'}
+                        </span>
+                        {/* 独立适配器且目录版本与配置版本不一致时，单独标注适配器版本 */}
+                        {!agent.adapterEmbedded &&
+                          agent.registryVersion &&
+                          agent.registryVersion !== agent.version && (
+                            <span
+                              className="text-[10px]"
+                              style={{ color: 'var(--text-tertiary)' }}
+                              title="ACP 适配器版本"
+                            >
+                              适配器 v{agent.registryVersion}
+                            </span>
+                          )}
+                        {/* 宿主最新版本：预置条目与独立适配器条目展示，避免与配置版本混淆 */}
+                        {agent.hostLatestVersion && (
+                          <span
+                            className="text-[10px]"
+                            style={{ color: 'var(--text-tertiary)' }}
+                            title="宿主最新版本"
+                          >
+                            宿主 v{agent.hostLatestVersion}
                           </span>
                         )}
                         {/* 来源徽标：ACP 官方用强调色，预置用中性色，避免与状态标记混在一起 */}
