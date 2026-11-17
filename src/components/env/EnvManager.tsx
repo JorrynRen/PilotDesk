@@ -669,9 +669,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       onClick={() => requestEnvAction(dep.key, 'reinstall')}
                       disabled={!!dep.installing}
                       variant="secondary"
-                      icon={<RefreshCw size={11} />}
+                      icon={dep.installing ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
                     >
-                      重装
+                      {dep.installing ? '重装中…' : '重装'}
                     </SettingsButton>
                     <SettingsButton
                       onClick={() => requestEnvAction(dep.key, 'uninstall')}
