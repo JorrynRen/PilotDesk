@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "agents": [
     {
       "agentType": "hermes-acp",
@@ -10,15 +10,15 @@
       "icon": "file:hermes_icon.ico",
       "color": "#8B5CF6",
       "sortOrder": 1,
-      "version": "1.0",
+      "version": "1.1",
       "lifecycle": {
         "kind": "shell",
         "runtime": { "command": "hermes", "args": ["acp"] },
-        "installCmd": "pip install hermes-agent",
-        "uninstallCmd": "pip uninstall hermes-agent -y",
-        "updateCmd": "pip install --upgrade hermes-agent",
+        "installCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
+        "uninstallCmd": "hermes uninstall",
+        "updateCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
         "versionCmd": "hermes --version",
-        "latestVersionCmd": "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version"
+        "latestVersionCmd": "powershell -NoProfile -Command \"(Invoke-RestMethod 'https://api.github.com/repos/NousResearch/hermes-agent/releases/latest' -Headers @{'User-Agent'='PilotDesk'}).tag_name\""
       },
       "skillsDir": "~/AppData/Local/hermes/skills/",
       "skillEntryFile": "SKILL.md",
@@ -33,15 +33,15 @@
       "icon": "file:hermes_icon.ico",
       "color": "#8B5CF6",
       "sortOrder": 2,
-      "version": "1.0",
+      "version": "1.1",
       "lifecycle": {
         "kind": "shell",
         "runtime": { "command": "hermes", "args": [] },
-        "installCmd": "pip install hermes-agent",
-        "uninstallCmd": "pip uninstall hermes-agent -y",
-        "updateCmd": "pip install --upgrade hermes-agent",
+        "installCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
+        "uninstallCmd": "hermes uninstall",
+        "updateCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
         "versionCmd": "hermes --version",
-        "latestVersionCmd": "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version"
+        "latestVersionCmd": "powershell -NoProfile -Command \"(Invoke-RestMethod 'https://api.github.com/repos/NousResearch/hermes-agent/releases/latest' -Headers @{'User-Agent'='PilotDesk'}).tag_name\""
       },
       "runCmdTemplate": "hermes chat --query={message} -Q",
       "outputParser": "ansi-text",

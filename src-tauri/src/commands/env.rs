@@ -759,7 +759,7 @@ async fn detect_env_with_console(
 
         // 先归集「查什么命令」：有生命周期规格的直接派生；
         // 没有规格的历史本地 CLI 记下来，稍后按同名预置补齐（否则这类 Agent 永远查不到最新版本）。
-        let mut jobs: Vec<(String, String)> = Vec::new();
+        let mut jobs: Vec<(String, String, bool)> = Vec::new();
         // ACP 官方目录来源：最新版本取**当前目录**版本（与资源市集同源）；
         // 目录暂不可用时才回退本地安装时记录的快照版本。
         // 不能用 npm view —— npm latest 与目录版本是两套，会永远显示「有更新」。
@@ -796,18 +796,41 @@ async fn detect_env_with_console(
                     }
                 }
             }
+            // 市集预置来源：本地落库的是安装当时的快照，最新版本查询应以市场清单为准
+            let from_preset = agent
+                .dist_source
+                .as_ref()
+                .map(|ds| ds.source == crate::agent::lifecycle::SOURCE_PRESET)
+                .unwrap_or(false);
             match agent
                 .lifecycle
                 .as_ref()
                 .and_then(|spec| spec.commands().ok())
                 .and_then(|cmds| cmds.latest_version)
             {
-                Some(cmd) => jobs.push((agent.agent_type.clone(), cmd)),
+                Some(cmd) => jobs.push((agent.agent_type.clone(), cmd, from_preset)),
                 None => missing.push(agent.agent_type.clone()),
             }
         }
+        // 预置规格会随市场清单演进（例如上游更换发布渠道），而本地保存的是安装时的快照。
+        // 这里统一按市场清单覆盖最新版本查询命令，避免已装用户永远查到旧渠道的版本；
+        // 安装/升级命令仍在用户点「更新」时由 `agent_market_update` 覆盖。
+        let has_preset_jobs = jobs.iter().any(|(_, _, from_preset)| *from_preset);
+        let presets = if !missing.is_empty() || has_preset_jobs {
+            preset_latest_commands().await
+        } else {
+            std::collections::HashMap::new()
+        };
+        if has_preset_jobs {
+            for (agent_type, cmd, from_preset) in jobs.iter_mut() {
+                if *from_preset {
+                    if let Some(market_cmd) = presets.get(agent_type) {
+                        *cmd = market_cmd.clone();
+                    }
+                }
+            }
+        }
         if !missing.is_empty() {
-            let presets = preset_latest_commands().await;
             for agent_type in missing {
                 // 只对本地 CLI 回退；ACP 没有规格说明是自定义连接，不该猜版本来源
                 let is_cli = transport_map
@@ -818,14 +841,15 @@ async fn detect_env_with_console(
                     continue;
                 }
                 if let Some(cmd) = presets.get(&agent_type) {
-                    jobs.push((agent_type, cmd.clone()));
+                    // 没有本地规格的 Agent 直接按市场命令查，命中即视为预置来源
+                    jobs.push((agent_type, cmd.clone(), true));
                 }
             }
         }
 
         // Phase 2 并行查询所有 Agent 最新版本
         let mut latest_futures = Vec::new();
-        for (agent_type, cmd) in jobs {
+        for (agent_type, cmd, _) in jobs {
             let label = format!("{} 最新版本查询", agent_type);
             let mgr_clone = mgr.clone();
             latest_futures.push(async move {
