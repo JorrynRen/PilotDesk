@@ -266,7 +266,7 @@ export function AgentConfigMarket() {
     if (agent.configUpdateAvailable) {
       return (
         <SettingsButton
-          variant="secondary"
+          variant="update"
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
           onClick={() => handleApplyConfig(agent)}
