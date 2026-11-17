@@ -3334,7 +3334,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                 maxWidth: 144,
                 flexShrink: 0,
               }}
-              title="选择历史执行记录恢复节点执行状态"
             />
           </div>
         </div>
@@ -3351,7 +3350,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
               background: 'var(--bg-tertiary)',
               color: 'var(--text-secondary)',
             }}
-            title="节点类型库：悬停展开后拖拽节点到画布"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" className="shrink-0">
               <rect x="1.5" y="1.5" width="3.6" height="3.6" rx="0.8" />
