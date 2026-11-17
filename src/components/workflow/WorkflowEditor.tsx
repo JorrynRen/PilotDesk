@@ -3366,7 +3366,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           <div className="absolute left-0 right-0 top-full h-1" aria-hidden />
           <div
             role="menu"
-            className={`pd-menu absolute left-0 right-0 top-full mt-1 z-50 flex flex-col items-stretch transition-opacity duration-200 ${
+            className={`pd-menu absolute left-0 right-0 top-full mt-1 z-50 flex flex-col gap-1 items-stretch transition-opacity duration-200 ${
               'opacity-0 invisible pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:pointer-events-auto'
             }`}
           >
