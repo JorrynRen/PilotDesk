@@ -16,7 +16,7 @@
         "runtime": { "command": "hermes", "args": ["acp"] },
         "installCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
         "uninstallCmd": "hermes uninstall",
-        "updateCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
+        "updateCmd": "hermes update",
         "versionCmd": "hermes --version",
         "latestVersionCmd": "powershell -NoProfile -Command \"(Invoke-RestMethod 'https://api.github.com/repos/NousResearch/hermes-agent/releases/latest' -Headers @{'User-Agent'='PilotDesk'}).tag_name\""
       },
@@ -39,7 +39,7 @@
         "runtime": { "command": "hermes", "args": [] },
         "installCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
         "uninstallCmd": "hermes uninstall",
-        "updateCmd": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://hermes-agent.nousresearch.com/install.ps1 | iex\"",
+        "updateCmd": "hermes update",
         "versionCmd": "hermes --version",
         "latestVersionCmd": "powershell -NoProfile -Command \"(Invoke-RestMethod 'https://api.github.com/repos/NousResearch/hermes-agent/releases/latest' -Headers @{'User-Agent'='PilotDesk'}).tag_name\""
       },
