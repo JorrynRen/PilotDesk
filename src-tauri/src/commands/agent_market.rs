@@ -1694,8 +1694,15 @@ pub async fn readiness_gate(
         deep && cached.is_some()
     };
     if need_probe {
-        let probe =
-            crate::commands::env::probe_agent(agent_mgr, config, transport, conn_json, None).await;
+        let probe = crate::commands::env::probe_agent(
+            agent_mgr,
+            config,
+            transport,
+            conn_json,
+            None,
+            &[],
+        )
+        .await;
         crate::commands::env::remember_agent_health(&config.agent_type, &probe.health);
         if !probe.health.available {
             crate::commands::env::clear_env_cache();

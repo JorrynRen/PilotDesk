@@ -96,6 +96,9 @@ pub struct AgentHealth {
     pub installed: bool,
     /// Agent 是否真正可用（启动命令能在本机解析）
     pub available: bool,
+    /// 已安装但探测异常（如 `--version` 超时 / 非零退出）：记录原因，不当作「未安装」
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broken: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

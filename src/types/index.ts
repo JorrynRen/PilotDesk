@@ -207,6 +207,8 @@ export interface Inspiration {
 export interface AgentHealth {
   installed: boolean;
   available: boolean;
+  /** 已安装但探测异常（--version 超时/非零退出），值为原因 */
+  broken?: string | null;
   reason?: string | null;
 }
 

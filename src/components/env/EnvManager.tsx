@@ -22,6 +22,8 @@ interface DependencyStatus {
   available?: boolean;
   /** 不可用/未安装的原因 */
   healthReason?: string | null;
+  /** 已安装但探测异常（--version 超时/非零退出），值为原因 */
+  broken?: string | null;
   /** 是否有可执行的安装规格（市场下发的 lifecycle）；手工配置的 Agent 为 false */
   installable?: boolean;
   /** 卸载对象文案：ACP 是「卸载适配器」，本地 CLI 是「卸载 CLI 包」 */
@@ -222,8 +224,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       }
     });
 
-    const unlistenAgent = await listen<{ agentType: string; version: string | null; installed?: boolean }>('env-agent-version', (event) => {
-      const { agentType, version, installed } = event.payload;
+    const unlistenAgent = await listen<{ agentType: string; version: string | null; installed?: boolean; broken?: string | null }>('env-agent-version', (event) => {
+      const { agentType, version, installed, broken } = event.payload;
       if (isApiProvider(agentType)) return;
       const agent = agents.find(a => a.agentType === agentType);
       const name = agent?.displayName || agentType;
@@ -231,7 +233,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       // 但 Agent 可能已装可用，不能一律记成「未安装」。
       const ok = installed ?? version !== null;
       addLog(
-        `${name}: ${ok ? (version ? `v${version}` : '已安装（版本未知）') : '未安装'}`,
+        `${name}: ${ok ? (version ? `v${version}` : broken ? `安装异常（${broken}）` : '已安装（版本未知）') : '未安装'}`,
         ok ? 'success' : 'warn',
       );
     });
@@ -285,6 +287,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         detected,
         available,
         healthReason: health?.reason ?? null,
+        broken: installed ? (health?.broken ?? null) : null,
         // 安装/卸载命令来自市集下发的 lifecycle；历史手工 Agent 若市集有同名可安装预置，
         // 按「接管」处理（后端真正执行前会先把预置规格写回本地）
         installable: !!agent.lifecycle || presetInstallable[agent.agentType] === true,
@@ -563,17 +566,19 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                           ? '未检测'
                           : !dep.installed
                             ? '未安装'
-                            : dep.available === false
-                              ? '不可用'
-                              : dep.version
-                                ? `v${dep.version}`
-                                : '可用（版本未知）'}
+                            : dep.broken
+                              ? '安装异常'
+                              : dep.available === false
+                                ? '不可用'
+                                : dep.version
+                                  ? `v${dep.version}`
+                                  : '可用（版本未知）'}
                     </span>
-                    {/* 不可用原因直接展示：登录/授权这类问题藏在 hover 里用户根本发现不了 */}
-                    {!dep.detecting && dep.installed && dep.available === false && dep.healthReason && (
+                    {/* 不可用/安装异常的原因直接展示：登录/授权、版本探测失败这类问题藏在 hover 里用户根本发现不了 */}
+                    {!dep.detecting && dep.installed && (dep.available === false || dep.broken) && dep.healthReason && (
                       <span
                         className="text-[10px] truncate max-w-[240px]"
-                        style={{ color: '#EF4444' }}
+                        style={{ color: dep.broken ? 'var(--status-warning)' : 'var(--status-danger)' }}
                         title={dep.healthReason}
                       >
                         {dep.healthReason}
@@ -583,12 +588,12 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
                     )}
                     {dep.latestVersion && !dep.updateChecking && (
-                      <span className="text-[10px]" style={{ color: dep.hasUpdate ? '#F59E0B' : 'var(--text-tertiary)' }}>
+                      <span className="text-[10px]" style={{ color: dep.hasUpdate ? 'var(--status-warning)' : 'var(--text-tertiary)' }}>
                         最新 v{dep.latestVersion}
                       </span>
                     )}
                     {dep.latestVersion && dep.latestReleaseTime && !dep.updateChecking && (
-                      <span className="text-[10px]" style={{ color: dep.hasUpdate ? '#F59E0B' : 'var(--text-tertiary)' }}>
+                      <span className="text-[10px]" style={{ color: dep.hasUpdate ? 'var(--status-warning)' : 'var(--text-tertiary)' }}>
                         ({dep.latestReleaseTime})
                       </span>
                     )}
@@ -618,7 +623,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                 )}
                 {/* 不可用（如 ACP 适配器在、宿主 CLI 缺失）时不给「更新/已是最新」结论：
                     版本再新也起不来，只提供「重装」这条修复路径 */}
-                {dep.hasUpdate && dep.installed && dep.available !== false && dep.installable !== false && (
+                {dep.hasUpdate && dep.installed && dep.available !== false && !dep.broken && dep.installable !== false && (
                   <>
                     <SettingsButton
                       onClick={() => requestEnvAction(dep.key, 'update')}
@@ -647,9 +652,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     手工配置
                   </span>
                 )}
-                {dep.installed && !dep.hasUpdate && dep.latestVersion && dep.available !== false && (
+                {dep.installed && !dep.hasUpdate && dep.latestVersion && dep.available !== false && !dep.broken && (
                   <>
-                    <span className="text-[10px]" style={{ color: '#10B981' }}>
+                    <span className="text-[10px]" style={{ color: 'var(--status-success)' }}>
                       已是最新
                     </span>
                     <SettingsButton
@@ -663,7 +668,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     </SettingsButton>
                   </>
                 )}
-                {dep.installed && !dep.updateChecking && (dep.available === false || (!dep.hasUpdate && !dep.latestVersion)) && (
+                {dep.installed && !dep.updateChecking && (dep.available === false || !!dep.broken || (!dep.hasUpdate && !dep.latestVersion)) && (
                   <>
                     <SettingsButton
                       onClick={() => requestEnvAction(dep.key, 'reinstall')}
