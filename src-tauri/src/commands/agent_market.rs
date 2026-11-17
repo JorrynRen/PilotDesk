@@ -1501,7 +1501,6 @@ pub async fn agent_market_update(
             "该条目没有市场版本信息，无需更新".to_string(),
         ));
     }
-    let is_registry = entry.registry_version.is_some();
     entry.lifecycle.supported().map_err(AppError::Config)?;
 
     let now_ts = crate::utils::now();
@@ -1538,12 +1537,8 @@ pub async fn agent_market_update(
                 icon: None,
                 sort_order: None,
                 is_enabled: None,
-                // 预置条目没有市场版本号，别用它覆盖用户本地记录的版本
-                version: if is_registry {
-                    Some(entry.version.clone())
-                } else {
-                    None
-                },
+                // 配置版本号（非 Agent 版本号）随清单一起刷新
+                version: Some(entry.version.clone()),
             },
         )?;
     }
@@ -1627,10 +1622,12 @@ pub async fn agent_market_apply_config(
                     source,
                     registry_id,
                     registry_version,
-                    preset_version: Some(version),
+                    preset_version: Some(version.clone()),
                     icon_url,
                     installed_at,
                 }),
+                // 配置版本号（非 Agent 版本号）随清单一起刷新
+                version: Some(version),
                 ..Default::default()
             },
         )?;
