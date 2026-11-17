@@ -51,6 +51,10 @@ interface MarketAgent {
   installed: boolean;
   installedVersion?: string | null;
   pkgStatus?: string | null;
+  /** 用于版本比较的目录版本：ACP 官方 registryVersion，或运行时探测到的最新版本 */
+  catalogVersion?: string | null;
+  /** 目录版本来源：registry / probe / none（版本未知） */
+  versionSource?: 'registry' | 'probe' | 'none' | string;
   /** 目录版本明确高于本机版本（方向感知，不会因"不相等"误报） */
   updateAvailable: boolean;
   /** 版本无法比较（非标准版本号 / 缺本机版本）：给「强制更新」入口 */
@@ -67,9 +71,11 @@ const CATEGORY_TABS: { key: MarketCategory; label: string; hint: string }[] = [
 /** 包状态文案：市场草稿的安装进度对用户可见。 */
 function statusLabel(a: MarketAgent): { text: string; tone: 'ok' | 'warn' | 'error' } | null {
   if (!a.installed) return null;
-  if (a.pkgStatus === 'ready') return { text: '已就绪', tone: 'ok' };
   if (a.pkgStatus === 'failed') return { text: '安装失败', tone: 'error' };
   if (a.pkgStatus === 'pending_install') return { text: '待安装', tone: 'warn' };
+  // 没有 registryVersion、也没有可用的最新版本查询：不谎报「已是最新」。
+  if (a.versionSource === 'none') return { text: '已安装 · 版本未知', tone: 'warn' };
+  if (a.pkgStatus === 'ready') return { text: '已就绪', tone: 'ok' };
   return { text: '已配置', tone: 'ok' };
 }
 
@@ -195,6 +201,20 @@ export function AgentConfigMarket() {
     void refreshEnv();
   };
 
+  /** 「重装」：版本未知时的唯一操作入口，按当前清单重新执行安装命令（不以「更新」名义执行）。 */
+  const handleReinstall = async (agent: MarketAgent) => {
+    setBusyType(agent.agentType);
+    try {
+      await invoke('agent_market_install', { agentType: agent.agentType });
+      showToast(`${agent.displayName} 已重新安装`, 'success');
+    } catch (err) {
+      showToast(`重装失败: ${errorMessage(err)}`, 'error');
+    }
+    setBusyType(null);
+    await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
+    void refreshEnv();
+  };
+
   const renderAction = (agent: MarketAgent) => {
     if (!agent.supported) {
       return (
@@ -238,7 +258,7 @@ export function AgentConfigMarket() {
           icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={busy}
           onClick={() => handleUpdate(agent)}
-          title={`更新到 v${agent.version}`}
+          title={`更新到 v${agent.catalogVersion || agent.version}`}
         >
           {busy ? '更新中' : '更新'}
         </SettingsButton>
@@ -254,7 +274,7 @@ export function AgentConfigMarket() {
           disabled={busy}
           onClick={() => handleUpdate(agent)}
           title={
-            `无法比较版本（市场 v${agent.version}，本机 ${agent.installedVersion ? `v${agent.installedVersion}` : '未知'}）；` +
+            `无法比较版本（市场 v${agent.catalogVersion || agent.version}，本机 ${agent.installedVersion ? `v${agent.installedVersion}` : '未知'}）；` +
             '点击按市场规格强制重装（Agent 配置保留）'
           }
         >
@@ -273,6 +293,20 @@ export function AgentConfigMarket() {
           title={`同步市场配置清单到本地（配置版本 ${agent.version}），不重装、不升级本机 Agent`}
         >
           {busy ? '同步中' : '更新配置'}
+        </SettingsButton>
+      );
+    }
+    // 版本未知（无 registryVersion、也没有可用的最新版本探测）：不判断更新，只提供重装
+    if (agent.versionSource === 'none') {
+      return (
+        <SettingsButton
+          variant="secondary"
+          icon={busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          disabled={busy}
+          onClick={() => handleReinstall(agent)}
+          title="无法获知最新版本；按当前市场清单重新安装（覆盖本机安装）"
+        >
+          {busy ? '重装中' : '重装'}
         </SettingsButton>
       );
     }
@@ -399,9 +433,11 @@ export function AgentConfigMarket() {
                         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                           {agent.displayName}
                         </span>
-                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                          v{agent.version || '—'}
-                        </span>
+                        {agent.catalogVersion && (
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                            v{agent.catalogVersion}
+                          </span>
+                        )}
                         {/* 来源徽标：ACP 官方用强调色，预置用中性色，避免与状态标记混在一起 */}
                         <span
                           className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
@@ -439,8 +475,8 @@ export function AgentConfigMarket() {
                             style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
                             title={
                               agent.installedVersion
-                                ? `当前 v${agent.installedVersion}，市场 v${agent.version}`
-                                : `市场 v${agent.version}`
+                                ? `当前 v${agent.installedVersion}，市场 v${agent.catalogVersion || agent.version}`
+                                : `市场 v${agent.catalogVersion || agent.version}`
                             }
                           >
                             可更新

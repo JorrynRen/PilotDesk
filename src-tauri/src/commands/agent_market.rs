@@ -69,12 +69,17 @@ pub struct MarketAgent {
     pub installed: bool,
     pub installed_version: Option<String>,
     pub pkg_status: Option<String>,
+    /// 用于版本比较的目录版本：ACP 官方目录的 `registryVersion`，或运行时探测到的最新版本
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_version: Option<String>,
+    /// 目录版本来源：`registry`（registryVersion）/ `probe`（latestVersionCmd）/ `none`（版本未知）
+    pub version_source: String,
     /// 目录版本**明确高于**本机安装版本（方向感知；版本无法比较时一律为 false）
     pub update_available: bool,
     /// 版本无法比较（非标准版本号 / 缺本机版本）但确有目录条目：给「强制更新」入口，
     /// 由用户自行决定是否按目录规格重装（避免因无法判定而彻底失去更新手段）。
     pub force_update_available: bool,
-    /// 预置配置清单有新版（本地记录的 `presetVersion` 落后）：只更新本地配置，
+    /// 预置配置清单有新版（本地 `agents.version` 与条目 version 不一致）：只更新本地配置，
     /// 与「宿主更新」「适配器更新」是两回事，不触发安装。
     pub config_update_available: bool,
 }
@@ -332,7 +337,7 @@ impl MarketEntry {
         }
     }
 
-    fn to_market_agent(&self, installed: &InstalledInfo) -> MarketAgent {
+    fn to_market_agent(&self, installed: &InstalledInfo, probed_latest: Option<&str>) -> MarketAgent {
         // 没有包名、没有安装命令、也没有平台制品 = 老版预置/只能手工配置，不能给「获取」入口
         let has_install_spec = !self.lifecycle.packages.is_empty()
             || self.lifecycle.install_cmd.is_some()
@@ -355,32 +360,38 @@ impl MarketEntry {
                 args: p.args.clone(),
             })
             .collect();
-        // 只有来自 ACP 官方目录的条目才有「市场版本」可比：预置的 `version` 是配置版本号，
-        // 拿它和 npm 里的实际包版本比较会产生假的「可更新」。
-        let has_catalog_version =
-            self.registry_version.is_some() && !self.version.trim().is_empty();
+        // 版本源优先级：ACP 官方 `registryVersion` > 运行时探测（`latestVersionCmd`）> 未知。
+        // 未知不等于「已是最新」，也不强行给更新入口；市场侧只保留「重装」。
+        let registry_catalog = self
+            .registry_version
+            .as_deref()
+            .filter(|v| !v.trim().is_empty());
+        let catalog_version = registry_catalog.or(probed_latest.filter(|v| !v.trim().is_empty()));
+        let version_source = if registry_catalog.is_some() {
+            "registry"
+        } else if catalog_version.is_some() {
+            "probe"
+        } else {
+            "none"
+        };
         // 方向感知：只有目录版本严格高于本机版本才算可更新。
         // 用 `!=` 会在目录快照落后于包管理器最新版时永久误报，点更新还会把本机降级。
-        let newer = if installed.exists && has_catalog_version {
-            installed
-                .installed_version
-                .as_deref()
-                .and_then(|v| crate::agent::lifecycle::is_newer_version(&self.version, v))
-        } else {
-            None
+        let newer = match (installed.exists, catalog_version, installed.installed_version.as_deref()) {
+            (true, Some(cv), Some(iv)) => crate::agent::lifecycle::is_newer_version(cv, iv),
+            _ => None,
         };
         let update_available = newer == Some(true);
         // 无法比较（版本号非标准 / 本机没有版本记录）且两边版本不一致 → 给「强制更新」，
         // 让用户仍能按目录规格重装（否则这类条目永远没有更新入口）。
         let force_update_available = installed.exists
-            && has_catalog_version
+            && catalog_version.is_some()
             && newer.is_none()
-            && installed.installed_version.as_deref() != Some(self.version.as_str());
+            && installed.installed_version.as_deref() != catalog_version;
         // 配置清单更新：只比对**该条目自身**的配置版本，与清单顶层 version 无关。
-        // 历史配置没有 presetVersion，按本地实际配置内容比对，避免一升级清单就全体误报。
+        // 历史配置没有版本记录时按本地实际配置内容比对，避免一升级清单就全体误报。
         let config_update_available = self.source == SOURCE_PRESET
             && installed.exists
-            && match installed.preset_version.as_deref() {
+            && match installed.config_version.as_deref() {
                 Some(local) => local != self.version,
                 None => installed
                     .lifecycle
@@ -411,6 +422,8 @@ impl MarketEntry {
             installed: installed.exists,
             installed_version: installed.installed_version.clone(),
             pkg_status: installed.pkg_status.clone(),
+            catalog_version: catalog_version.map(|v| v.to_string()),
+            version_source: version_source.to_string(),
             update_available,
             force_update_available,
             config_update_available,
@@ -447,15 +460,15 @@ struct InstalledInfo {
     exists: bool,
     installed_version: Option<String>,
     pkg_status: Option<String>,
-    /// 本地记录的预置配置版本（`dist_source.presetVersion`）
-    preset_version: Option<String>,
-    /// 本地配置清单（用于没有 `presetVersion` 的历史配置按内容比对）
+    /// 本地配置版本号（`agents.version`，与 `presetVersion` 是同一个概念）
+    config_version: Option<String>,
+    /// 本地配置清单（用于没有版本记录的历史配置按内容比对）
     lifecycle: Option<LifecycleSpec>,
 }
 
 fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, InstalledInfo>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT agent_type, pkg_state_json, version, dist_source_json, lifecycle_json FROM agents WHERE transport <> 'http'",
+        "SELECT agent_type, pkg_state_json, version, lifecycle_json FROM agents WHERE transport <> 'http'",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
@@ -463,32 +476,29 @@ fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, Install
             r.get::<_, Option<String>>(1)?,
             r.get::<_, String>(2)?,
             r.get::<_, Option<String>>(3)?,
-            r.get::<_, Option<String>>(4)?,
         ))
     })?;
     let mut out = BTreeMap::new();
     for row in rows {
-        let (agent_type, pkg_text, version, dist_text, lifecycle_text) = row?;
+        let (agent_type, pkg_text, version, lifecycle_text) = row?;
         let state = pkg_text
             .as_deref()
             .and_then(|s| serde_json::from_str::<PkgState>(s).ok());
-        let dist_source = dist_text
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<DistSource>(s).ok());
         let lifecycle = lifecycle_text
             .as_deref()
             .and_then(|s| serde_json::from_str::<LifecycleSpec>(s).ok());
+        let config_version = Some(version.clone()).filter(|v| !v.trim().is_empty());
         let installed_version = state
             .as_ref()
             .and_then(|s| s.installed_version.clone())
-            .or_else(|| Some(version).filter(|v| !v.trim().is_empty()));
+            .or_else(|| config_version.clone());
         out.insert(
             agent_type,
             InstalledInfo {
                 exists: true,
                 installed_version,
                 pkg_status: state.map(|s| s.status),
-                preset_version: dist_source.and_then(|d| d.preset_version),
+                config_version,
                 lifecycle,
             },
         );
@@ -583,16 +593,20 @@ pub async fn agent_market_list(
             }
         }
     }
+    let probed_latest = crate::commands::env::cached_agent_latest_versions();
     Ok(entries
         .iter()
         .map(|e| {
-            e.to_market_agent(installed.get(&e.agent_type).unwrap_or(&InstalledInfo {
-                exists: false,
-                installed_version: None,
-                pkg_status: None,
-                preset_version: None,
-                lifecycle: None,
-            }))
+            e.to_market_agent(
+                installed.get(&e.agent_type).unwrap_or(&InstalledInfo {
+                    exists: false,
+                    installed_version: None,
+                    pkg_status: None,
+                    config_version: None,
+                    lifecycle: None,
+                }),
+                probed_latest.get(&e.agent_type).map(|v| v.as_str()),
+            )
         })
         .collect())
 }
@@ -652,7 +666,6 @@ pub async fn agent_market_acquire(
             source: entry.source.clone(),
             registry_id: entry.registry_id.clone(),
             registry_version: entry.registry_version.clone(),
-            preset_version: (entry.source == SOURCE_PRESET).then(|| entry.version.clone()),
             icon_url: entry.icon_url.clone(),
             installed_at: now_ts,
         }),
@@ -1395,7 +1408,6 @@ pub(crate) async fn adopt_preset_spec(
                     source: entry.source.clone(),
                     registry_id: None,
                     registry_version: None,
-                    preset_version: Some(entry.version.clone()),
                     icon_url: entry.icon_url.clone(),
                     installed_at: now_ts,
                 }),
@@ -1518,7 +1530,6 @@ pub async fn agent_market_update(
                     source: entry.source.clone(),
                     registry_id: entry.registry_id.clone(),
                     registry_version: entry.registry_version.clone(),
-                    preset_version: (entry.source == SOURCE_PRESET).then(|| entry.version.clone()),
                     icon_url: entry.icon_url.clone(),
                     installed_at: now_ts,
                 }),
@@ -1622,7 +1633,6 @@ pub async fn agent_market_apply_config(
                     source,
                     registry_id,
                     registry_version,
-                    preset_version: Some(version.clone()),
                     icon_url,
                     installed_at,
                 }),
