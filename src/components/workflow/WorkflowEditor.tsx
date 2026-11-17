@@ -3269,6 +3269,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             width: 160,
             minWidth: 110,
             maxWidth: 160,
+            height: 28,
             flex: '0 1 160px',
             backgroundColor: 'var(--bg-tertiary)',
             color: 'var(--text-primary)',
@@ -3346,6 +3347,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
             className="pd-btn px-2.5 py-1 text-[11px] rounded flex items-center justify-center gap-1.5 whitespace-nowrap"
             style={{
               width: 124,
+              height: 28,
               border: '1px solid var(--border)',
               background: 'var(--bg-tertiary)',
               color: 'var(--text-secondary)',
@@ -3424,7 +3426,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
         <button
             onClick={handleAddStage}
             className="pd-btn px-2 py-1 text-[11px] rounded"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}
+            style={{ height: 28, border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}
           >
             + 阶段
           </button>
@@ -3451,7 +3453,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           <button
             onClick={handleImportWorkflow}
             className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            style={{ width: 28, height: 28, border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             title="从文件导入工作流"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -3461,7 +3463,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           <button
             onClick={handleExportWorkflow}
             className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            style={{ width: 28, height: 28, border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             title="导出工作流为 JSON 文件"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -3471,7 +3473,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           <button
             onClick={handleSaveClean}
             className="pd-btn px-2.5 py-1 text-[11px] rounded"
-            style={{ background: 'var(--accent)', color: 'var(--text-on-accent)', border: 'none', flexShrink: 0, whiteSpace: 'nowrap' }}
+            style={{ height: 28, background: 'var(--accent)', color: 'var(--text-on-accent)', border: 'none', flexShrink: 0, whiteSpace: 'nowrap' }}
           >
             保存
           </button>
@@ -3483,7 +3485,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
                 setBackupDropdownOpen(prev => !prev);
               }}
               className="pd-btn px-2 py-1 text-[11px] rounded flex items-center gap-1"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)', flexShrink: 0, whiteSpace: 'nowrap' }}
+              style={{ height: 28, background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)', flexShrink: 0, whiteSpace: 'nowrap' }}
             >
               备份
               <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 3L4 5 6 3"/></svg>
