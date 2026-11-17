@@ -22,7 +22,7 @@ import { confirmDialog } from '../../stores/confirmStore';
 import { PluginIcon as SharedPluginIcon } from './PluginIcon';
 import type { PermissionCheck, PluginInstance } from '../../types/plugin';
 import { errorMessage } from '../../utils/errorMessage';
-import { SettingsButton, SettingsSection } from '../settings';
+import { SettingsButton, SettingsSection, SettingsToggle } from '../settings';
 
 /** 单个插件面板入口（来自 RightPanel 按插件分组的 registeredPanels） */
 export interface PluginPanelEntry {
@@ -407,19 +407,24 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
                         title="卸载插件"
                         style={{ color: 'var(--danger)' }}
                       />
-                      <SettingsButton
-                        onClick={() => void (plugin.enabled ? disable(plugin.manifest.id) : enable(plugin.manifest.id))}
-                        variant={plugin.enabled ? 'secondary' : 'success'}
+                      {!plugin.enabled && plugin.has_unauthorized_permissions && (
+                        <span className="text-[9px]" style={{ color: 'var(--danger)' }}>
+                          权限异常
+                        </span>
+                      )}
+                      <SettingsToggle
+                        checked={plugin.enabled}
+                        onChange={() => void (plugin.enabled ? disable(plugin.manifest.id) : enable(plugin.manifest.id))}
                         disabled={!plugin.enabled && plugin.has_unauthorized_permissions}
-                        title={plugin.enabled ? '点击禁用插件' : '点击启用插件'}
-                        style={plugin.enabled ? { color: 'var(--success)' } : undefined}
-                      >
-                        {plugin.enabled
-                          ? '已启用'
-                          : plugin.has_unauthorized_permissions
-                            ? '权限异常'
-                            : '已禁用'}
-                      </SettingsButton>
+                        title={
+                          !plugin.enabled && plugin.has_unauthorized_permissions
+                            ? '存在未授权权限，无法启用'
+                            : plugin.enabled
+                              ? '点击禁用插件'
+                              : '点击启用插件'
+                        }
+                        aria-label={plugin.enabled ? '插件已启用，点击禁用' : '插件已禁用，点击启用'}
+                      />
                     </div>
                   </div>
 
