@@ -30,7 +30,11 @@ use std::fs;
 ///
 /// v15：新增 `tool_manifests`——工具模型清单（视频/图片）的本地编辑层。
 /// 市场缓存仍是文件派生数据；只有用户改过的整份清单落库，与其基线版本一起保存。
-pub const SCHEMA_VERSION: i64 = 15;
+///
+/// v16：`tool_manifests` 由「本地编辑层」升为清单唯一生效源：新增
+/// `version` / `schema_version` / `source` / `market_version`，删除基线版本两列。
+/// 市场与出厂基线只负责写入；v15 存量行解析 payload 回填并标 `source='local'`。
+pub const SCHEMA_VERSION: i64 = 16;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -101,14 +105,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT '',
             updated_at INTEGER NOT NULL);
--- v15：工具模型清单（视频 / 图片）的本地编辑层。
--- 市场缓存是文件派生数据，可删可重建；这里只存用户改过的整份清单，
--- 并记录编辑时所基于的基线版本，便于提示「市场已有新版本」。
+-- v16：工具模型清单（视频 / 图片）的唯一生效源。
+-- 市场与出厂基线只负责写入这张表；工具与设置页只读这里（经进程内投影）。
+-- market_version 是最近一次发现的市场版本，仅用于提示「市场已有 vM」。
 CREATE TABLE IF NOT EXISTS tool_manifests (
             kind TEXT PRIMARY KEY,
-            base_version INTEGER NOT NULL DEFAULT 0,
-            base_source TEXT NOT NULL DEFAULT 'builtin',
+            version INTEGER NOT NULL DEFAULT 0,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            source TEXT NOT NULL DEFAULT 'builtin',
             payload TEXT NOT NULL,
+            market_version INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
@@ -570,8 +576,71 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
         ensure_column(conn, "agents", "lifecycle_json", "TEXT")?;
         ensure_column(conn, "agents", "pkg_state_json", "TEXT")?;
         ensure_column(conn, "agents", "dist_source_json", "TEXT")?;
+        // v15 → v16：清单表从「本地编辑层」升为唯一生效源（列结构变化，整表重建）。
+        migrate_tool_manifests(conn)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
+    Ok(())
+}
+
+/// v15 → v16：`tool_manifests` 从「本地编辑层」改为清单唯一生效源。
+///
+/// 旧表的 `base_version` / `base_source` 要换成 `version` / `schema_version` /
+/// `source` / `market_version`，SQLite 改列只能重建表。行数极少（每类清单一行），
+/// 整表重建最简单，也不会留下「一半旧列一半新列」的中间态。
+/// 旧行都是用户编辑过的整份清单，迁移后一律标 `source='local'`，不丢已有修改。
+fn migrate_tool_manifests(conn: &Connection) -> Result<(), AppError> {
+    let has_legacy = conn
+        .prepare("PRAGMA table_info(tool_manifests)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "base_version");
+    if !has_legacy {
+        return Ok(());
+    }
+
+    let rows: Vec<(String, String, i64)> = {
+        let mut stmt = conn.prepare("SELECT kind, payload, updated_at FROM tool_manifests")?;
+        let iter = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        iter.collect::<Result<Vec<_>, _>>()?
+    };
+
+    conn.execute_batch(
+        "ALTER TABLE tool_manifests RENAME TO tool_manifests_v15;
+         CREATE TABLE tool_manifests (
+            kind TEXT PRIMARY KEY,
+            version INTEGER NOT NULL DEFAULT 0,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            source TEXT NOT NULL DEFAULT 'builtin',
+            payload TEXT NOT NULL,
+            market_version INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL);",
+    )?;
+
+    for (kind, payload, updated_at) in rows {
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+        let version = parsed
+            .get("version")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as i64;
+        let schema_version = parsed
+            .get("schemaVersion")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1) as i64;
+        conn.execute(
+            "INSERT INTO tool_manifests
+                (kind, version, schema_version, source, payload, market_version, updated_at)
+             VALUES (?1, ?2, ?3, 'local', ?4, 0, ?5)",
+            rusqlite::params![kind, version, schema_version, payload, updated_at],
+        )?;
+    }
+    conn.execute_batch("DROP TABLE tool_manifests_v15;")?;
     Ok(())
 }
 

@@ -2,12 +2,13 @@
 //!
 //! 清单是「工具参数槽位 → 厂商请求字段」的唯一事实来源：端点、任务判定、
 //! 映射、限制与结果取值全部以数据形式描述，本模块只做校验与解释，
-//! 不含任何厂商字段名。生效清单按「本地编辑 → 市场缓存 → 内置基线」三层解析：
-//! 市场缓存是可删可重建的文件派生数据，本地编辑整份存于 `tool_manifests`。
+//! 不含任何厂商字段名。
+//!
+//! 生效清单只有一个来源：SQLite `tool_manifests`。市场与出厂基线只负责写入，
+//! 启动时投影到进程内 `Arc<VideoManifest>`，任何一次写库成功后立即替换。
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use crate::db::init::DbPool;
 use super::image_common::{normalize_http_url, MAX_IMAGE_BYTES};
 
 /// 客户端支持的清单格式版本
@@ -417,21 +419,17 @@ impl VideoManifest {
     }
 }
 
-// ── 生效清单：本地编辑 → 市场缓存 → 内置基线 ──
+// ── 生效清单：数据库唯一生效源 ──
 
 /// `tool_manifests.kind`：视频清单
 pub const KIND_VIDEO: &str = "video";
 
-/// 市场缓存有效期：24h（过期后后台刷新，界面/工具始终先用现有清单）
-const CACHE_TTL_SECS: i64 = 24 * 60 * 60;
-
-/// 清单来源（回显与设置页共用）
+/// 清单来源（库行最近一次写入来源，回显与设置页共用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ManifestSource {
     Builtin,
-    Cache,
-    Remote,
+    Market,
     Local,
 }
 
@@ -439,9 +437,16 @@ impl ManifestSource {
     pub fn as_str(&self) -> &'static str {
         match self {
             ManifestSource::Builtin => "builtin",
-            ManifestSource::Cache => "cache",
-            ManifestSource::Remote => "remote",
+            ManifestSource::Market => "market",
             ManifestSource::Local => "local",
+        }
+    }
+
+    fn from_db(value: &str) -> Self {
+        match value {
+            "market" => ManifestSource::Market,
+            "local" => ManifestSource::Local,
+            _ => ManifestSource::Builtin,
         }
     }
 }
@@ -451,7 +456,12 @@ impl ManifestSource {
 pub struct Effective {
     pub manifest: Arc<VideoManifest>,
     pub source: ManifestSource,
-    pub fetched_at: Option<i64>,
+    /// 库行原文（编辑器初始内容）
+    pub raw: String,
+    /// 最近一次发现的市场版本（仅提示用）
+    pub market_version: u64,
+    /// 库行更新时间
+    pub updated_at: i64,
 }
 
 /// 设置页用的规则摘要（不暴露内部转换参数）
@@ -483,20 +493,16 @@ pub struct LimitsSummary {
 pub struct ManifestInfo {
     pub version: u64,
     pub schema_version: u64,
+    /// 清单自身的数据日期（人工阅读）
     pub updated_at: Option<String>,
     pub rule_count: usize,
     pub source: ManifestSource,
-    pub fetched_at: Option<i64>,
-    pub cache_path: String,
-    pub is_builtin: bool,
-    /// 是否存在本地编辑
-    pub edited: bool,
-    /// 本地编辑所基于的基线版本
-    pub base_version: Option<u64>,
-    pub base_source: Option<String>,
-    pub local_updated_at: Option<i64>,
-    /// 市场缓存中的版本（用于提示「已有新版本」）
-    pub latest_version: Option<u64>,
+    /// 最近一次发现的市场版本
+    pub market_version: u64,
+    /// 市场版本高于当前生效版本
+    pub has_market_update: bool,
+    /// 库行更新时间
+    pub db_updated_at: i64,
     pub rules: Vec<RuleSummary>,
 }
 
@@ -506,138 +512,107 @@ pub struct ManifestInfo {
 pub struct ManifestSourceText {
     pub text: String,
     pub source: ManifestSource,
-    pub base_version: Option<u64>,
-    pub updated_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CacheFile {
-    fetched_at: i64,
-    /// 实际命中的市场源基地址，仅排查用
-    source: String,
-    /// 清单原文（保留排版，供编辑器直接使用）
-    data: String,
-}
-
-/// 内存中的本地编辑（启动时从库加载，保存后同步更新）
-#[derive(Clone)]
-struct LocalEdit {
-    raw: String,
-    base_version: u64,
-    base_source: String,
-    updated_at: i64,
+    pub version: u64,
+    pub updated_at: i64,
 }
 
 static CURRENT: RwLock<Option<Effective>> = RwLock::new(None);
-static LOCAL: RwLock<Option<LocalEdit>> = RwLock::new(None);
-/// 本进程是否已成功从远端拉取过（用于区分 `cache` 与 `remote`）
-static REFRESHED_AT: RwLock<Option<i64>> = RwLock::new(None);
 
-/// 市场缓存路径：`{app_root}/cache/tool-models/video-models.json`
-pub fn cache_path() -> PathBuf {
-    crate::utils::paths::app_root_dir()
-        .join("cache")
-        .join("tool-models")
-        .join("video-models.json")
-}
-
-fn read_cache() -> Option<CacheFile> {
-    let text = std::fs::read_to_string(cache_path()).ok()?;
-    let cache: CacheFile = serde_json::from_str(&text).ok()?;
-    // 解析或校验失败一律当作没有缓存，回落内置基线
-    if let Err(e) = VideoManifest::parse(&cache.data) {
-        log::warn!("[VideoManifest] 缓存清单无效，已忽略: {}", e);
-        return None;
-    }
-    Some(cache)
-}
-
-fn write_cache(source: &str, raw: &str) -> Result<(), String> {
-    let path = cache_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建缓存目录失败: {}", e))?;
-    }
-    let payload = CacheFile {
-        fetched_at: crate::utils::now(),
-        source: source.to_string(),
-        data: raw.to_string(),
-    };
-    let text = serde_json::to_string(&payload).map_err(|e| format!("序列化缓存失败: {}", e))?;
-    std::fs::write(&path, text).map_err(|e| format!("写入缓存失败: {}", e))
-}
-
-/// 缓存来源：本进程成功刷新过则标 `remote`，否则是从磁盘读出的 `cache`。
-fn cache_source() -> ManifestSource {
-    if REFRESHED_AT.read().map(|v| v.is_some()).unwrap_or(false) {
-        ManifestSource::Remote
-    } else {
-        ManifestSource::Cache
+fn set_current(effective: Effective) {
+    if let Ok(mut current) = CURRENT.write() {
+        *current = Some(effective);
     }
 }
 
-/// 按「本地编辑 → 市场缓存 → 内置基线」重建生效清单。
-///
-/// 本地编辑与缓存都必须整份校验通过才生效；任一层失败只记日志并落到下一层。
-fn rebuild() -> Result<Effective, String> {
-    let local = LOCAL.read().ok().and_then(|v| v.clone());
-    let cache = read_cache();
-    let fetched_at = cache.as_ref().map(|c| c.fetched_at);
-
-    if let Some(edit) = &local {
-        match VideoManifest::parse(&edit.raw) {
-            Ok(manifest) => {
-                let effective = Effective {
-                    manifest: Arc::new(manifest),
-                    source: ManifestSource::Local,
-                    fetched_at,
-                };
-                set_current(&effective);
-                return Ok(effective);
-            }
-            Err(e) => log::warn!("[VideoManifest] 本地编辑无效，回落基线: {}", e),
+/// 只更新内存中的市场版本（库行已同步写过）。
+fn update_market_version(market_version: u64) {
+    if let Ok(mut current) = CURRENT.write() {
+        if let Some(effective) = current.as_mut() {
+            effective.market_version = market_version;
         }
     }
+}
 
-    if let Some(cache) = &cache {
-        match VideoManifest::parse(&cache.data) {
-            Ok(manifest) => {
-                let effective = Effective {
-                    manifest: Arc::new(manifest),
-                    source: cache_source(),
-                    fetched_at,
-                };
-                set_current(&effective);
-                return Ok(effective);
-            }
-            Err(e) => log::warn!("[VideoManifest] 缓存清单无效，回落内置: {}", e),
-        }
-    }
-
-    let manifest = VideoManifest::builtin().map_err(|e| format!("内置清单不可用: {}", e))?;
-    let effective = Effective {
+/// 用出厂基线覆盖库行（首次播种 / 库行损坏 / 恢复出厂共用）。
+fn write_builtin(conn: &rusqlite::Connection, market_version: u64) -> Result<Effective, String> {
+    let manifest = VideoManifest::builtin()?;
+    crate::db::tool_manifests::upsert(
+        conn,
+        KIND_VIDEO,
+        manifest.version,
+        manifest.schema_version,
+        "builtin",
+        BUILTIN_MANIFEST,
+        market_version,
+    )
+    .map_err(|e| format!("写入内置清单失败: {}", e))?;
+    Ok(Effective {
         manifest: Arc::new(manifest),
         source: ManifestSource::Builtin,
-        fetched_at: None,
+        raw: BUILTIN_MANIFEST.to_string(),
+        market_version,
+        updated_at: crate::utils::now(),
+    })
+}
+
+/// 启动同步播种：库行缺失或校验失败时用出厂基线写入，随后投影到内存。
+///
+/// 不联网。库行 `source != 'local'` 且内置版本更高时用内置覆盖，
+/// 让随包修正能到达长期离线用户；本地修改存在时不动。
+pub fn ensure_seeded(conn: &rusqlite::Connection) -> Result<(), String> {
+    let builtin = VideoManifest::builtin()?;
+    let row = crate::db::tool_manifests::load(conn, KIND_VIDEO)
+        .map_err(|e| format!("读取清单失败: {}", e))?;
+
+    let effective = match row {
+        Some(row) => match VideoManifest::parse(&row.payload) {
+            Ok(manifest) => {
+                let source = ManifestSource::from_db(&row.source);
+                if source != ManifestSource::Local && builtin.version > manifest.version {
+                    log::info!(
+                        "[VideoManifest] 内置版本 v{} 高于库内 v{}，用内置覆盖",
+                        builtin.version,
+                        manifest.version
+                    );
+                    write_builtin(conn, row.market_version)?
+                } else {
+                    Effective {
+                        manifest: Arc::new(manifest),
+                        source,
+                        raw: row.payload,
+                        market_version: row.market_version,
+                        updated_at: row.updated_at,
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[VideoManifest] 库内清单校验失败，已用出厂基线覆盖: {}", e);
+                write_builtin(conn, row.market_version)?
+            }
+        },
+        None => write_builtin(conn, 0)?,
     };
-    set_current(&effective);
-    Ok(effective)
+
+    set_current(effective);
+    Ok(())
 }
 
-fn set_current(effective: &Effective) {
-    if let Ok(mut current) = CURRENT.write() {
-        *current = Some(effective.clone());
-    }
-}
-
-/// 当前生效清单（首次访问时按层加载，刷新或保存编辑后立即换新）
+/// 当前生效清单（启动时投影；任何一次写库成功后立即替换）
 pub fn snapshot() -> Result<Effective, String> {
     if let Ok(current) = CURRENT.read() {
         if let Some(effective) = current.as_ref() {
             return Ok(effective.clone());
         }
     }
-    rebuild()
+    // 尚未播种（正常启动流程不会走到）：退到出厂基线，不写库。
+    let manifest = VideoManifest::builtin()?;
+    Ok(Effective {
+        manifest: Arc::new(manifest),
+        source: ManifestSource::Builtin,
+        raw: BUILTIN_MANIFEST.to_string(),
+        market_version: 0,
+        updated_at: 0,
+    })
 }
 
 fn summarize(manifest: &VideoManifest) -> Vec<RuleSummary> {
@@ -672,149 +647,69 @@ fn summarize(manifest: &VideoManifest) -> Vec<RuleSummary> {
 /// 设置页展示的完整状态
 pub fn info() -> Result<ManifestInfo, String> {
     let effective = snapshot()?;
-    let local = LOCAL.read().ok().and_then(|v| v.clone());
-    let cache = read_cache();
-    let latest_version = cache
-        .as_ref()
-        .and_then(|c| VideoManifest::parse(&c.data).ok())
-        .map(|m| m.version);
-
     Ok(ManifestInfo {
         version: effective.manifest.version,
         schema_version: effective.manifest.schema_version,
         updated_at: effective.manifest.updated_at.clone(),
         rule_count: effective.manifest.rules.len(),
         source: effective.source,
-        fetched_at: effective.fetched_at,
-        cache_path: cache_path().to_string_lossy().to_string(),
-        is_builtin: effective.source == ManifestSource::Builtin,
-        edited: local.is_some(),
-        base_version: local.as_ref().map(|l| l.base_version),
-        base_source: local.as_ref().map(|l| l.base_source.clone()),
-        local_updated_at: local.as_ref().map(|l| l.updated_at),
-        latest_version,
+        market_version: effective.market_version,
+        has_market_update: effective.market_version > effective.manifest.version,
+        db_updated_at: effective.updated_at,
         rules: summarize(&effective.manifest),
     })
 }
 
-/// 编辑器初始内容：本地编辑优先，否则当前基线原文。
+/// 编辑器初始内容：库行当前生效原文
 pub fn source_text() -> Result<ManifestSourceText, String> {
     let effective = snapshot()?;
-    if let Some(local) = LOCAL.read().ok().and_then(|v| v.clone()) {
-        return Ok(ManifestSourceText {
-            text: local.raw,
-            source: ManifestSource::Local,
-            base_version: Some(local.base_version),
-            updated_at: Some(local.updated_at),
-        });
-    }
-    if let Some(cache) = read_cache() {
-        return Ok(ManifestSourceText {
-            text: cache.data,
-            source: effective.source,
-            base_version: None,
-            updated_at: Some(cache.fetched_at),
-        });
-    }
     Ok(ManifestSourceText {
-        text: BUILTIN_MANIFEST.to_string(),
-        source: ManifestSource::Builtin,
-        base_version: None,
-        updated_at: None,
+        text: effective.raw,
+        source: effective.source,
+        version: effective.manifest.version,
+        updated_at: effective.updated_at,
     })
-}
-
-/// 启动时把本地编辑读进内存（读库失败只记日志，不影响工具使用基线）
-pub fn init_local(conn: &rusqlite::Connection) {
-    match crate::db::tool_manifests::load(conn, KIND_VIDEO) {
-        Ok(Some(row)) => {
-            if let Err(e) = VideoManifest::parse(&row.payload) {
-                log::warn!("[VideoManifest] 本地编辑校验失败，已忽略: {}", e);
-                return;
-            }
-            if let Ok(mut local) = LOCAL.write() {
-                *local = Some(LocalEdit {
-                    raw: row.payload,
-                    base_version: row.base_version,
-                    base_source: row.base_source,
-                    updated_at: row.updated_at,
-                });
-            }
-        }
-        Ok(None) => {}
-        Err(e) => log::warn!("[VideoManifest] 读取本地编辑失败: {}", e),
-    }
-}
-
-/// 当前基线版本与来源（用于记录本地编辑基于哪一份）
-fn baseline_version() -> (u64, String) {
-    if let Some(cache) = read_cache() {
-        if let Ok(manifest) = VideoManifest::parse(&cache.data) {
-            return (manifest.version, "remote".to_string());
-        }
-    }
-    (
-        VideoManifest::builtin().map(|m| m.version).unwrap_or(0),
-        "builtin".to_string(),
-    )
 }
 
 /// 保存本地编辑：整份校验通过才落库并立即生效。
 pub fn save_local(conn: &rusqlite::Connection, raw: &str) -> Result<ManifestInfo, String> {
-    VideoManifest::parse(raw).map_err(|e| format!("清单校验失败: {}", e))?;
+    let manifest = VideoManifest::parse(raw).map_err(|e| format!("清单校验失败: {}", e))?;
+    let market_version = snapshot()?.market_version;
+    let now = crate::utils::now();
 
-    // 已有本地编辑时保留原来的基线版本，避免「基于 vN」被后续保存刷掉
-    let (base_version, base_source) = match LOCAL.read().ok().and_then(|v| v.clone()) {
-        Some(local) => (local.base_version, local.base_source),
-        None => baseline_version(),
-    };
-    crate::db::tool_manifests::save(conn, KIND_VIDEO, base_version, &base_source, raw)
-        .map_err(|e| format!("保存本地编辑失败: {}", e))?;
+    crate::db::tool_manifests::upsert(
+        conn,
+        KIND_VIDEO,
+        manifest.version,
+        manifest.schema_version,
+        "local",
+        raw,
+        market_version,
+    )
+    .map_err(|e| format!("保存本地清单失败: {}", e))?;
 
-    if let Ok(mut local) = LOCAL.write() {
-        *local = Some(LocalEdit {
-            raw: raw.to_string(),
-            base_version,
-            base_source,
-            updated_at: crate::utils::now(),
-        });
-    }
-    rebuild()?;
+    set_current(Effective {
+        manifest: Arc::new(manifest),
+        source: ManifestSource::Local,
+        raw: raw.to_string(),
+        market_version,
+        updated_at: now,
+    });
     info()
 }
 
-/// 放弃本地编辑，回到基线。
-pub fn clear_local(conn: &rusqlite::Connection) -> Result<ManifestInfo, String> {
-    crate::db::tool_manifests::delete(conn, KIND_VIDEO)
-        .map_err(|e| format!("删除本地编辑失败: {}", e))?;
-    if let Ok(mut local) = LOCAL.write() {
-        *local = None;
-    }
-    rebuild()?;
-    info()
-}
-
-/// 恢复内置基线：删除本地编辑与市场缓存。
-pub fn reset_all(conn: &rusqlite::Connection) -> Result<ManifestInfo, String> {
-    crate::db::tool_manifests::delete(conn, KIND_VIDEO)
-        .map_err(|e| format!("删除本地编辑失败: {}", e))?;
-    if let Ok(mut local) = LOCAL.write() {
-        *local = None;
-    }
-    if cache_path().exists() {
-        std::fs::remove_file(cache_path()).map_err(|e| format!("删除缓存失败: {}", e))?;
-    }
-    if let Ok(mut refreshed) = REFRESHED_AT.write() {
-        *refreshed = None;
-    }
-    rebuild()?;
+/// 恢复出厂清单：用内置覆盖库行（之后在线刷新仍可能再次升到市场版本）。
+pub fn reset_builtin(conn: &rusqlite::Connection) -> Result<ManifestInfo, String> {
+    let market_version = snapshot()?.market_version;
+    let effective = write_builtin(conn, market_version)?;
+    set_current(effective);
     info()
 }
 
 /// 逐源拉取，取其中 `version` 最高的有效清单。
-async fn fetch_best() -> Result<(VideoManifest, String, String), String> {
+async fn fetch_best() -> Result<(VideoManifest, String), String> {
     let urls = crate::utils::market::build_urls(crate::utils::market::VIDEO_MODELS_PATH);
-    let mut best: Option<(VideoManifest, String, String)> = None;
+    let mut best: Option<(VideoManifest, String)> = None;
     let mut last_err = String::new();
 
     for (source, url) in crate::utils::market::SERVER_SOURCES.iter().zip(urls.iter()) {
@@ -825,10 +720,10 @@ async fn fetch_best() -> Result<(VideoManifest, String, String), String> {
                 Ok(manifest) => {
                     let replace = best
                         .as_ref()
-                        .map(|(found, _, _)| manifest.version > found.version)
+                        .map(|(found, _)| manifest.version > found.version)
                         .unwrap_or(true);
                     if replace {
-                        best = Some((manifest, text, source.clone()));
+                        best = Some((manifest, text));
                     }
                 }
                 Err(e) => {
@@ -843,41 +738,96 @@ async fn fetch_best() -> Result<(VideoManifest, String, String), String> {
     best.ok_or_else(|| format!("所有服务器源均不可用: {}", last_err))
 }
 
-/// 强制刷新市场缓存，返回最新状态。
-///
-/// 远端版本不大于缓存时只更新 `fetchedAt`，避免 CDN 回退导致降级。
-pub async fn refresh() -> Result<ManifestInfo, String> {
-    let (remote, raw, source) = fetch_best().await?;
-    let cache = read_cache();
-    let should_replace = cache
-        .as_ref()
-        .and_then(|c| VideoManifest::parse(&c.data).ok())
-        .map(|current| remote.version > current.version)
-        .unwrap_or(true);
+/// 按版本规则处理一次远端结果（见方案 §2.2），必要时写库并切换内存。
+fn apply_remote(
+    conn: &rusqlite::Connection,
+    remote: VideoManifest,
+    raw: String,
+) -> Result<(), String> {
+    let current = snapshot()?;
+    let market_version = current.market_version.max(remote.version);
 
-    if should_replace {
-        write_cache(&source, &raw)?;
-    } else if let Some(current) = &cache {
-        write_cache(&current.source, &current.data)?;
+    // 远端不高于库行：只在发现更高市场版本时记录，避免 CDN 回退让提示消失
+    if remote.version <= current.manifest.version {
+        if market_version > current.market_version {
+            crate::db::tool_manifests::touch_market_version(conn, KIND_VIDEO, market_version)
+                .map_err(|e| format!("记录市场版本失败: {}", e))?;
+            update_market_version(market_version);
+        }
+        return Ok(());
     }
 
-    if let Ok(mut refreshed) = REFRESHED_AT.write() {
-        *refreshed = Some(crate::utils::now());
+    // 本地修改存在：不覆盖，只记录市场版本供设置页提示
+    if current.source == ManifestSource::Local {
+        crate::db::tool_manifests::touch_market_version(conn, KIND_VIDEO, market_version)
+            .map_err(|e| format!("记录市场版本失败: {}", e))?;
+        update_market_version(market_version);
+        return Ok(());
     }
-    rebuild()?;
+
+    let version = remote.version;
+    let schema_version = remote.schema_version;
+    let now = crate::utils::now();
+    crate::db::tool_manifests::upsert(
+        conn,
+        KIND_VIDEO,
+        version,
+        schema_version,
+        "market",
+        &raw,
+        market_version,
+    )
+    .map_err(|e| format!("写入市场清单失败: {}", e))?;
+    set_current(Effective {
+        manifest: Arc::new(remote),
+        source: ManifestSource::Market,
+        raw,
+        market_version,
+        updated_at: now,
+    });
+    Ok(())
+}
+
+/// 拉取一次市场清单并按版本规则写库（启动后台刷新与手动刷新共用）。
+pub async fn refresh(pool: &DbPool) -> Result<ManifestInfo, String> {
+    let (remote, raw) = fetch_best().await?;
+    let conn = pool.get().map_err(|e| format!("数据库连接失败: {}", e))?;
+    apply_remote(&conn, remote, raw)?;
     info()
 }
 
-/// 启动时后台刷新：缓存超过 24h 才打远端，失败静默。
-pub fn spawn_background_refresh() {
+/// 应用市场版本：重新拉取并强制写入库（忽略本地修改）。
+pub async fn apply_market(pool: &DbPool) -> Result<ManifestInfo, String> {
+    let (remote, raw) = fetch_best().await?;
+    let conn = pool.get().map_err(|e| format!("数据库连接失败: {}", e))?;
+    let market_version = snapshot()?.market_version.max(remote.version);
+    let version = remote.version;
+    let schema_version = remote.schema_version;
+    let now = crate::utils::now();
+    crate::db::tool_manifests::upsert(
+        &conn,
+        KIND_VIDEO,
+        version,
+        schema_version,
+        "market",
+        &raw,
+        market_version,
+    )
+    .map_err(|e| format!("写入市场清单失败: {}", e))?;
+    set_current(Effective {
+        manifest: Arc::new(remote),
+        source: ManifestSource::Market,
+        raw,
+        market_version,
+        updated_at: now,
+    });
+    info()
+}
+
+/// 启动时后台刷新：每次启动拉一次远端，失败静默。
+pub fn spawn_background_refresh(pool: DbPool) {
     tauri::async_runtime::spawn(async move {
-        let fresh = read_cache()
-            .map(|c| crate::utils::now() - c.fetched_at < CACHE_TTL_SECS)
-            .unwrap_or(false);
-        if fresh {
-            return;
-        }
-        if let Err(e) = refresh().await {
+        if let Err(e) = refresh(&pool).await {
             log::warn!("[VideoManifest] 后台刷新失败: {}", e);
         }
     });

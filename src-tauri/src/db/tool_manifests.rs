@@ -1,7 +1,8 @@
-//! 工具模型清单的本地编辑层（`tool_manifests` 表）。
+//! 工具模型清单（`tool_manifests` 表）的单行读写。
 //!
-//! 只有用户改过的整份清单才落库；市场缓存仍是可删除、可重建的文件派生数据。
-//! 这里不做任何校验——清单的整份校验由 `tools::video_manifest` 负责，
+//! 数据库是清单的唯一生效源：启动播种、市场刷新、恢复出厂都写这张表，
+//! 工具与设置页只读这里（经由 `tools::video_manifest` 的内存投影）。
+//! 这里不做任何校验——整份校验由 `tools::video_manifest` 负责，
 //! 保证写入与生效使用同一套规则。
 
 use rusqlite::{params, OptionalExtension};
@@ -9,31 +10,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::errors::AppError;
 
-/// 一行本地编辑记录。
+/// 一行生效清单。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LocalManifest {
-    /// 编辑时所基于的基线版本
-    pub base_version: u64,
-    /// 基线来源：`builtin` / `remote`
-    pub base_source: String,
-    /// 用户编辑后的整份清单原文
+pub struct ManifestRow {
+    pub kind: String,
+    /// 清单自身的数据版本
+    pub version: u64,
+    /// 清单自身的格式版本
+    pub schema_version: u64,
+    /// 最近一次写入来源：`builtin` / `market` / `local`
+    pub source: String,
+    /// 整份清单原文（保留排版，供编辑器直接使用）
     pub payload: String,
+    /// 最近一次发现的市场版本（仅提示用，不参与生效判断）
+    pub market_version: u64,
     pub updated_at: i64,
 }
 
-/// 读取某类清单的本地编辑（不存在返回 None）。
-pub fn load(conn: &rusqlite::Connection, kind: &str) -> Result<Option<LocalManifest>, AppError> {
+/// 读取某类清单（不存在返回 None）。
+pub fn load(conn: &rusqlite::Connection, kind: &str) -> Result<Option<ManifestRow>, AppError> {
     let row = conn
         .query_row(
-            "SELECT base_version, base_source, payload, updated_at FROM tool_manifests WHERE kind = ?1",
+            "SELECT kind, version, schema_version, source, payload, market_version, updated_at
+             FROM tool_manifests WHERE kind = ?1",
             params![kind],
             |row| {
-                Ok(LocalManifest {
-                    base_version: row.get::<_, i64>(0)? as u64,
-                    base_source: row.get(1)?,
-                    payload: row.get(2)?,
-                    updated_at: row.get(3)?,
+                Ok(ManifestRow {
+                    kind: row.get(0)?,
+                    version: row.get::<_, i64>(1)? as u64,
+                    schema_version: row.get::<_, i64>(2)? as u64,
+                    source: row.get(3)?,
+                    payload: row.get(4)?,
+                    market_version: row.get::<_, i64>(5)? as u64,
+                    updated_at: row.get(6)?,
                 })
             },
         )
@@ -41,28 +51,47 @@ pub fn load(conn: &rusqlite::Connection, kind: &str) -> Result<Option<LocalManif
     Ok(row)
 }
 
-/// 写入（或整行覆盖）本地编辑。
-pub fn save(
+/// 写入（或整行覆盖）生效清单。
+pub fn upsert(
     conn: &rusqlite::Connection,
     kind: &str,
-    base_version: u64,
-    base_source: &str,
+    version: u64,
+    schema_version: u64,
+    source: &str,
     payload: &str,
+    market_version: u64,
 ) -> Result<(), AppError> {
     let now = crate::utils::now();
     conn.execute(
-        "INSERT INTO tool_manifests (kind, base_version, base_source, payload, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO tool_manifests
+            (kind, version, schema_version, source, payload, market_version, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(kind) DO UPDATE SET
-             base_version = ?2, base_source = ?3, payload = ?4, updated_at = ?5",
-        params![kind, base_version as i64, base_source, payload, now],
+             version = ?2, schema_version = ?3, source = ?4, payload = ?5,
+             market_version = ?6, updated_at = ?7",
+        params![
+            kind,
+            version as i64,
+            schema_version as i64,
+            source,
+            payload,
+            market_version as i64,
+            now
+        ],
     )?;
     Ok(())
 }
 
-/// 删除本地编辑（放弃修改）。
-pub fn delete(conn: &rusqlite::Connection, kind: &str) -> Result<(), AppError> {
-    conn.execute("DELETE FROM tool_manifests WHERE kind = ?1", params![kind])?;
+/// 只记录市场版本（本地修改存在时刷新走这里），只增不减。
+pub fn touch_market_version(
+    conn: &rusqlite::Connection,
+    kind: &str,
+    market_version: u64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE tool_manifests SET market_version = MAX(market_version, ?2) WHERE kind = ?1",
+        params![kind, market_version as i64],
+    )?;
     Ok(())
 }
 
@@ -75,9 +104,11 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE tool_manifests (
                 kind TEXT PRIMARY KEY,
-                base_version INTEGER NOT NULL DEFAULT 0,
-                base_source TEXT NOT NULL DEFAULT 'builtin',
+                version INTEGER NOT NULL DEFAULT 0,
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                source TEXT NOT NULL DEFAULT 'builtin',
                 payload TEXT NOT NULL,
+                market_version INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL)",
         )
         .unwrap();
@@ -85,23 +116,36 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_and_delete() {
+    fn roundtrip_and_overwrite() {
         let conn = mem_conn();
         assert!(load(&conn, "video").unwrap().is_none());
-        save(&conn, "video", 3, "remote", r#"{"version":4}"#).unwrap();
+
+        upsert(&conn, "video", 2, 1, "market", r#"{"version":2}"#, 2).unwrap();
         let row = load(&conn, "video").unwrap().unwrap();
-        assert_eq!(row.base_version, 3);
-        assert_eq!(row.base_source, "remote");
-        assert_eq!(row.payload, r#"{"version":4}"#);
+        assert_eq!(row.version, 2);
+        assert_eq!(row.schema_version, 1);
+        assert_eq!(row.source, "market");
+        assert_eq!(row.payload, r#"{"version":2}"#);
+        assert_eq!(row.market_version, 2);
 
         // 覆盖写保持单行
-        save(&conn, "video", 4, "remote", r#"{"version":5}"#).unwrap();
-        assert_eq!(load(&conn, "video").unwrap().unwrap().base_version, 4);
+        upsert(&conn, "video", 3, 1, "local", r#"{"version":3}"#, 2).unwrap();
+        let row = load(&conn, "video").unwrap().unwrap();
+        assert_eq!(row.version, 3);
+        assert_eq!(row.source, "local");
 
         // 不同 kind 互不影响
         assert!(load(&conn, "image").unwrap().is_none());
+    }
 
-        delete(&conn, "video").unwrap();
-        assert!(load(&conn, "video").unwrap().is_none());
+    #[test]
+    fn market_version_only_grows() {
+        let conn = mem_conn();
+        upsert(&conn, "video", 1, 1, "builtin", "{}", 0).unwrap();
+        touch_market_version(&conn, "video", 4).unwrap();
+        assert_eq!(load(&conn, "video").unwrap().unwrap().market_version, 4);
+        // CDN 回退到 v2 不会让提示消失
+        touch_market_version(&conn, "video", 2).unwrap();
+        assert_eq!(load(&conn, "video").unwrap().unwrap().market_version, 4);
     }
 }

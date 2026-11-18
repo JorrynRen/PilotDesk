@@ -1,8 +1,7 @@
 /**
  * ModelManifestSettings — 设置 › 运行与策略 › 模型清单
  *
- * 工具（视频 / 图片）的模型差异与传输描述由外置清单决定，清单按三层解析：
- *   本地编辑（SQLite） → 市场缓存（文件） → 内置基线（随包）
+ * 数据库是清单的唯一生效源；市场与随包内置基线只负责写入（启动播种 / 刷新 / 应用市场版本 / 恢复出厂）。
  *
  * P2 只管理视频清单（`video-models.json`）；后续图片清单复用同一套命令与页面结构。
  * 编辑采用整份 JSON 文本，保存前由后端整份校验，通过才落库并立即生效。
@@ -10,13 +9,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { AlertCircle, FileJson, Loader2, Pencil, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
+import { AlertCircle, FileJson, Loader2, Pencil, RefreshCw, RotateCcw, DownloadCloud } from 'lucide-react';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { SettingsButton, SettingsSection } from './index';
 
-type ManifestSource = 'builtin' | 'cache' | 'remote' | 'local';
+type ManifestSource = 'builtin' | 'market' | 'local';
 
 interface RuleSummary {
   match: string;
@@ -38,35 +37,28 @@ interface ManifestInfo {
   updatedAt: string | null;
   ruleCount: number;
   source: ManifestSource;
-  fetchedAt: number | null;
-  cachePath: string;
-  isBuiltin: boolean;
-  edited: boolean;
-  baseVersion: number | null;
-  baseSource: string | null;
-  localUpdatedAt: number | null;
-  latestVersion: number | null;
+  marketVersion: number;
+  hasMarketUpdate: boolean;
+  dbUpdatedAt: number;
   rules: RuleSummary[];
 }
 
 interface ManifestSourceText {
   text: string;
   source: ManifestSource;
-  baseVersion: number | null;
-  updatedAt: number | null;
+  version: number;
+  updatedAt: number;
 }
 
 const SOURCE_LABEL: Record<ManifestSource, string> = {
   builtin: '内置基线',
-  cache: '市场缓存',
-  remote: '已从市场更新',
-  local: '本地编辑',
+  market: '市场版本',
+  local: '本地修改',
 };
 
 const SOURCE_COLOR: Record<ManifestSource, string> = {
   builtin: 'var(--text-secondary)',
-  cache: 'var(--accent)',
-  remote: 'var(--accent)',
+  market: 'var(--accent)',
   local: '#F59E0B',
 };
 
@@ -89,8 +81,7 @@ function Badge({ text, color }: { text: string; color: string }) {
 export function ModelManifestSettings() {
   const [info, setInfo] = useState<ManifestInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [resetting, setResetting] = useState<'local' | 'all' | null>(null);
+  const [busy, setBusy] = useState<'refresh' | 'apply' | 'reset' | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorText, setEditorText] = useState('');
   const [editorError, setEditorError] = useState('');
@@ -113,14 +104,69 @@ export function ModelManifestSettings() {
   }, [load]);
 
   const refresh = async () => {
-    setRefreshing(true);
+    if (!info) return;
+    // 非本地修改时刷新可能直接替换生效清单，先确认；本地修改时刷新不会写库
+    if (info.source !== 'local') {
+      const ok = await confirmDialog({
+        title: '立即刷新清单',
+        message: `将从市场拉取最高版本；若高于当前 v${info.version}，会直接替换当前生效清单。继续？`,
+        confirmText: '刷新',
+      });
+      if (!ok) return;
+    }
+    setBusy('refresh');
     try {
-      setInfo(await invoke<ManifestInfo>('refresh_video_manifest'));
-      showToast('模型清单已刷新', 'success');
+      const next = await invoke<ManifestInfo>('refresh_video_manifest');
+      setInfo(next);
+      showToast(
+        next.hasMarketUpdate && next.source === 'local'
+          ? `市场已有 v${next.marketVersion}，本地修改未覆盖`
+          : '模型清单已刷新',
+        'success',
+      );
     } catch (e) {
       showToast(errorMessage(e), 'error');
     } finally {
-      setRefreshing(false);
+      setBusy(null);
+    }
+  };
+
+  const applyMarket = async () => {
+    if (!info) return;
+    const ok = await confirmDialog({
+      title: '应用市场版本',
+      message: `将重新拉取市场清单并强制覆盖库行${info.source === 'local' ? '，本地修改会被丢弃' : ''}。此操作不可撤销。`,
+      confirmText: '应用',
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy('apply');
+    try {
+      setInfo(await invoke<ManifestInfo>('apply_video_manifest'));
+      showToast('已应用市场版本并立即生效', 'success');
+    } catch (e) {
+      showToast(errorMessage(e), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reset = async () => {
+    const ok = await confirmDialog({
+      title: '恢复出厂清单',
+      message: '将用随包内置清单覆盖库行，本地修改会被丢弃。在线时下次刷新仍可能再次升到市场版本。此操作不可撤销。',
+      confirmText: '恢复',
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy('reset');
+    try {
+      setInfo(await invoke<ManifestInfo>('reset_video_manifest'));
+      showToast('已恢复出厂清单', 'success');
+    } catch (e) {
+      showToast(errorMessage(e), 'error');
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -150,28 +196,6 @@ export function ModelManifestSettings() {
     }
   };
 
-  const reset = async (scope: 'local' | 'all') => {
-    const ok = await confirmDialog({
-      title: scope === 'local' ? '放弃本地修改' : '恢复内置基线',
-      message:
-        scope === 'local'
-          ? '将删除本地编辑，回到市场缓存或内置基线。此操作不可撤销。'
-          : '将删除本地编辑与市场缓存，回落到随包内置清单。此操作不可撤销。',
-      confirmText: '确认',
-      danger: true,
-    });
-    if (!ok) return;
-    setResetting(scope);
-    try {
-      setInfo(await invoke<ManifestInfo>('reset_video_manifest', { scope }));
-      showToast(scope === 'local' ? '已放弃本地修改' : '已恢复内置基线', 'success');
-    } catch (e) {
-      showToast(errorMessage(e), 'error');
-    } finally {
-      setResetting(null);
-    }
-  };
-
   if (loading) {
     return (
       <SettingsSection title="模型清单" description="视频工具的模型差异与接口描述">
@@ -194,8 +218,7 @@ export function ModelManifestSettings() {
     );
   }
 
-  const hasNewer = info.edited && info.latestVersion != null && info.baseVersion != null
-    && info.latestVersion > info.baseVersion;
+  const disabled = busy !== null;
 
   return (
     <SettingsSection
@@ -214,7 +237,9 @@ export function ModelManifestSettings() {
               <span>video-models.json</span>
             </div>
             <Badge text={SOURCE_LABEL[info.source]} color={SOURCE_COLOR[info.source]} />
-            {info.edited && <Badge text="含本地修改" color="#F59E0B" />}
+            {info.hasMarketUpdate && (
+              <Badge text={`市场已有 v${info.marketVersion}`} color="#F59E0B" />
+            )}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs md:grid-cols-3">
             <div>
@@ -234,56 +259,57 @@ export function ModelManifestSettings() {
               <span style={{ color: 'var(--text-primary)' }}>{info.updatedAt || '—'}</span>
             </div>
             <div>
-              <span style={{ color: 'var(--text-secondary)' }}>最近拉取：</span>
-              <span style={{ color: 'var(--text-primary)' }}>{fmtTime(info.fetchedAt)}</span>
+              <span style={{ color: 'var(--text-secondary)' }}>库更新时间：</span>
+              <span style={{ color: 'var(--text-primary)' }}>{fmtTime(info.dbUpdatedAt)}</span>
             </div>
             <div>
-              <span style={{ color: 'var(--text-secondary)' }}>本地编辑：</span>
+              <span style={{ color: 'var(--text-secondary)' }}>市场版本：</span>
               <span style={{ color: 'var(--text-primary)' }}>
-                {info.edited
-                  ? `基于 v${info.baseVersion ?? '?'}（${info.baseSource === 'remote' ? '市场' : '内置'}），${fmtTime(info.localUpdatedAt)}`
-                  : '无'}
+                {info.marketVersion > 0 ? `v${info.marketVersion}` : '—'}
               </span>
             </div>
           </div>
-          <div className="mt-2 break-all text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            缓存：{info.cachePath}
-          </div>
         </div>
 
-        {hasNewer && (
+        {info.hasMarketUpdate && (
           <div
             className="rounded-lg p-3 text-xs"
             style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
           >
-            本地修改基于 v{info.baseVersion}，市场已有 v{info.latestVersion}。本地编辑优先，如需采用市场版本请先「放弃本地修改」再刷新。
+            市场已有 v{info.marketVersion}，当前生效为 v{info.version}
+            {info.source === 'local' ? '（本地修改）。刷新不会覆盖本地修改，需点击「应用市场版本」才会替换。' : '。可点击「应用市场版本」升级。'}
           </div>
         )}
 
         {/* 操作 */}
         <div className="flex flex-wrap items-center gap-2">
-          <SettingsButton variant="primary" onClick={refresh} disabled={refreshing} icon={
-            refreshing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />
-          }>
+          <SettingsButton
+            variant="primary"
+            onClick={refresh}
+            disabled={disabled}
+            icon={busy === 'refresh' ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+          >
             立即刷新
           </SettingsButton>
-          <SettingsButton onClick={openEditor} icon={<Pencil size={13} />}>
+          <SettingsButton onClick={openEditor} disabled={disabled} icon={<Pencil size={13} />}>
             编辑
           </SettingsButton>
-          <SettingsButton
-            onClick={() => reset('local')}
-            disabled={!info.edited || resetting !== null}
-            icon={resetting === 'local' ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
-          >
-            放弃本地修改
-          </SettingsButton>
+          {info.hasMarketUpdate && (
+            <SettingsButton
+              onClick={applyMarket}
+              disabled={disabled}
+              icon={busy === 'apply' ? <Loader2 size={13} className="animate-spin" /> : <DownloadCloud size={13} />}
+            >
+              应用市场版本
+            </SettingsButton>
+          )}
           <SettingsButton
             variant="danger"
-            onClick={() => reset('all')}
-            disabled={resetting !== null}
-            icon={resetting === 'all' ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+            onClick={reset}
+            disabled={disabled}
+            icon={busy === 'reset' ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
           >
-            恢复内置基线
+            恢复出厂清单
           </SettingsButton>
           <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
             刷新失败不会影响当前清单

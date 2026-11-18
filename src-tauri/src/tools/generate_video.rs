@@ -458,7 +458,6 @@ impl ToolHandler for GenerateVideoTool {
         let echo = json!({
             "manifestVersion": manifest.version,
             "manifestSource": effective.source.as_str(),
-            "manifestFetchedAt": effective.fetched_at,
             "matchedRule": rule.match_pattern,
             "createPath": rule.transport.create,
             "verified": verified,
