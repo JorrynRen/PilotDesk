@@ -311,7 +311,7 @@ fn classify_vision_error(err: &str, model: &str) -> VisionError {
 /// 成功结果：回显图片绝对路径/URL（供后续图生图复用），并附视觉模型的读取文本。
 fn render_success(display_ref: &str, model: &str, text: &str) -> String {
     format!(
-        "已读取图片：{}\n（如需图生图/图像编辑，可把该引用作为 generate_image 的 image 参数传入）\n\n\
+        "已读取图片：{}\n（如需图生图/图像编辑，可把该引用作为 generate_image 的 referenceImages 参数传入）\n\n\
          <image_content model=\"{}\">\n{}\n</image_content>",
         display_ref, model, text
     )
@@ -326,7 +326,7 @@ impl ToolHandler for ReadImageTool {
     fn description(&self) -> &str {
         "读取一张图片的内容。支持本地路径（绝对/相对）、http(s) URL 与 base64 data URL。\
 图片会交给视觉模型识别，返回文本结果与图片的绝对路径/URL（该路径可作为 generate_image 的 \
-image 参数用于图生图/图像编辑）。默认使用当前会话模型；会话模型不支持图片输入时会自动改用其他\
+referenceImages 参数用于图生图/图像编辑）。默认使用当前会话模型；会话模型不支持图片输入时会自动改用其他\
 声明支持图片的模型重试一次，若仍失败则返回提示。注意：返回的是模型对图片的文本理解，需要像素级\
 操作时请配合 generate_image。"
     }

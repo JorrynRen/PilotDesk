@@ -75,7 +75,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_rule_supports_generation_slots() {
-        let value = run("gpt-image-1").await;
+        let value = run("unknown-image-model").await;
         assert_eq!(value["matchedRule"], "*");
         assert_eq!(value["output"], "markdown_url");
         assert_eq!(value["supported"]["prompt"]["transform"], json!(null));

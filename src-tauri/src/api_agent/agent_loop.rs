@@ -2186,10 +2186,6 @@ fn local_tool_paths(tool_name: &str, args: &serde_json::Value) -> Vec<ToolPathAr
                 }
             }
         }
-        "edit_image" => {
-            push(string_arg("image"), None);
-            push(string_arg("mask"), None);
-        }
         "generate_image" => {
             push(string_arg("mask"), None);
             for image in args
@@ -2712,13 +2708,6 @@ mod tests {
             );
         }
 
-        let edit_image = serde_json::json!({
-            "image": r"D:\Images\source.png",
-            "mask": r"D:\Images\mask.png"
-        });
-        let edit_image_paths = local_tool_paths("edit_image", &edit_image);
-        assert_eq!(edit_image_paths.len(), 2);
-
         let screenshot = local_tool_paths("browser", &serde_json::json!({"action": "screenshot"}));
         assert!(screenshot
             .iter()
@@ -2822,7 +2811,6 @@ mod tests {
         for tool in [
             "generate_image",
             "generate_video",
-            "edit_image",
             "stt",
             "execute_command",
             "execute_python",

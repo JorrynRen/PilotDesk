@@ -3,7 +3,7 @@
 //! 提供文件/命令/浏览器/图像/技能等核心工具，供 `PilotDeskLlmClient` 在群聊场景下复用
 //! `run_agent_turn` 时注入。风险分级：
 //! - Low（读/静默）：read_file / list_files / glob / grep / search_web / fetch_web /
-//!   load_skill / generate_image / edit_image —— 自动放行
+//!   load_skill / generate_image —— 自动放行
 //! - Medium（写/副作用）：write_file / edit_file / browser —— 触发 ApprovalHandler（Director 裁决）
 //! - High（执行）：execute_command —— 触发 ApprovalHandler（Director 裁决）
 //!

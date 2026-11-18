@@ -1606,7 +1606,7 @@ fn format_input_refs_section(input_refs: &[ResolvedRef]) -> String {
 }
 
 /// 从任务工具调用链中确定性提取「可引用产物标识」（v3.4an）：
-/// - 本地文件：write_file / edit_file / edit_image / create_document 等写入类工具的参数 path（绝对路径）；
+/// - 本地文件：write_file / edit_file / create_document 等写入类工具的参数 path（绝对路径）；
 /// - 网络资源：generate_image / generate_video / fetch_web 返回的 Markdown 图片/链接 URL（尖括号界定边界）。
 /// 排除 data: base64 URI（体积爆炸且不可直接引用）；result 文本不扫裸本地路径（防误报库路径/噪音）。
 fn extract_artifacts_from_tool_calls(tool_calls: &str, cwd: &str) -> Vec<ArtifactRef> {
@@ -1624,7 +1624,7 @@ fn extract_artifacts_from_tool_calls(tool_calls: &str, cwd: &str) -> Vec<Artifac
         }
         out.push(ArtifactRef { kind, value });
     };
-    const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "edit_image", "create_document"];
+    const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "create_document"];
     const URL_TOOLS: &[&str] = &["generate_image", "generate_video", "fetch_web"];
     for step in arr {
         let t = step["type"].as_str().unwrap_or("");

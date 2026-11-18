@@ -539,10 +539,6 @@ pub fn normalize_tool_call_context_paths(tool_calls: &str, cwd: &str) -> String 
             "parse_document" | "create_document" => {
                 normalize_json_path_field(args_object, "file", cwd)
             }
-            "edit_image" => {
-                normalize_json_path_field(args_object, "image", cwd);
-                normalize_json_path_field(args_object, "mask", cwd);
-            }
             "generate_image" => {
                 normalize_json_path_array(args_object, "referenceImages", cwd);
                 normalize_json_path_array(args_object, "image", cwd);
@@ -576,7 +572,7 @@ pub fn normalize_tool_call_context_paths(tool_calls: &str, cwd: &str) -> String 
 
         let primary_path = matches!(
             tool_name.as_str(),
-            "write_file" | "edit_file" | "create_document" | "edit_image"
+            "write_file" | "edit_file" | "create_document"
         )
         .then(|| {
             args_object

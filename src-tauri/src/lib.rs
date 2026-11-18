@@ -955,7 +955,7 @@ pub(crate) fn get_api_agent_skills_dir() -> Option<String> {
 
 /// 将附件拆分为图片 base64 列表与文件引用说明。
 /// - `kind == "image"`：读取落盘文件转 `data:<mime>;base64,...`，送入多模态输入；
-///   同时记录落盘路径，供图生图工具（generate_image / edit_image）引用；
+///   同时记录落盘路径，供图生图工具（generate_image）引用；
 /// - 其余：仅生成路径说明，供模型通过 read_file 按需读取。
 fn split_attachments(attachments: &[Attachment], cwd: &str) -> (Vec<String>, String) {
     use base64::Engine;
@@ -1580,8 +1580,7 @@ async fn run_api_agent_body(
         "13. 调用 fetch_web 抓取指定网页的正文文本——低风险\n",
         "14. 调用 browser 工具访问网页（action=fetch 抓取渲染后页面 / action=screenshot 截图）——中风险需确认\n",
         "15. 调用 generate_image 生成或编辑图片（文生图只传 prompt；传 referenceImages 做图生图/编辑/变体，mask 仅编辑类模型支持；能力不确定时先调用 list_image_capabilities；仅 OpenAI 兼容提供商可用）\n",
-        "16. 调用 edit_image 编辑已有图片（过渡兼容入口，等价于 generate_image 传 referenceImages，新调用优先用 generate_image）\n",
-        "17. 调用 task 把独立子任务交给子代理处理（调研、分析、规划、写作等）\n",
+        "16. 调用 task 把独立子任务交给子代理处理（调研、分析、规划、写作等）\n",
         "\n",
         "重要规则：\n",
         "- 优先使用你的内置知识回答问题，不要为了使用工具而使用工具\n",

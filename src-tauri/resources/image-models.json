@@ -1,8 +1,27 @@
 {
   "schemaVersion": 1,
-  "version": 2,
+  "version": 3,
   "updatedAt": "2026-11-19",
   "rules": [
+    {
+      "match": "*",
+      "note": "默认兜底（放在第一条，优先级仍按匹配具体度计算）：同步 JSON /images/generations，参考图以 URL 或 Data URI 传入；未逐家实测，遇到不兼容请补模型专属规则",
+      "transport": {
+        "create": "/images/generations",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "defaults": true,
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "field": "size" },
+        "n": { "field": "n" },
+        "referenceImages": { "field": "image", "transform": { "type": "image_ref_uri" } }
+      },
+      "limits": { "maxN": 4, "referenceImages": 4 },
+      "resultPaths": ["data.*.url", "data.*.b64_json"]
+    },
     {
       "match": "*agnes-image*",
       "note": "已验证（2026-11-19）：同步 JSON /images/generations；n 只能为 1；size 支持 1K/2K/512x512/1024x1024/1792x1024 等；参考图与 mask 走 JSON 的 image/mask 字段；/images/edits 不可用",
@@ -23,23 +42,141 @@
       "resultPaths": ["data.*.url", "data.*.b64_json"]
     },
     {
-      "match": "*",
-      "note": "默认兜底：同步 JSON /images/generations，参考图以 URL 或 Data URI 传入；未逐家实测，遇到不兼容请补模型专属规则",
+      "match": "*gpt-image*",
+      "note": "按 OpenAI 官方文档补充（未实测）：同步 JSON /images/generations；仅返回 b64_json（落盘后回本地路径）；n 取值 1-10；size 仅 1024x1024/1536x1024/1024x1536/auto；参考图需走 /images/edits multipart，当前清单不支持 referenceImages/mask，传入会本地拒绝",
       "transport": {
         "create": "/images/generations",
         "auth": "bearer",
         "body": "json"
       },
       "output": "markdown_url",
-      "defaults": true,
       "mapping": {
         "prompt": { "field": "prompt" },
         "size": { "field": "size" },
-        "n": { "field": "n" },
+        "n": { "field": "n" }
+      },
+      "limits": {
+        "maxN": 10,
+        "sizes": ["1024x1024", "1536x1024", "1024x1536", "auto"]
+      },
+      "resultPaths": ["data.*.b64_json", "data.*.url"]
+    },
+    {
+      "match": "dall-e-3",
+      "note": "按 OpenAI 官方文档补充（未实测）：同步 JSON /images/generations；n 只能为 1；size 仅 1024x1024/1792x1024/1024x1792；默认返回 data[].url；不支持参考图与 mask",
+      "transport": {
+        "create": "/images/generations",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "field": "size" },
+        "n": { "field": "n" }
+      },
+      "limits": {
+        "maxN": 1,
+        "sizes": ["1024x1024", "1792x1024", "1024x1792"]
+      },
+      "resultPaths": ["data.*.url", "data.*.b64_json"]
+    },
+    {
+      "match": "*seedream*",
+      "note": "按火山方舟官方文档补充（未实测）：POST /images/generations；image 支持字符串或数组（参考图）；文档无 n 参数，单次单图，组图由 sequential_image_generation 控制，这里丢弃 n 并限 1 张；watermark 默认 true，这里显式关闭；返回 data[].url 或 b64_json",
+      "transport": {
+        "create": "/images/generations",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": {
+          "field": "prompt",
+          "const": { "watermark": false }
+        },
+        "size": { "field": "size" },
+        "n": { "ignore": true },
         "referenceImages": { "field": "image", "transform": { "type": "image_ref_uri" } }
       },
-      "limits": { "maxN": 4, "referenceImages": 4 },
+      "limits": { "maxN": 1, "referenceImages": 14 },
       "resultPaths": ["data.*.url", "data.*.b64_json"]
+    },
+    {
+      "match": "image-01*",
+      "note": "按 MiniMax 官方文档补充（未实测）：POST /image_generation；宽高比走 aspect_ratio 或 width/height，不支持 size，这里丢弃 size（服务端默认 1:1）；n 取值 1-9；返回 data.image_urls[]；参考图走 subject_reference，暂不支持",
+      "transport": {
+        "create": "/image_generation",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "ignore": true },
+        "n": { "field": "n" }
+      },
+      "limits": { "maxN": 9 },
+      "resultPaths": ["data.image_urls.*"]
+    },
+    {
+      "match": "*kolors*",
+      "note": "按硅基流动官方文档补充（未实测）：POST /images/generations；尺寸字段为 image_size，批量字段为 batch_size（1-4）；参考图为单图字段 image；返回 images[].url（不是 data[]）",
+      "transport": {
+        "create": "/images/generations",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "field": "image_size" },
+        "n": { "field": "batch_size" },
+        "referenceImages": {
+          "field": "image",
+          "transform": { "type": "image_ref_uri_single" }
+        }
+      },
+      "limits": { "maxN": 4, "referenceImages": 1 },
+      "resultPaths": ["images.*.url"]
+    },
+    {
+      "match": "*qwen-image-edit*",
+      "note": "按硅基流动官方文档补充（未实测）：不支持 image_size，这里丢弃 size；batch_size 控制张数；参考图字段为 image（2509 另支持 image2/image3，多图暂只映射第一张）；返回 images[].url",
+      "transport": {
+        "create": "/images/generations",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "ignore": true },
+        "n": { "field": "batch_size" },
+        "referenceImages": {
+          "field": "image",
+          "transform": { "type": "image_ref_uri_single" }
+        }
+      },
+      "limits": { "maxN": 4, "referenceImages": 1 },
+      "resultPaths": ["images.*.url"]
+    },
+    {
+      "match": "*qwen-image*",
+      "note": "按硅基流动官方文档补充（未实测）：POST /images/generations；image_size 必填、batch_size 控制张数；返回 images[].url；参考图能力未在文档确认，暂不支持",
+      "transport": {
+        "create": "/images/generations",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "field": "image_size" },
+        "n": { "field": "batch_size" }
+      },
+      "limits": { "maxN": 4 },
+      "resultPaths": ["images.*.url"]
     }
   ]
 }

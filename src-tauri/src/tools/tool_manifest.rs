@@ -213,6 +213,8 @@ pub enum Transform {
     ImageUrlOrBase64,
     /// http(s) / Data URI 原样返回，本地文件转 Data URI
     ImageRefUri,
+    /// 同 `image_ref_uri`，但数组只取第一张（用于只接受单图字段的厂商）
+    ImageRefUriSingle,
     /// multipart 文件 part：读取后按 PNG 归一化（仅 `body: multipart` 可用）
     FilePartPng,
 }
@@ -231,6 +233,7 @@ impl Transform {
             Transform::DataUriToBase64 => "data_uri_to_base64",
             Transform::ImageUrlOrBase64 => "image_url_or_base64",
             Transform::ImageRefUri => "image_ref_uri",
+            Transform::ImageRefUriSingle => "image_ref_uri_single",
             Transform::FilePartPng => "file_part_png",
         }
     }
@@ -1605,6 +1608,18 @@ pub async fn apply_transform(
                 .ok_or_else(|| "图像参数必须是字符串".to_string())?;
             Ok(Value::String(image_ref_uri(source).await?))
         }
+        Transform::ImageRefUriSingle => {
+            let source = match raw.as_array() {
+                Some(items) => items
+                    .iter()
+                    .find_map(|item| item.as_str())
+                    .ok_or_else(|| "参考图数组为空".to_string())?,
+                None => raw
+                    .as_str()
+                    .ok_or_else(|| "图像参数必须是字符串".to_string())?,
+            };
+            Ok(Value::String(image_ref_uri(source).await?))
+        }
         Transform::FilePartPng => Err(
             "file_part_png 只能用于 multipart 文件 part，不能写入 JSON 请求体".to_string(),
         ),
@@ -1991,5 +2006,18 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(payload, json!("AAEC"));
+    }
+
+    #[test]
+    fn image_ref_uri_single_keeps_first_item() {
+        let args = Map::new();
+        let ctx = TransformCtx { args: &args };
+        let value = tauri::async_runtime::block_on(apply_transform(
+            Some(&Transform::ImageRefUriSingle),
+            &json!(["data:image/png;base64,AAEC", "https://example.com/b.png"]),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(value, json!("data:image/png;base64,AAEC"));
     }
 }

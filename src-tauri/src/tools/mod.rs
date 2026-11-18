@@ -26,7 +26,6 @@ pub mod browser;
 pub mod create_document;
 pub mod deps;
 pub mod edit_file;
-pub mod edit_image;
 pub mod embed;
 pub mod exec;
 pub mod execute_command;
@@ -110,7 +109,7 @@ pub enum ToolTag {
     Web,
     /// 命令执行：execute_command / execute_python
     Exec,
-    /// 图像生成/编辑：generate_image / edit_image
+    /// 图像生成/编辑：generate_image
     Image,
     /// 视频生成：generate_video
     Video,
@@ -361,7 +360,7 @@ pub static SESSION_DISABLE: &[&str] = &[];
 
 /// 群聊模式禁用清单。
 ///
-/// 已移除（v1.1 评估后启用）：generate_image / edit_image（注入 provider 图像端点）、
+/// 已移除（v1.1 评估后启用）：generate_image（注入 provider 图像端点）、
 /// browser（零依赖）、load_skill（注入 SkillLoader）。variation_image 已并入 generate_image（image 数组）。
 /// MCP（v1.2 解禁）：房间级连接池（RoomMcpAssets）异步装配，默认启用、用户 overrides 可禁用。
 /// list_models（v1.2 解禁）：模型能力查询开放给群聊参与者，供其查模型清单自主选模型（配合图片等生成工具）。
@@ -571,20 +570,12 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
     // ── 图像（仅 OpenAI 兼容格式且有 endpoint 配置）──
     if !matches!(env.api_format, ApiFormat::Anthropic) {
         if let Some((endpoint, key)) = &env.image {
-            let model_getter = make_model_getter(&env.list_providers);
             tools.push(Arc::new(generate_image::GenerateImageTool::new(
                 endpoint.clone(),
                 key.clone(),
                 env.resolve_provider.clone(),
                 None,
-                model_getter.clone(),
-                cwd.clone(),
-            )));
-            tools.push(Arc::new(edit_image::EditImageTool::new(
-                endpoint.clone(),
-                key.clone(),
-                env.resolve_provider.clone(),
-                model_getter,
+                make_model_getter(&env.list_providers),
                 cwd.clone(),
             )));
             tools.push(Arc::new(image_capabilities::ListImageCapabilitiesTool));
