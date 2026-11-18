@@ -87,14 +87,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_rule_reports_file_parts() {
-        let value = run("seedream-image-edit").await;
-        assert_eq!(value["matchedRule"], "*edit*");
+    async fn agnes_rule_is_verified_and_maps_reference_images() {
+        let value = run("agnes-image-2.5-flash").await;
+        assert_eq!(value["matchedRule"], "*agnes-image*");
         assert_eq!(
             value["supported"]["referenceImages"]["transform"],
-            "file_part_png"
+            "image_ref_uri"
         );
-        assert_eq!(value["limits"]["referenceImages"], 1);
+        assert_eq!(value["supported"]["mask"]["transform"], "image_ref_uri");
+        assert_eq!(value["limits"]["maxN"], 1);
+        assert_eq!(value["limits"]["referenceImages"], 4);
     }
 
     #[tokio::test]
