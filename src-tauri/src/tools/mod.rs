@@ -52,6 +52,7 @@ pub mod stt;
 pub mod subagent;
 pub mod todo_write;
 pub mod tts;
+pub mod video_capabilities;
 pub mod video_manifest;
 pub mod video_transport;
 pub mod work_history;
@@ -631,6 +632,8 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
     if !matches!(env.api_format, ApiFormat::Anthropic) {
         if let Some((endpoint, key)) = &env.audio {
             let model_getter = make_model_getter(&env.list_providers);
+            // 能力查询与 generate_video 同批注册：只读本地清单，不依赖 endpoint/key。
+            tools.push(Arc::new(video_capabilities::ListVideoCapabilitiesTool));
             tools.push(Arc::new(generate_video::GenerateVideoTool::new(
                 endpoint.clone(),
                 key.clone(),

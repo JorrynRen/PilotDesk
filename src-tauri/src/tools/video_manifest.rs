@@ -660,6 +660,85 @@ pub fn info() -> Result<ManifestInfo, String> {
     })
 }
 
+/// 某模型的视频能力摘要（`list_video_capabilities` 的唯一数据来源）。
+///
+/// 只暴露「槽位 → 字段名 / 转换类型 / 枚举档位」与规则限制，不返回转换的内部参数，
+/// 也不含任何凭据。`unsupported` 由槽位全集减去映射键得到，与 `generate_video`
+/// 的拦截逻辑共用同一份清单数据，避免两处判断漂移。
+pub fn capability(model: &str) -> Result<Value, String> {
+    let effective = snapshot()?;
+    let (rule, verified) = effective.manifest.select(model).ok_or_else(|| {
+        format!(
+            "模型 '{}' 没有匹配的视频清单规则。请用 list_models 确认模型名，并确认该模型支持视频生成",
+            model
+        )
+    })?;
+
+    let mut supported = Map::new();
+    let mut unsupported: Vec<String> = Vec::new();
+    for slot in MEDIA_SLOTS.iter().chain(SCALAR_SLOTS.iter()) {
+        match rule.mapping.get(*slot) {
+            Some(mapping) if !mapping.ignore => {
+                supported.insert((*slot).to_string(), slot_capability(mapping));
+            }
+            _ => unsupported.push((*slot).to_string()),
+        }
+    }
+
+    Ok(json!({
+        "model": model,
+        "matchedRule": rule.match_pattern,
+        "verified": verified,
+        "note": rule.note,
+        "manifestVersion": effective.manifest.version,
+        "manifestSource": effective.source.as_str(),
+        "supported": supported,
+        "unsupported": unsupported,
+        "limits": {
+            "durations": rule.limits.durations,
+            "referenceImages": rule.limits.reference_images,
+            "aspectRatios": rule.limits.aspect_ratios,
+            "resolutions": rule.limits.resolutions,
+        }
+    }))
+}
+
+/// 单个槽位的能力描述：字段名、转换类型、枚举档位与附加常量。
+fn slot_capability(mapping: &ParamMapping) -> Value {
+    let mut out = Map::new();
+    if let Some(field) = &mapping.field {
+        out.insert("field".to_string(), json!(field));
+    }
+    if let Some(transform) = &mapping.transform {
+        out.insert("transform".to_string(), json!(transform.kind()));
+        if let Transform::EnumMap { values } = transform {
+            // BTreeMap 的键序是字典序（"10" 会排在 "5" 前面），这里按数值排序
+            let mut keys: Vec<&String> = values.keys().collect();
+            keys.sort_by(|a, b| match (a.parse::<f64>(), b.parse::<f64>()) {
+                (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+                _ => a.cmp(b),
+            });
+            let allowed: Vec<Value> = keys.into_iter().map(|key| enum_key(key)).collect();
+            out.insert("allowed".to_string(), Value::Array(allowed));
+        }
+    }
+    if !mapping.constants.is_empty() {
+        out.insert("const".to_string(), json!(mapping.constants));
+    }
+    Value::Object(out)
+}
+
+/// 枚举档位键还原为数字（时长/档位类），否则保持字符串。
+fn enum_key(key: &str) -> Value {
+    if let Ok(number) = key.parse::<i64>() {
+        return json!(number);
+    }
+    if let Ok(number) = key.parse::<f64>() {
+        return json!(number);
+    }
+    json!(key)
+}
+
 /// 编辑器初始内容：库行当前生效原文
 pub fn source_text() -> Result<ManifestSourceText, String> {
     let effective = snapshot()?;
