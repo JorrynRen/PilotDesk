@@ -1,22 +1,16 @@
-//! 图像编辑工具：基于已有图片做可控修改（/images/edits）。
+//! 图像编辑工具（过渡转发壳）：内部走统一的 `generate_image` 实现。
 //!
-//! 自 `api_agent/image_to_image.rs` 拆出（工具架构统一 v1.0，命名规约对齐），
-//! 共享原语见 `image_common.rs`。
+//! 模型差异由图片模型清单决定，本工具只负责把 `image` + `mask` 参数
+//! 映射为 `referenceImages` + `mask`，下一版将移除。
 
-use crate::tools::image_common::{resolve_image_bytes, upload_to_images_endpoint};
+use crate::tools::generate_image::GenerateImageTool;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
 use std::sync::Arc;
 
-/// 图像编辑工具
+/// 图像编辑工具（转发）
 pub struct EditImageTool {
-    api_endpoint: String,
-    api_key: String,
-    /// 跨 provider 解析（providerId → (endpoint, key, api_format)）；None 表示仅支持当前会话提供商。
-    /// key 只用于请求构造，绝不进入工具返回值/LLM 上下文。
-    resolve: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>>,
-    /// 模型白名单校验：provider_id → Vec<合法模型名>。None 时跳过校验。
-    get_models: Option<Arc<dyn Fn(String) -> Vec<String> + Send + Sync>>,
+    inner: GenerateImageTool,
 }
 
 impl EditImageTool {
@@ -25,28 +19,11 @@ impl EditImageTool {
         api_key: String,
         resolve: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>>,
         get_models: Option<Arc<dyn Fn(String) -> Vec<String> + Send + Sync>>,
+        cwd: String,
     ) -> Self {
         Self {
-            api_endpoint,
-            api_key,
-            resolve,
-            get_models,
+            inner: GenerateImageTool::new(api_endpoint, api_key, resolve, None, get_models, cwd),
         }
-    }
-
-    /// 校验 model 是否在当前 provider 的合法模型列表中，不在则返回引导错误。
-    fn validate_model(&self, model: &str, provider_id: &str) -> Result<(), String> {
-        if let Some(get_models) = &self.get_models {
-            let valid: Vec<String> = get_models(provider_id.to_string());
-            if !valid.is_empty() && !valid.iter().any(|m| m == model) {
-                return Err(format!(
-                    "模型 '{}' 不是提供商 '@{}' 的有效模型。\
-                     有效模型：{}\n请重新调用 list_models，从返回结果中完整复制模型名（含 namespace 前缀如 TeleAI/xxx）后重试。",
-                    model, provider_id, valid.join(", ")
-                ));
-            }
-        }
-        Ok(())
     }
 }
 
@@ -57,7 +34,7 @@ impl ToolHandler for EditImageTool {
     }
 
     fn description(&self) -> &str {
-        "编辑/局部修改已有图片（图生图）。使用 OpenAI 兼容的 /images/edits 接口。模型需经 list_models 选择支持图像编辑的模型。若 /images/edits 端点不可用（HTTP 404/405/501），说明该服务商/模型不支持图像编辑接口，应改用 generate_image 并传入 image 数组完成图生图/图像编辑，而非继续重试本工具。若连续 2 次调用失败，请停止自动重试，向用户确认三选一：继续使用当前模型重试、提供新的 model 名称后重试、或跳过此工具调用。"
+        "编辑/局部修改已有图片（过渡兼容入口，等价于 generate_image 传入 referenceImages）。新调用请直接使用 generate_image。"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -107,59 +84,11 @@ impl ToolHandler for EditImageTool {
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
         let image = arguments["image"].as_str().ok_or("缺少 image 参数")?;
-        let prompt = arguments["prompt"].as_str().ok_or("缺少 prompt 参数")?;
-        let size = arguments["size"].as_str().unwrap_or("1024x1024");
-        let n = arguments["n"].as_u64().unwrap_or(1).clamp(1, 10);
-        // 模型名必须显式提供（各服务商可用模型不同，无通用默认值）：剥离前导 @ 与空白后为空则报错引导。
-        let model = arguments["model"]
-            .as_str()
-            .map(|s| s.trim().trim_start_matches('@').to_string())
-            .filter(|s| !s.is_empty())
-            .ok_or("缺少 model 参数：请先调用 list_models 查看可用模型，从清单中复制完整的模型名（含 namespace 前缀）传入，不要自行编造")?;
-
-        let image_png = resolve_image_bytes(image).await?;
-        let mask_png = match arguments["mask"].as_str() {
-            Some(mask) => Some(resolve_image_bytes(mask).await?),
-            None => None,
-        };
-
-        // 跨提供商解析：指定 provider 时运行时查库取 endpoint/key（key 仅用于请求构造，不进返回值）。
-        let provider_arg = arguments["provider"]
-            .as_str()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        // provider 与 model 必须分别传入：缺 provider 时不再静默回退会话提供商，避免把别家的模型打到会话端点上
-        if provider_arg.is_none() {
-            return Err("缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。请先调用 list_models，从清单里挑出目标模型所在那一行（标 ★ 的是当前会话提供商），把 provider_id 与模型名分别填入 provider / model".to_string());
+        let mut forwarded = arguments.clone();
+        forwarded["referenceImages"] = serde_json::json!([image]);
+        if let Some(object) = forwarded.as_object_mut() {
+            object.remove("image");
         }
-        let (endpoint_base, api_key) = match (&provider_arg, &self.resolve) {
-            (Some(pid), Some(resolve)) => match resolve(pid) {
-                Some((ep, key, _fmt)) => (ep, key),
-                None => {
-                    return Err(format!(
-                        "提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商",
-                        pid
-                    ))
-                }
-            },
-            _ => (self.api_endpoint.clone(), self.api_key.clone()),
-        };
-
-        // 校验 model 是否在合法清单内
-        let provider_id = provider_arg.as_deref().unwrap_or("");
-        self.validate_model(&model, provider_id)?;
-
-        upload_to_images_endpoint(
-            "edits",
-            &endpoint_base,
-            &api_key,
-            &model,
-            image_png,
-            mask_png,
-            Some(prompt),
-            size,
-            n,
-        )
-        .await
+        self.inner.execute(forwarded).await
     }
 }

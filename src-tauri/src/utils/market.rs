@@ -50,6 +50,7 @@ pub const INSPIRATIONS_INDEX_PATH: &str = "/server/market/inspirations/index.jso
 pub const WORKFLOW_INDEX_PATH: &str = "/server/market/workflow/workflow-index.json";
 /// 工具模型清单：按「工具」而非具体模态命名，视频 / 图片清单同目录
 pub const VIDEO_MODELS_PATH: &str = "/server/market/tool-models/video-models.json";
+pub const IMAGE_MODELS_PATH: &str = "/server/market/tool-models/image-models.json";
 #[allow(dead_code)]
 pub const PLUGINS_DIR_PATH: &str = "/server/market/plugins";
 

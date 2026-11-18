@@ -155,8 +155,6 @@ import { KbModelSettings } from '../components/settings/KbModelSettings';
 import { KbRootSettings } from '../components/settings/KbRootSettings';
 import { KbCloudSourceSettings } from '../components/settings/KbCloudSourceSettings';
 import { Select } from '../components/common/Select';
-import { showToast } from '../utils/toast';
-import { errorMessage } from '../utils/errorMessage';
 import { isAutoRunNotifyEnabled, setAutoRunNotifyEnabled } from '../stores/notificationEvents';
 
 // ============================================================
@@ -922,7 +920,7 @@ function SortableProviderCard({
 
 
 /** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
-type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission' | 'manifests';
+type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission' | 'video' | 'image';
 
 function ApiConfig({
   deepLinkSub,
@@ -948,12 +946,17 @@ function ApiConfig({
   // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
   // 页面内点击优先，故用 override 叠加在 URL 之上——避免在 effect 里 setState 的级联渲染。
   const [apiTabOverride, setApiTabOverride] = useState<ApiSubTab | null>(deepLinkSub ?? null);
+  // 旧深链 apiTab=manifests 统一落到「视频模型适配」，避免历史链接失效
   const urlSub: ApiSubTab =
-    urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice' || urlApiTab === 'manifests'
+    urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice'
       ? urlApiTab
-      : hideProviders
-        ? 'env'
-        : 'providers';
+      : urlApiTab === 'manifests' || urlApiTab === 'video'
+        ? 'video'
+        : urlApiTab === 'image'
+          ? 'image'
+          : hideProviders
+            ? 'env'
+            : 'providers';
   const apiTab: ApiSubTab = apiTabOverride ?? urlSub;
 
   // Load providers from SQLite on mount
@@ -1197,7 +1200,8 @@ function ApiConfig({
           { key: 'voice', label: t('settings.sub.api.voice', '语音识别') },
           { key: 'mode', label: t('settings.sub.api.mode', '对话模式') },
           { key: 'permission', label: t('settings.sub.api.permission', '权限规则') },
-          { key: 'manifests', label: t('settings.sub.api.manifests', '模型清单') },
+          { key: 'video', label: t('settings.sub.api.video', '视频模型适配') },
+          { key: 'image', label: t('settings.sub.api.image', '图片模型适配') },
         ] as const)
           .filter((tab) => !(hideProviders && tab.key === 'providers'))
           .map((tab) => (
@@ -1283,7 +1287,8 @@ function ApiConfig({
       {apiTab === 'voice' && <VoiceInputSettings />}
       {apiTab === 'mode' && <ModePromptSettings />}
       {apiTab === 'permission' && <PermissionSettings />}
-      {apiTab === 'manifests' && <ModelManifestSettings />}
+      {apiTab === 'video' && <ModelManifestSettings kind="video" />}
+      {apiTab === 'image' && <ModelManifestSettings kind="image" />}
     </div>
   );
 }

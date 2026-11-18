@@ -1,9 +1,8 @@
 /**
- * ModelManifestSettings — 设置 › 运行与策略 › 模型清单
+ * ModelManifestSettings — 设置 › 运行与策略 › 「视频模型适配 / 图片模型适配」
  *
  * 数据库是清单的唯一生效源；市场与随包内置基线只负责写入（启动播种 / 刷新 / 应用市场版本 / 恢复出厂）。
- *
- * P2 只管理视频清单（`video-models.json`）；后续图片清单复用同一套命令与页面结构。
+ * 每个页签只渲染一个 kind 的清单，kind 由父级传入。
  * 编辑采用整份 JSON 文本，保存前由后端整份校验，通过才落库并立即生效。
  */
 
@@ -15,19 +14,24 @@ import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { SettingsButton, SettingsSection } from './index';
 
+export type ModelManifestKind = 'video' | 'image';
+
 type ManifestSource = 'builtin' | 'market' | 'local';
 
 interface RuleSummary {
   match: string;
   note?: string | null;
   responseMode: 'url' | 'binary';
+  output: 'file' | 'markdown_url';
   defaults: boolean;
   slots: string[];
   limits: {
     referenceImages: number | null;
+    maxN: number | null;
     durations: number[];
     aspectRatios: string[];
     resolutions: string[];
+    sizes: string[];
   };
 }
 
@@ -62,6 +66,19 @@ const SOURCE_COLOR: Record<ManifestSource, string> = {
   local: '#F59E0B',
 };
 
+const KIND_META: Record<ModelManifestKind, { title: string; description: string; file: string }> = {
+  video: {
+    title: '视频模型适配',
+    description: '视频生成模型的端点、参数映射与能力限制由这份清单决定；保存后立即生效，无需重启',
+    file: 'video-models.json',
+  },
+  image: {
+    title: '图片模型适配',
+    description: '图片生成 / 编辑模型的端点、参数映射与能力限制由这份清单决定；保存后立即生效，无需重启',
+    file: 'image-models.json',
+  },
+};
+
 function fmtTime(secs: number | null): string {
   if (!secs) return '—';
   return new Date(secs * 1000).toLocaleString();
@@ -78,7 +95,8 @@ function Badge({ text, color }: { text: string; color: string }) {
   );
 }
 
-export function ModelManifestSettings() {
+export function ModelManifestSettings({ kind }: { kind: ModelManifestKind }) {
+  const meta = KIND_META[kind];
   const [info, setInfo] = useState<ManifestInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<'refresh' | 'apply' | 'reset' | null>(null);
@@ -89,18 +107,22 @@ export function ModelManifestSettings() {
 
   const load = useCallback(async () => {
     try {
-      setInfo(await invoke<ManifestInfo>('video_manifest_info'));
+      setInfo(await invoke<ManifestInfo>('tool_manifest_info', { kind }));
     } catch (e) {
       showToast(errorMessage(e), 'error');
       setInfo(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     // effect 体内不允许同步 setState：推迟一个微任务，仍在同一帧内完成首次加载
-    queueMicrotask(() => { void load(); });
+    queueMicrotask(() => {
+      setLoading(true);
+      setInfo(null);
+      void load();
+    });
   }, [load]);
 
   const refresh = async () => {
@@ -116,7 +138,7 @@ export function ModelManifestSettings() {
     }
     setBusy('refresh');
     try {
-      const next = await invoke<ManifestInfo>('refresh_video_manifest');
+      const next = await invoke<ManifestInfo>('refresh_tool_manifest', { kind });
       setInfo(next);
       showToast(
         next.hasMarketUpdate && next.source === 'local'
@@ -142,7 +164,7 @@ export function ModelManifestSettings() {
     if (!ok) return;
     setBusy('apply');
     try {
-      setInfo(await invoke<ManifestInfo>('apply_video_manifest'));
+      setInfo(await invoke<ManifestInfo>('apply_tool_manifest', { kind }));
       showToast('已应用市场版本并立即生效', 'success');
     } catch (e) {
       showToast(errorMessage(e), 'error');
@@ -161,7 +183,7 @@ export function ModelManifestSettings() {
     if (!ok) return;
     setBusy('reset');
     try {
-      setInfo(await invoke<ManifestInfo>('reset_video_manifest'));
+      setInfo(await invoke<ManifestInfo>('reset_tool_manifest', { kind }));
       showToast('已恢复出厂清单', 'success');
     } catch (e) {
       showToast(errorMessage(e), 'error');
@@ -172,7 +194,7 @@ export function ModelManifestSettings() {
 
   const openEditor = async () => {
     try {
-      const source = await invoke<ManifestSourceText>('video_manifest_source');
+      const source = await invoke<ManifestSourceText>('tool_manifest_source', { kind });
       setEditorText(source.text);
       setEditorError('');
       setEditorOpen(true);
@@ -185,7 +207,7 @@ export function ModelManifestSettings() {
     setSaving(true);
     setEditorError('');
     try {
-      setInfo(await invoke<ManifestInfo>('save_video_manifest', { text: editorText }));
+      setInfo(await invoke<ManifestInfo>('save_tool_manifest', { kind, text: editorText }));
       setEditorOpen(false);
       showToast('本地清单已保存并立即生效', 'success');
     } catch (e) {
@@ -198,7 +220,7 @@ export function ModelManifestSettings() {
 
   if (loading) {
     return (
-      <SettingsSection title="模型清单" description="视频工具的模型差异与接口描述">
+      <SettingsSection title={meta.title} description={meta.description}>
         <div className="flex items-center gap-2 py-6 text-sm" style={{ color: 'var(--text-secondary)' }}>
           <Loader2 size={14} className="animate-spin" />
           正在读取清单…
@@ -209,7 +231,7 @@ export function ModelManifestSettings() {
 
   if (!info) {
     return (
-      <SettingsSection title="模型清单" description="视频工具的模型差异与接口描述">
+      <SettingsSection title={meta.title} description={meta.description}>
         <div className="flex items-center gap-2 py-6 text-sm" style={{ color: 'var(--text-secondary)' }}>
           <AlertCircle size={14} />
           清单状态不可用，请查看日志后重试。
@@ -221,10 +243,7 @@ export function ModelManifestSettings() {
   const disabled = busy !== null;
 
   return (
-    <SettingsSection
-      title="模型清单"
-      description="视频工具的模型差异、端点与参数映射由这份清单决定；保存后立即生效，无需重启"
-    >
+    <SettingsSection title={meta.title} description={meta.description}>
       <div className="space-y-4">
         {/* 概要 */}
         <div
@@ -234,7 +253,7 @@ export function ModelManifestSettings() {
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-primary)' }}>
               <FileJson size={15} />
-              <span>video-models.json</span>
+              <span>{meta.file}</span>
             </div>
             <Badge text={SOURCE_LABEL[info.source]} color={SOURCE_COLOR[info.source]} />
             {info.hasMarketUpdate && (
@@ -375,7 +394,10 @@ export function ModelManifestSettings() {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <code className="text-xs" style={{ color: 'var(--text-primary)' }}>{rule.match}</code>
-                <Badge text={rule.responseMode === 'binary' ? '二进制' : 'URL'} color="var(--text-secondary)" />
+                <Badge
+                  text={rule.output === 'markdown_url' ? 'Markdown 图片' : '本地文件'}
+                  color="var(--text-secondary)"
+                />
                 {rule.defaults && <Badge text="通用兜底" color="#F59E0B" />}
                 <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   {rule.slots.length > 0 ? `支持 ${rule.slots.join(' / ')}` : '仅提示词'}
@@ -387,11 +409,14 @@ export function ModelManifestSettings() {
                 </div>
               )}
               {(rule.limits.durations.length > 0 || rule.limits.aspectRatios.length > 0
-                || rule.limits.resolutions.length > 0 || rule.limits.referenceImages != null) && (
+                || rule.limits.resolutions.length > 0 || rule.limits.sizes.length > 0
+                || rule.limits.referenceImages != null || rule.limits.maxN != null) && (
                 <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   {rule.limits.durations.length > 0 && <span>时长 {rule.limits.durations.join('/')}s{'  '}</span>}
                   {rule.limits.aspectRatios.length > 0 && <span>画幅 {rule.limits.aspectRatios.join('/')}{'  '}</span>}
                   {rule.limits.resolutions.length > 0 && <span>分辨率 {rule.limits.resolutions.join('/')}{'  '}</span>}
+                  {rule.limits.sizes.length > 0 && <span>尺寸 {rule.limits.sizes.join('/')}{'  '}</span>}
+                  {rule.limits.maxN != null && <span>生成数量上限 {rule.limits.maxN}{'  '}</span>}
                   {rule.limits.referenceImages != null && <span>参考图上限 {rule.limits.referenceImages} 张</span>}
                 </div>
               )}

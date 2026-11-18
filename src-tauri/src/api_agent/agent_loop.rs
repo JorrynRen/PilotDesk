@@ -2191,11 +2191,18 @@ fn local_tool_paths(tool_name: &str, args: &serde_json::Value) -> Vec<ToolPathAr
             push(string_arg("mask"), None);
         }
         "generate_image" => {
+            push(string_arg("mask"), None);
             for image in args
-                .get("image")
+                .get("referenceImages")
                 .and_then(|value| value.as_array())
                 .into_iter()
                 .flatten()
+                .chain(
+                    args.get("image")
+                        .and_then(|value| value.as_array())
+                        .into_iter()
+                        .flatten(),
+                )
                 .filter_map(|value| value.as_str())
             {
                 push(Some(image), None);

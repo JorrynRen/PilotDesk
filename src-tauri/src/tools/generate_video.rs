@@ -476,8 +476,10 @@ impl ToolHandler for GenerateVideoTool {
                 api_key: &api_key,
                 model: &model,
                 body: &body,
+                parts: &[],
                 rule,
                 output_dir: &output_dir,
+                label: "视频",
             },
             &progress,
         )

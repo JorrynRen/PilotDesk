@@ -37,7 +37,9 @@ pub mod generate_video;
 pub mod glob;
 pub mod grep;
 pub mod history;
+pub mod image_capabilities;
 pub mod image_common;
+pub mod image_manifest;
 pub mod knowledge;
 pub mod list_files;
 pub mod list_models;
@@ -51,6 +53,7 @@ pub mod skills;
 pub mod stt;
 pub mod subagent;
 pub mod todo_write;
+pub mod tool_manifest;
 pub mod tts;
 pub mod video_capabilities;
 pub mod video_manifest;
@@ -575,13 +578,16 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
                 env.resolve_provider.clone(),
                 None,
                 model_getter.clone(),
+                cwd.clone(),
             )));
             tools.push(Arc::new(edit_image::EditImageTool::new(
                 endpoint.clone(),
                 key.clone(),
                 env.resolve_provider.clone(),
                 model_getter,
+                cwd.clone(),
             )));
+            tools.push(Arc::new(image_capabilities::ListImageCapabilitiesTool));
         }
     }
 

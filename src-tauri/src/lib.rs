@@ -998,7 +998,7 @@ fn split_attachments(attachments: &[Attachment], cwd: &str) -> (Vec<String>, Str
     }
     if !image_lines.is_empty() {
         notes.push(format!(
-            "用户附加了以下图片，如需图生图可调用 generate_image（image 数组）或 edit_image，其图片参数可填这些路径：\n{}",
+            "用户附加了以下图片，如需图生图/图像编辑可调用 generate_image 并传 referenceImages（能力不确定时先调用 list_image_capabilities），图片参数可填这些路径：\n{}",
             image_lines.join("\n")
         ));
     }
@@ -1579,8 +1579,8 @@ async fn run_api_agent_body(
         "12. 调用 search_web 联网搜索（默认 Bing 中国版，返回标题/链接/摘要）——低风险\n",
         "13. 调用 fetch_web 抓取指定网页的正文文本——低风险\n",
         "14. 调用 browser 工具访问网页（action=fetch 抓取渲染后页面 / action=screenshot 截图）——中风险需确认\n",
-        "15. 调用 generate_image 根据文字描述生成图片（也支持传入 image 数组做图生图/编辑/变体，仅 OpenAI 兼容提供商可用）\n",
-        "16. 调用 edit_image 编辑已有图片（图生图/遮罩编辑，需提供图片路径/URL，仅 OpenAI 兼容提供商可用）\n",
+        "15. 调用 generate_image 生成或编辑图片（文生图只传 prompt；传 referenceImages 做图生图/编辑/变体，mask 仅编辑类模型支持；能力不确定时先调用 list_image_capabilities；仅 OpenAI 兼容提供商可用）\n",
+        "16. 调用 edit_image 编辑已有图片（过渡兼容入口，等价于 generate_image 传 referenceImages，新调用优先用 generate_image）\n",
         "17. 调用 task 把独立子任务交给子代理处理（调研、分析、规划、写作等）\n",
         "\n",
         "重要规则：\n",
@@ -2894,12 +2894,12 @@ pub fn run() {
             commands::skills::skill_read_entry,
             commands::skills::skill_write_entry,
             commands::voice::transcribe_audio,
-            commands::video::video_manifest_info,
-            commands::video::video_manifest_source,
-            commands::video::save_video_manifest,
-            commands::video::refresh_video_manifest,
-            commands::video::apply_video_manifest,
-            commands::video::reset_video_manifest,
+            commands::tool_manifest::tool_manifest_info,
+            commands::tool_manifest::tool_manifest_source,
+            commands::tool_manifest::save_tool_manifest,
+            commands::tool_manifest::refresh_tool_manifest,
+            commands::tool_manifest::apply_tool_manifest,
+            commands::tool_manifest::reset_tool_manifest,
             plugin::plugin_discover,
             plugin::plugin_list,
             plugin::plugin_enable,
@@ -3296,12 +3296,16 @@ pub fn run() {
             match pool.get() {
                 Ok(conn) => {
                     if let Err(e) = tools::video_manifest::ensure_seeded(&conn) {
-                        log::warn!("[VideoManifest] 启动播种失败：{}", e);
+                        log::warn!("[ToolManifest:video] 启动播种失败：{}", e);
+                    }
+                    if let Err(e) = tools::image_manifest::ensure_seeded(&conn) {
+                        log::warn!("[ToolManifest:image] 启动播种失败：{}", e);
                     }
                 }
-                Err(e) => log::warn!("[VideoManifest] 取主库连接失败，跳过启动播种：{}", e),
+                Err(e) => log::warn!("[ToolManifest] 取主库连接失败，跳过启动播种：{}", e),
             }
             tools::video_manifest::spawn_background_refresh(pool.clone());
+            tools::image_manifest::spawn_background_refresh(pool.clone());
 
             // 启动云同步后台任务（每 10 分钟一次；仅「开关开启 + 已登录 + 有能力」时真正执行，
             // 其余静默跳过，失败只记日志——不影响离线可用）

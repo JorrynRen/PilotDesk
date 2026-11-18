@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "version": 1,
+  "updatedAt": "2026-11-19",
+  "rules": [
+    {
+      "match": "*edit*",
+      "note": "编辑类模型：multipart /images/edits，参考图与遮罩按 PNG 归一化后上传",
+      "transport": {
+        "create": "/images/edits",
+        "auth": "bearer",
+        "body": "multipart"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "field": "size" },
+        "n": { "field": "n" },
+        "referenceImages": { "field": "image", "transform": { "type": "file_part_png" } },
+        "mask": { "field": "mask", "transform": { "type": "file_part_png" } }
+      },
+      "limits": { "maxN": 10, "referenceImages": 1 },
+      "resultPaths": ["data.*.url", "data.*.b64_json"]
+    },
+    {
+      "match": "*kontext*",
+      "note": "Kontext 类编辑模型，契约同通用编辑接口",
+      "transport": {
+        "create": "/images/edits",
+        "auth": "bearer",
+        "body": "multipart"
+      },
+      "output": "markdown_url",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "field": "size" },
+        "n": { "field": "n" },
+        "referenceImages": { "field": "image", "transform": { "type": "file_part_png" } }
+      },
+      "limits": { "maxN": 4, "referenceImages": 1 },
+      "resultPaths": ["data.*.url", "data.*.b64_json"]
+    },
+    {
+      "match": "*",
+      "note": "默认：同步 JSON /images/generations，参考图以 URL 或 Data URI 传入",
+      "transport": {
+        "create": "/images/generations",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "output": "markdown_url",
+      "defaults": true,
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "size": { "field": "size" },
+        "n": { "field": "n" },
+        "referenceImages": { "field": "image", "transform": { "type": "image_ref_uri" } }
+      },
+      "limits": { "maxN": 10, "referenceImages": 4 },
+      "resultPaths": ["data.*.url", "data.*.b64_json"]
+    }
+  ]
+}
