@@ -1,19 +1,25 @@
-//! 视频生成工具：调用 OpenAI 兼容的异步视频任务 API。
+//! 视频生成工具：统一参数契约 + 外置模型映射清单。
 //!
-//! 工作流（异步任务，服务商通用）：
-//! 1. `POST {base}/v1/videos` 创建任务 → 返回任务标识（`task_id`/`video_id`/`id`）
-//! 2. 轮询 `GET {base}/v1/videos/{task_id}` 直至 `completed`
-//! 3. 从响应取视频 URL（兼容 `video_url` / `remixed_from_video_id` 等常见字段），返回 Markdown 视频链接
+//! 工具只暴露固定的六个媒体槽位（首帧/尾帧/参考图/参考视频/编辑源视频/延长源视频）
+//! 与六个标量（提示词/时长/画幅/分辨率/种子/负向提示词）。
+//! 模型差异（端点、字段名、任务判定、结果取值、限制）全部写在
+//! `resources/video-models.json` 里，由 [`video_manifest`] 解释、
+//! [`video_transport`] 执行；本文件不包含任何厂商字段名。
 //!
-//! 复用当前 API Provider 的 endpoint 与 API Key，无需额外配置；
-//! 跨提供商经 `resolve_provider` 解析（key 只用于请求构造，不进返回值/LLM 上下文）。
+//! 发送前的本地校验：不支持的参数直接报错，绝不静默丢弃；不支持的组合直接拒绝。
 
-use crate::tools::{RiskLevel, ToolHandler, ToolTag};
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
+
 use async_trait::async_trait;
-use base64::Engine;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use serde_json::{json, Map, Value};
 use tauri::Emitter;
+
+use crate::tools::video_manifest::{
+    apply_transform, write_mapping, TransformCtx, VideoManifest, MEDIA_SLOTS, SCALAR_SLOTS,
+};
+use crate::tools::video_transport::{self, Execution};
+use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 
 /// 视频生成工具
 pub struct GenerateVideoTool {
@@ -26,9 +32,12 @@ pub struct GenerateVideoTool {
     /// 前端进度事件发射（任务创建成功 / 每 30s 状态提示）；None 时静默（如目录元数据装配）
     app: Option<tauri::AppHandle>,
     session_id: String,
+    /// 工作目录（binary 模式落盘用）
+    cwd: String,
 }
 
 impl GenerateVideoTool {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api_endpoint: String,
         api_key: String,
@@ -36,6 +45,7 @@ impl GenerateVideoTool {
         get_models: Option<Arc<dyn Fn(String) -> Vec<String> + Send + Sync>>,
         app: Option<tauri::AppHandle>,
         session_id: String,
+        cwd: String,
     ) -> Self {
         Self {
             api_endpoint,
@@ -44,6 +54,7 @@ impl GenerateVideoTool {
             get_models,
             app,
             session_id,
+            cwd,
         }
     }
 
@@ -80,21 +91,38 @@ impl GenerateVideoTool {
     }
 }
 
-/// 图片来源归一化：公网 URL（清洗）或本地路径 → base64 Data URI。
-/// 图生视频要求公网可访问 URL；本地文件转 Data URI 由服务端决定是否支持（不支持时返回上游错误）。
-async fn normalize_image_source(source: &str) -> Result<String, String> {
-    if source.starts_with("data:") {
-        return Ok(source.to_string());
+/// 内置清单只解析一次
+fn manifest() -> Result<&'static VideoManifest, String> {
+    static CACHE: OnceLock<Result<VideoManifest, String>> = OnceLock::new();
+    match CACHE.get_or_init(VideoManifest::builtin) {
+        Ok(manifest) => Ok(manifest),
+        Err(error) => Err(format!("[manifest_invalid] {}", error)),
     }
-    if source.contains("http://") || source.contains("https://") {
-        return crate::tools::image_common::normalize_http_url(source)
-            .ok_or_else(|| "无法识别图片 URL".to_string());
+}
+
+fn text_arg(arguments: &Value, key: &str) -> Option<String> {
+    arguments
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn is_public_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
+/// 回显用的值摘要：避免把 base64 载荷写进工具返回值
+fn value_summary(value: &Value) -> String {
+    match value {
+        Value::String(text) if text.chars().count() > 60 => {
+            let head: String = text.chars().take(60).collect();
+            format!("{}…（{} 字符）", head, text.chars().count())
+        }
+        Value::String(text) => text.clone(),
+        Value::Array(items) => format!("[{} 项]", items.len()),
+        other => other.to_string(),
     }
-    let bytes = std::fs::read(source).map_err(|e| format!("读取图片文件失败: {}", e))?;
-    let format = image::guess_format(&bytes).map_err(|e| format!("无法识别图片格式: {}", e))?;
-    let mime = format.to_mime_type();
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("data:{};base64,{}", mime, b64))
 }
 
 #[async_trait]
@@ -104,7 +132,13 @@ impl ToolHandler for GenerateVideoTool {
     }
 
     fn description(&self) -> &str {
-        "生成视频（文生视频 / 图生视频）。通过 OpenAI 兼容的异步视频任务 API：创建任务后自动轮询直至完成（视频生成通常需 1~5 分钟）。模型需经 list_models 选择支持视频生成的模型。若连续 2 次调用失败（如 HTTP 4xx/5xx、当前模型不支持视频生成），请停止自动重试，向用户确认三选一：继续使用当前模型重试、提供新的 model 名称后重试、或跳过此工具调用。"
+        "生成视频（文生视频 / 图生视频 / 首尾帧 / 参考图 / 参考视频）。\
+         参数按统一槽位传入：firstFrame、lastFrame、referenceImages、referenceVideo、\
+         sourceVideo、extendVideo，以及 prompt、duration、aspectRatio、resolution、seed、negativePrompt。\
+         各模型支持的槽位不同：不支持的参数会在本地直接返回 unsupported_input，不会静默丢给上游。\
+         参考视频与源视频只接受公网 http(s) URL；图像槽位可传公网 URL 或本地图片路径。\
+         创建任务后自动轮询直至完成（通常 1~5 分钟）。模型需经 list_models 选择支持视频生成的模型。\
+         若连续 2 次调用失败，请停止自动重试，向用户确认是继续重试、更换模型，还是跳过该工具。"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -123,25 +157,52 @@ impl ToolHandler for GenerateVideoTool {
                     "type": "string",
                     "description": "必填：目标提供商 id，逐字取 list_models 清单里的 provider_id（标 ★ 的是当前会话提供商）；provider 与 model 必须分别传入，禁止拼成 provider_id/model"
                 },
-                "image": {
+                "firstFrame": {
                     "type": "string",
-                    "description": "可选：图生视频的参考图片。公网 URL 或本地绝对路径；建议使用公网可访问的 URL。"
+                    "description": "可选：起始关键帧图像。公网 URL 或本地图片路径；仅在目标模型需要字节时才会读取本地文件"
                 },
-                "width": {
-                    "type": "integer",
-                    "description": "视频宽度，默认由服务商决定（如 1152；具体支持范围取决于模型）"
+                "lastFrame": {
+                    "type": "string",
+                    "description": "可选：结束关键帧图像。公网 URL 或本地图片路径；必须与 firstFrame 同时传入"
                 },
-                "height": {
-                    "type": "integer",
-                    "description": "视频高度，默认由服务商决定（如 768；具体支持范围取决于模型）"
+                "referenceImages": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "可选：内容/风格参考图，不代表时间位置。元素为公网 URL 或本地图片路径；与 firstFrame/lastFrame 互斥"
                 },
-                "num_frames": {
-                    "type": "integer",
-                    "description": "总帧数（≤441，需满足 8n+1，默认 241）。时长 = num_frames / frame_rate，如 121 帧@24fps≈5 秒、241 帧@24fps≈10 秒"
+                "referenceVideo": {
+                    "type": "string",
+                    "description": "可选：参考视频，仅接受公网 http(s) URL；与 sourceVideo 互斥"
                 },
-                "frame_rate": {
+                "sourceVideo": {
+                    "type": "string",
+                    "description": "可选：编辑源视频（在原片上修改），仅接受公网 http(s) URL；与 referenceVideo 互斥"
+                },
+                "extendVideo": {
+                    "type": "string",
+                    "description": "可选：延长源视频（保留原片并接新段），仅接受公网 http(s) URL；与其他媒体槽位互斥"
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "可选：视频时长（秒）。可用档位由目标模型决定，本地会校验，不在档位内会报 limit_exceeded"
+                },
+                "aspectRatio": {
+                    "type": "string",
+                    "enum": ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"],
+                    "description": "可选：画幅比例。是否支持由目标模型决定，本地会校验"
+                },
+                "resolution": {
+                    "type": "string",
+                    "enum": ["480p", "540p", "720p", "1080p", "4k"],
+                    "description": "可选：分辨率。是否支持由目标模型决定，本地会校验"
+                },
+                "seed": {
                     "type": "integer",
-                    "description": "帧率 1~60，默认 24"
+                    "description": "可选：随机种子，用于复现结果"
+                },
+                "negativePrompt": {
+                    "type": "string",
+                    "description": "可选：负向提示词，描述不希望出现的内容"
                 }
             },
             "required": ["prompt", "model", "provider"]
@@ -157,206 +218,295 @@ impl ToolHandler for GenerateVideoTool {
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
-        let prompt = arguments["prompt"].as_str().ok_or("缺少 prompt 参数")?;
-        let model = arguments["model"]
-            .as_str()
-            .map(|s| s.trim().trim_start_matches('@').to_string())
-            .filter(|s| !s.is_empty())
-            .ok_or("缺少 model 参数：请先调用 list_models 查看可用模型，从清单中复制完整的模型名（含 namespace 前缀）传入，不要自行编造")?;
+        let provider = text_arg(&arguments, "provider").ok_or_else(|| {
+            "缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。\
+             请先调用 list_models，把 provider_id 与模型名分别填入 provider / model"
+                .to_string()
+        })?;
+        let prompt = text_arg(&arguments, "prompt").ok_or("缺少 prompt 参数")?;
+        let model = text_arg(&arguments, "model")
+            .map(|text| text.trim_start_matches('@').to_string())
+            .filter(|text| !text.is_empty())
+            .ok_or("缺少 model 参数：请先调用 list_models 查看可用模型，从清单中复制完整的模型名传入，不要自行编造")?;
 
-        // 图生视频/关键帧：归一化参考图（URL 清洗 / 本地转 Data URI）
-        let image_ref = match arguments["image"]
-            .as_str()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            Some(src) => Some(normalize_image_source(src).await?),
-            None => None,
-        };
-
-        let width = arguments["width"].as_u64().map(|v| v as i64);
-        let height = arguments["height"].as_u64().map(|v| v as i64);
-        let num_frames = arguments["num_frames"].as_u64().map(|v| v as i64);
-        let frame_rate = arguments["frame_rate"].as_u64().map(|v| v as i64);
-
-        // 跨提供商解析（key 仅用于请求构造，不进返回值）
-        let provider_arg = arguments["provider"]
-            .as_str()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        // provider 与 model 必须分别传入：缺 provider 时不再静默回退会话提供商
-        if provider_arg.is_none() {
-            return Err("缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。请先调用 list_models，从清单里挑出目标模型所在那一行（标 ★ 的是当前会话提供商），把 provider_id 与模型名分别填入 provider / model".to_string());
+        // ── 收集已传参数（顺序即回显顺序）──
+        let mut provided: Vec<(String, Value)> = vec![("prompt".to_string(), json!(prompt))];
+        for slot in [
+            "firstFrame",
+            "lastFrame",
+            "referenceVideo",
+            "sourceVideo",
+            "extendVideo",
+            "duration",
+            "aspectRatio",
+            "resolution",
+            "seed",
+            "negativePrompt",
+        ] {
+            match slot {
+                "duration" | "seed" => {
+                    if let Some(value) = arguments.get(slot).filter(|value| value.is_number()) {
+                        provided.push((slot.to_string(), value.clone()));
+                    }
+                }
+                _ => {
+                    if let Some(value) = text_arg(&arguments, slot) {
+                        provided.push((slot.to_string(), json!(value)));
+                    }
+                }
+            }
         }
-        let (endpoint_base, api_key) = match (&provider_arg, &self.resolve) {
-            (Some(pid), Some(resolve)) => match resolve(pid) {
-                Some((ep, key, _fmt)) => (ep, key),
+        if let Some(items) = arguments.get("referenceImages").and_then(|value| value.as_array()) {
+            let items: Vec<Value> = items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| item.trim())
+                .filter(|item| !item.is_empty())
+                .map(|item| json!(item))
+                .collect();
+            if !items.is_empty() {
+                provided.push(("referenceImages".to_string(), Value::Array(items)));
+            }
+        }
+
+        let has = |name: &str| provided.iter().any(|(key, _)| key == name);
+
+        // ── 全局互斥与依赖（写在代码里，清单不能改变）──
+        if has("lastFrame") && !has("firstFrame") {
+            return Err(
+                "[dependency_violation] lastFrame 必须与 firstFrame 同时传入".to_string(),
+            );
+        }
+        if has("extendVideo")
+            && (has("sourceVideo")
+                || has("referenceVideo")
+                || has("firstFrame")
+                || has("lastFrame"))
+        {
+            return Err(
+                "[conflict] extendVideo 不能与 sourceVideo / referenceVideo / firstFrame / lastFrame 同时使用"
+                    .to_string(),
+            );
+        }
+        if has("sourceVideo") && has("referenceVideo") {
+            return Err(
+                "[conflict] sourceVideo 与 referenceVideo 互斥，请只保留一个".to_string(),
+            );
+        }
+        if has("referenceImages") && (has("firstFrame") || has("lastFrame")) {
+            return Err(
+                "[conflict] referenceImages 与 firstFrame / lastFrame 互斥，请二选一".to_string(),
+            );
+        }
+        for slot in ["referenceVideo", "sourceVideo", "extendVideo"] {
+            if let Some(value) = provided
+                .iter()
+                .find(|(key, _)| key == slot)
+                .and_then(|(_, value)| value.as_str())
+            {
+                if !is_public_url(value) {
+                    return Err(format!(
+                        "[unsupported_input] {} 仅接受公网 http(s) URL（视频无法内联上传）：{}",
+                        slot, value
+                    ));
+                }
+            }
+        }
+
+        // ── 解析提供商与模型 ──
+        let (endpoint, api_key) = match &self.resolve {
+            Some(resolve) => match resolve(&provider) {
+                Some((endpoint, key, _format)) => (endpoint, key),
                 None => {
                     return Err(format!(
                         "提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商",
-                        pid
+                        provider
                     ))
                 }
             },
-            _ => (self.api_endpoint.clone(), self.api_key.clone()),
+            None => (self.api_endpoint.clone(), self.api_key.clone()),
         };
-        let base = endpoint_base.trim_end_matches('/').to_string();
+        let base = endpoint.trim_end_matches('/').to_string();
+        self.validate_model(&model, &provider)?;
 
-        // 校验 model 是否在合法清单内
-        let provider_id = provider_arg.as_deref().unwrap_or("");
-        self.validate_model(&model, provider_id)?;
+        // ── 选规则并做本地校验 ──
+        let manifest = manifest()?;
+        let (rule, verified) = manifest
+            .select(&model)
+            .ok_or_else(|| format!("[manifest_invalid] 模型 '{}' 未命中任何规则", model))?;
 
-        // 1. 创建视频任务（endpoint_base 已含 /v1，与图片/音频工具一致）
-        let create_url = format!("{}/videos", base);
-        let mut body = serde_json::json!({
-            "model": model,
-            "prompt": prompt,
-        });
-        if let Some(img) = image_ref {
-            body["image"] = serde_json::json!(img);
+        let mut unsupported: Vec<String> = Vec::new();
+        let mut ignored: Vec<String> = Vec::new();
+        for (name, _) in &provided {
+            match rule.mapping.get(name) {
+                Some(mapping) if mapping.ignore => ignored.push(name.clone()),
+                Some(_) => {}
+                None => unsupported.push(name.clone()),
+            }
         }
-        if let Some(w) = width {
-            body["width"] = serde_json::json!(w);
-        }
-        if let Some(h) = height {
-            body["height"] = serde_json::json!(h);
-        }
-        if let Some(nf) = num_frames {
-            body["num_frames"] = serde_json::json!(nf);
-        }
-        if let Some(fr) = frame_rate {
-            body["frame_rate"] = serde_json::json!(fr);
-        }
-
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(&create_url)
-            .bearer_auth(&api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("视频任务创建请求失败: {}", e))?;
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("读取响应失败: {}", e))?;
-        if !status.is_success() {
+        if !unsupported.is_empty() {
+            let supported: Vec<String> = rule
+                .mapping
+                .iter()
+                .filter(|(_, mapping)| !mapping.ignore)
+                .map(|(name, _)| name.clone())
+                .collect();
             return Err(format!(
-                "视频任务创建失败 (HTTP {}): {}",
-                status.as_u16(),
-                text
+                "[unsupported_input] 模型 '{}' 不支持参数：{}（命中规则 {}）。该规则支持：{}",
+                model,
+                unsupported.join("、"),
+                rule.match_pattern,
+                supported.join("、")
             ));
         }
-        let task_json: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("解析响应失败: {}", e))?;
-        // 任务标识：优先 task_id，其次 video_id / id
-        let task_id = task_json["task_id"]
-            .as_str()
-            .or_else(|| task_json["video_id"].as_str())
-            .or_else(|| task_json["id"].as_str())
-            .ok_or_else(|| format!("响应缺少任务标识 (task_id/video_id): {}", text))?
-            .to_string();
-        log::info!(
-            "[GenerateVideo] 任务已创建: task_id={}, prompt_len={}",
-            task_id,
-            prompt.len()
-        );
-        // 立即告知用户任务已创建（弥补生成期间空白期）
-        self.emit_progress("视频生成任务已创建，正在生成中，请耐心等待…");
 
-        // 2. 轮询任务结果（endpoint_base 已含 /v1）
-        //    完成/失败以服务端响应为准：响应已含视频 URL 即视为完成（不依赖 status 字段命名），
-        //    失败状态及时返回；处理中/排队继续轮询；本地超时仅作兜底。
-        let poll_url = format!("{}/videos/{}", base, task_id);
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(900);
-        let mut last_report = Instant::now();
-        let started = Instant::now();
-        loop {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            if tokio::time::Instant::now() > deadline {
-                return Err("视频生成超时（超过 15 分钟），任务可能仍在处理中。".to_string());
-            }
-            // 每 30 秒向前端输出一次状态提示
-            if last_report.elapsed() >= Duration::from_secs(30) {
-                self.emit_progress(&format!(
-                    "视频生成还在进行，请耐心等待…（已等待约 {} 秒）",
-                    started.elapsed().as_secs()
-                ));
-                last_report = Instant::now();
-            }
-            let resp = client
-                .get(&poll_url)
-                .bearer_auth(&api_key)
-                .send()
-                .await
-                .map_err(|e| format!("查询任务状态失败: {}", e))?;
-            let status_code = resp.status();
-            let body_text = resp
-                .text()
-                .await
-                .map_err(|e| format!("读取任务状态失败: {}", e))?;
-            if !status_code.is_success() {
-                return Err(format!(
-                    "查询任务状态失败 (HTTP {}): {}",
-                    status_code.as_u16(),
-                    body_text
-                ));
-            }
-            let j: serde_json::Value =
-                serde_json::from_str(&body_text).map_err(|e| format!("解析任务状态失败: {}", e))?;
-
-            // 1) 响应已含视频 URL（兼容 video_url / remixed_from_video_id / result / data 嵌套）→ 完成
-            if let Some(url) = extract_video_url(&j) {
-                log::info!("[GenerateVideo] 任务 {} 已完成", task_id);
-                // 尖括号界定 URL 边界（与 generate_image 一致，防 LLM 提取截断）
-                return Ok(format!(
-                    "视频已生成（任务 {}）：\n![视频](<{}>)",
-                    task_id, url
-                ));
-            }
-            // 2) 任务状态（官方枚举：queued / in_progress / completed / failed；兼容其他服务商变体）
-            let st = extract_status(&j).unwrap_or_default();
-            log::info!("[GenerateVideo] 任务 {} 状态: {}", task_id, st);
-            match st.as_str() {
-                // 已完成但未提取到 URL（上方 extract_video_url 已优先处理）→ 明确报错，避免死等超时
-                "completed" | "succeeded" | "success" | "done" | "finished" | "complete" => {
+        if let Some(count) = provided
+            .iter()
+            .find(|(key, _)| key == "referenceImages")
+            .and_then(|(_, value)| value.as_array())
+            .map(|items| items.len())
+        {
+            if let Some(limit) = rule.limits.reference_images {
+                if count > limit {
                     return Err(format!(
-                        "任务已完成（状态 {}）但响应缺少视频 URL: {}",
-                        st, body_text
+                        "[limit_exceeded] referenceImages 最多 {} 张，本次传入 {} 张（模型 '{}'）",
+                        limit, count, model
                     ));
-                }
-                "failed" | "error" | "cancelled" | "canceled" | "rejected" | "failure" => {
-                    return Err(format!("视频生成失败（状态 {}）: {}", st, body_text));
-                }
-                // queued（排队等待）/ in_progress（生成中）/ 状态缺失 → 继续轮询
-                "queued" | "in_progress" | "processing" | "pending" | "running" | "" => {}
-                // 其他未知状态：记录日志后继续轮询（本地超时兜底，不误判）
-                other => {
-                    log::warn!("[GenerateVideo] 未知任务状态: {}", other);
                 }
             }
         }
+        if let Some(duration) = provided
+            .iter()
+            .find(|(key, _)| key == "duration")
+            .and_then(|(_, value)| value.as_f64())
+        {
+            if !rule.limits.durations.is_empty()
+                && !rule
+                    .limits
+                    .durations
+                    .iter()
+                    .any(|allowed| (allowed - duration).abs() < f64::EPSILON)
+            {
+                return Err(format!(
+                    "[limit_exceeded] 时长 {} 秒不被模型 '{}' 支持（允许：{} 秒）",
+                    duration,
+                    model,
+                    rule.limits
+                        .durations
+                        .iter()
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                ));
+            }
+        }
+        for (key, allowed) in [
+            ("aspectRatio", &rule.limits.aspect_ratios),
+            ("resolution", &rule.limits.resolutions),
+        ] {
+            if let Some(value) = provided
+                .iter()
+                .find(|(name, _)| name == key)
+                .and_then(|(_, value)| value.as_str())
+            {
+                if !allowed.is_empty() && !allowed.iter().any(|item| item == value) {
+                    return Err(format!(
+                        "[limit_exceeded] {} '{}' 不被模型 '{}' 支持（允许：{}）",
+                        key,
+                        value,
+                        model,
+                        allowed.join(" / ")
+                    ));
+                }
+            }
+        }
+
+        // ── 构造请求体 ──
+        // 路径里已嵌入模型名时（如 Veo 的 {model}），请求体不再重复写 model
+        let mut body = json!({});
+        if !rule.transport.create.contains("{model}") {
+            body["model"] = json!(model);
+        }
+        let args: Map<String, Value> = provided.iter().cloned().collect();
+        let ctx = TransformCtx { args: &args };
+        let mut echo_fields: Vec<Value> = Vec::new();
+        let mut echo_transforms = Map::new();
+        for (name, value) in &provided {
+            let Some(mapping) = rule.mapping.get(name) else {
+                continue;
+            };
+            if mapping.ignore {
+                continue;
+            }
+            let transformed = apply_transform(mapping.transform.as_ref(), value, &ctx)
+                .await
+                .map_err(|error| format!("[transform_failed] 参数 {}: {}", name, error))?;
+            write_mapping(&mut body, mapping, transformed.clone())
+                .map_err(|error| format!("[manifest_invalid] 参数 {}: {}", name, error))?;
+            echo_fields.push(json!(name));
+            if let Some(transform) = &mapping.transform {
+                echo_transforms.insert(
+                    name.clone(),
+                    json!(format!(
+                        "{} => {}",
+                        transform.kind(),
+                        value_summary(&transformed)
+                    )),
+                );
+            }
+        }
+
+        let absent: Vec<&str> = MEDIA_SLOTS
+            .iter()
+            .chain(SCALAR_SLOTS.iter())
+            .copied()
+            .filter(|name| !provided.iter().any(|(key, _)| key == name))
+            .collect();
+        let echo = json!({
+            "manifestVersion": manifest.version,
+            "matchedRule": rule.match_pattern,
+            "createPath": rule.transport.create,
+            "verified": verified,
+            "fields": echo_fields,
+            "transforms": echo_transforms,
+            "ignored": ignored,
+            "absent": absent,
+        });
+
+        // ── 交给通用执行器 ──
+        let output_dir = PathBuf::from(&self.cwd).join("generated-videos");
+        let progress = |message: &str| self.emit_progress(message);
+        let result = video_transport::execute(
+            &Execution {
+                base_url: &base,
+                api_key: &api_key,
+                model: &model,
+                body: &body,
+                rule,
+                output_dir: &output_dir,
+            },
+            &progress,
+        )
+        .await
+        .map_err(|error| format!("[provider_rejected] {}\n\nrequestEcho:\n{}", error, echo))?;
+
+        if let Some(url) = &result.video_url {
+            return Ok(format!(
+                "视频已生成（任务 {}）：\n![视频](<{}>)\n\nrequestEcho:\n{}",
+                result.task_id.as_deref().unwrap_or("-"),
+                url,
+                echo
+            ));
+        }
+        if let Some(path) = &result.local_path {
+            return Ok(format!(
+                "视频已生成，已保存到本地：{}\n\nrequestEcho:\n{}",
+                path, echo
+            ));
+        }
+        Err(format!(
+            "[provider_rejected] 任务已结束但没有可用的视频结果\n\nrequestEcho:\n{}",
+            echo
+        ))
     }
-}
-
-/// 从任务响应中提取视频 URL（兼容字段与嵌套层级）。
-fn extract_video_url(j: &serde_json::Value) -> Option<&str> {
-    ["video_url", "remixed_from_video_id", "output", "url"]
-        .iter()
-        .find_map(|k| j[k].as_str())
-        .or_else(|| j["result"]["video_url"].as_str())
-        .or_else(|| j["data"]["video_url"].as_str())
-        .or_else(|| j["task"]["video_url"].as_str())
-}
-
-/// 从任务响应中提取任务状态（小写；兼容顶层 / result / data / task 嵌套）。
-fn extract_status(j: &serde_json::Value) -> Option<String> {
-    ["status", "task_status"]
-        .iter()
-        .find_map(|k| j[k].as_str())
-        .or_else(|| j["result"]["status"].as_str())
-        .or_else(|| j["data"]["status"].as_str())
-        .or_else(|| j["task"]["status"].as_str())
-        .map(|s| s.to_lowercase())
 }

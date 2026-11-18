@@ -2201,7 +2201,20 @@ fn local_tool_paths(tool_name: &str, args: &serde_json::Value) -> Vec<ToolPathAr
                 push(Some(image), None);
             }
         }
-        "generate_video" | "stt" => push(string_arg("image").or_else(|| string_arg("file")), None),
+        "generate_video" => {
+            push(string_arg("firstFrame"), None);
+            push(string_arg("lastFrame"), None);
+            for image in args
+                .get("referenceImages")
+                .and_then(|value| value.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str())
+            {
+                push(Some(image), None);
+            }
+        }
+        "stt" => push(string_arg("image").or_else(|| string_arg("file")), None),
         "execute_command" => push(string_arg("cwd"), None),
         "execute_python" => {
             let cwd = string_arg("cwd").filter(|value| !is_remote_path_source(value));
@@ -2661,7 +2674,7 @@ mod tests {
             ),
             (
                 "generate_video",
-                serde_json::json!({"image": r"D:\Images\frame.png"}),
+                serde_json::json!({"firstFrame": r"D:\Images\frame.png"}),
                 r"D:\Images\frame.png",
             ),
             (

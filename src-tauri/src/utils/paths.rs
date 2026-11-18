@@ -544,7 +544,12 @@ pub fn normalize_tool_call_context_paths(tool_calls: &str, cwd: &str) -> String 
                 normalize_json_path_field(args_object, "mask", cwd);
             }
             "generate_image" => normalize_json_path_array(args_object, "image", cwd),
-            "generate_video" | "stt" => {
+            "generate_video" => {
+                normalize_json_path_field(args_object, "firstFrame", cwd);
+                normalize_json_path_field(args_object, "lastFrame", cwd);
+                normalize_json_path_array(args_object, "referenceImages", cwd);
+            }
+            "stt" => {
                 normalize_json_path_field(args_object, "image", cwd);
                 normalize_json_path_field(args_object, "file", cwd);
             }

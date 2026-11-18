@@ -52,6 +52,8 @@ pub mod stt;
 pub mod subagent;
 pub mod todo_write;
 pub mod tts;
+pub mod video_manifest;
+pub mod video_transport;
 pub mod work_history;
 pub mod write_file;
 
@@ -636,6 +638,7 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
                 model_getter,
                 env.app.clone(),
                 env.session_id.clone(),
+                cwd.clone(),
             )));
         }
     }
