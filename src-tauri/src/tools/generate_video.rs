@@ -428,7 +428,7 @@ impl ToolHandler for GenerateVideoTool {
             let Some(mapping) = rule.mapping.get(name) else {
                 continue;
             };
-            if mapping.ignore {
+            if mapping.ignore || mapping.consume {
                 continue;
             }
             let transformed = apply_transform(mapping.transform.as_ref(), value, &ctx)

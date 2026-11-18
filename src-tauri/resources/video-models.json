@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "version": 1,
+  "schemaVersion": 2,
+  "version": 2,
   "updatedAt": "2026-11-18",
   "rules": [
     {
@@ -15,21 +15,25 @@
       "task": {
         "idPaths": ["id", "task_id", "video_id"],
         "statusPath": "status",
-        "successValues": ["completed"],
-        "failureValues": ["failed", "cancelled"],
+        "successValues": ["completed", "succeeded", "success"],
+        "failureValues": ["failed", "cancelled", "canceled", "error"],
         "errorPath": "error.message"
       },
       "responseMode": "url",
       "defaults": true,
-      "note": "OpenAI 兼容 /videos 形态。未命中条目的模型回落到此，回执标注未经清单验证",
+      "note": "OpenAI 兼容 /videos 形态。未命中条目的模型回落到此，回执标注未经清单验证；本地图片转 base64，resolution 仅用于推导 size",
       "mapping": {
         "prompt": { "field": "prompt" },
-        "firstFrame": { "field": "image" },
+        "firstFrame": {
+          "field": "image",
+          "transform": { "type": "image_url_or_base64" }
+        },
         "duration": { "field": "seconds", "transform": { "type": "string" } },
         "aspectRatio": {
           "field": "size",
           "transform": { "type": "aspect_resolution_to_size", "defaultResolution": "720p" }
-        }
+        },
+        "resolution": { "consume": true }
       },
       "limits": {},
       "resultPaths": ["data.0.url", "data.0.video_url", "data.url", "url"]

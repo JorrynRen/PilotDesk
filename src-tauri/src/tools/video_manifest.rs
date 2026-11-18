@@ -20,7 +20,7 @@ use crate::db::init::DbPool;
 use super::image_common::{normalize_http_url, MAX_IMAGE_BYTES};
 
 /// 客户端支持的清单格式版本
-pub const SUPPORTED_SCHEMA_VERSION: u64 = 1;
+pub const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 
 /// 随包内置的基线清单（离线与首次启动可用）
 const BUILTIN_MANIFEST: &str = include_str!("../../resources/video-models.json");
@@ -160,6 +160,9 @@ pub struct ParamMapping {
     pub transform: Option<Transform>,
     #[serde(default)]
     pub ignore: bool,
+    /// 仅参与本地计算（如 resolution 推导 size），不写入请求体
+    #[serde(default)]
+    pub consume: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -195,6 +198,8 @@ pub enum Transform {
         reference_type: Option<String>,
     },
     DataUriToBase64,
+    /// http(s) 原样返回，Data URI 去头，本地文件转 base64
+    ImageUrlOrBase64,
 }
 
 impl Transform {
@@ -209,6 +214,7 @@ impl Transform {
             Transform::DataUriToImageObject => "data_uri_to_image_object",
             Transform::DataUriToImageObjectArray { .. } => "data_uri_to_image_object_array",
             Transform::DataUriToBase64 => "data_uri_to_base64",
+            Transform::ImageUrlOrBase64 => "image_url_or_base64",
         }
     }
 }
@@ -333,9 +339,24 @@ impl VideoManifest {
                         rule.match_pattern, param
                     ));
                 }
-                if !mapping.ignore && mapping.field.is_none() && mapping.constants.is_empty() {
+                if mapping.consume
+                    && (mapping.ignore
+                        || mapping.field.is_some()
+                        || !mapping.constants.is_empty()
+                        || mapping.transform.is_some())
+                {
                     return Err(format!(
-                        "规则 '{}'.mapping.{}: 缺少 field（或显式声明 ignore）",
+                        "规则 '{}'.mapping.{}: consume 不能与 ignore/field/const/transform 同时出现",
+                        rule.match_pattern, param
+                    ));
+                }
+                if !mapping.ignore
+                    && !mapping.consume
+                    && mapping.field.is_none()
+                    && mapping.constants.is_empty()
+                {
+                    return Err(format!(
+                        "规则 '{}'.mapping.{}: 缺少 field（或显式声明 ignore / consume）",
                         rule.match_pattern, param
                     ));
                 }
@@ -724,6 +745,9 @@ fn slot_capability(mapping: &ParamMapping) -> Value {
     }
     if !mapping.constants.is_empty() {
         out.insert("const".to_string(), json!(mapping.constants));
+    }
+    if mapping.consume {
+        out.insert("consumed".to_string(), json!(true));
     }
     Value::Object(out)
 }
@@ -1453,6 +1477,12 @@ pub async fn apply_transform(
                 .ok_or_else(|| "图像参数必须是字符串".to_string())?;
             Ok(Value::String(image_base64(source).await?))
         }
+        Transform::ImageUrlOrBase64 => {
+            let source = raw
+                .as_str()
+                .ok_or_else(|| "图像参数必须是字符串".to_string())?;
+            Ok(Value::String(image_base64(source).await?))
+        }
     }
 }
 
@@ -1691,6 +1721,7 @@ mod tests {
             .collect(),
             transform: None,
             ignore: false,
+            consume: false,
         };
         let mut body = json!({"model": "seedance"});
         write_mapping(&mut body, &mapping, json!("https://example.com/a.png")).unwrap();
@@ -1735,5 +1766,63 @@ mod tests {
     fn enum_key_normalizes_integral_numbers() {
         assert_eq!(canonical_key(&json!(5)), "5");
         assert_eq!(canonical_key(&json!(5.0)), "5");
+    }
+
+    #[test]
+    fn default_rule_consumes_resolution_and_converts_local_images() {
+        let manifest = VideoManifest::builtin().unwrap();
+        let (rule, verified) = manifest.select("unknown-model").unwrap();
+        assert!(!verified);
+
+        let resolution = rule.mapping.get("resolution").expect("兜底需接受 resolution");
+        assert!(resolution.consume);
+        assert!(resolution.field.is_none());
+
+        assert_eq!(
+            rule.mapping
+                .get("firstFrame")
+                .and_then(|mapping| mapping.transform.as_ref())
+                .map(Transform::kind),
+            Some("image_url_or_base64")
+        );
+    }
+
+    #[test]
+    fn consume_mapping_must_not_carry_output_fields() {
+        let raw = r#"{
+          "schemaVersion": 2,
+          "version": 1,
+          "rules": [{
+            "match": "*",
+            "transport": { "create": "/videos" },
+            "task": {},
+            "defaults": true,
+            "mapping": { "resolution": { "consume": true, "field": "resolution" } },
+            "resultPaths": ["url"]
+          }]
+        }"#;
+        let error = VideoManifest::parse(raw).unwrap_err();
+        assert!(error.contains("consume"), "{}", error);
+    }
+
+    #[test]
+    fn image_url_or_base64_keeps_url_and_strips_data_uri() {
+        let args = Map::new();
+        let ctx = TransformCtx { args: &args };
+        let url = tauri::async_runtime::block_on(apply_transform(
+            Some(&Transform::ImageUrlOrBase64),
+            &json!("https://example.com/a.png"),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(url, json!("https://example.com/a.png"));
+
+        let payload = tauri::async_runtime::block_on(apply_transform(
+            Some(&Transform::ImageUrlOrBase64),
+            &json!("data:image/png;base64,AAEC"),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(payload, json!("AAEC"));
     }
 }
