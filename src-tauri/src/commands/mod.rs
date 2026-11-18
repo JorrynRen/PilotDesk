@@ -35,5 +35,6 @@ pub mod theme;
 pub mod tools;
 pub mod update;
 pub mod usage;
+pub mod video;
 pub mod voice;
 pub mod workflow;

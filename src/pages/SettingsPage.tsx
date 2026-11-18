@@ -150,6 +150,7 @@ import { ToolSettings } from '../components/settings/ToolSettings';
 import { PluginManager } from '../components/plugin/PluginManager';
 import { SkillBrowser } from '../components/panels/SkillBrowser';
 import { VoiceInputSettings } from '../components/settings/VoiceInputSettings';
+import { ModelManifestSettings } from '../components/settings/ModelManifestSettings';
 import { KbModelSettings } from '../components/settings/KbModelSettings';
 import { KbRootSettings } from '../components/settings/KbRootSettings';
 import { KbCloudSourceSettings } from '../components/settings/KbCloudSourceSettings';
@@ -921,7 +922,7 @@ function SortableProviderCard({
 
 
 /** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
-type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission';
+type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission' | 'manifests';
 
 function ApiConfig({
   deepLinkSub,
@@ -948,7 +949,7 @@ function ApiConfig({
   // 页面内点击优先，故用 override 叠加在 URL 之上——避免在 effect 里 setState 的级联渲染。
   const [apiTabOverride, setApiTabOverride] = useState<ApiSubTab | null>(deepLinkSub ?? null);
   const urlSub: ApiSubTab =
-    urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice'
+    urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice' || urlApiTab === 'manifests'
       ? urlApiTab
       : hideProviders
         ? 'env'
@@ -1196,6 +1197,7 @@ function ApiConfig({
           { key: 'voice', label: t('settings.sub.api.voice', '语音识别') },
           { key: 'mode', label: t('settings.sub.api.mode', '对话模式') },
           { key: 'permission', label: t('settings.sub.api.permission', '权限规则') },
+          { key: 'manifests', label: t('settings.sub.api.manifests', '模型清单') },
         ] as const)
           .filter((tab) => !(hideProviders && tab.key === 'providers'))
           .map((tab) => (
@@ -1281,6 +1283,7 @@ function ApiConfig({
       {apiTab === 'voice' && <VoiceInputSettings />}
       {apiTab === 'mode' && <ModePromptSettings />}
       {apiTab === 'permission' && <PermissionSettings />}
+      {apiTab === 'manifests' && <ModelManifestSettings />}
     </div>
   );
 }

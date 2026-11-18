@@ -27,7 +27,10 @@ use std::fs;
 ///
 /// v14：工作根统一由项目主目录/全局工作空间动态派生。移除 `sessions.cwd` 与
 /// `groupchat_rooms.output_dir`，新增仅供 ACP 宿主恢复使用的 `sessions.host_resume_cwd`。
-pub const SCHEMA_VERSION: i64 = 14;
+///
+/// v15：新增 `tool_manifests`——工具模型清单（视频/图片）的本地编辑层。
+/// 市场缓存仍是文件派生数据；只有用户改过的整份清单落库，与其基线版本一起保存。
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -97,6 +100,15 @@ CREATE TABLE IF NOT EXISTS api_usage_log (
 CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL);
+-- v15：工具模型清单（视频 / 图片）的本地编辑层。
+-- 市场缓存是文件派生数据，可删可重建；这里只存用户改过的整份清单，
+-- 并记录编辑时所基于的基线版本，便于提示「市场已有新版本」。
+CREATE TABLE IF NOT EXISTS tool_manifests (
+            kind TEXT PRIMARY KEY,
+            base_version INTEGER NOT NULL DEFAULT 0,
+            base_source TEXT NOT NULL DEFAULT 'builtin',
+            payload TEXT NOT NULL,
             updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,

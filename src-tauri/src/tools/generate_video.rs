@@ -9,14 +9,14 @@
 //! 发送前的本地校验：不支持的参数直接报错，绝不静默丢弃；不支持的组合直接拒绝。
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 use tauri::Emitter;
 
 use crate::tools::video_manifest::{
-    apply_transform, write_mapping, TransformCtx, VideoManifest, MEDIA_SLOTS, SCALAR_SLOTS,
+    apply_transform, snapshot, write_mapping, TransformCtx, MEDIA_SLOTS, SCALAR_SLOTS,
 };
 use crate::tools::video_transport::{self, Execution};
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
@@ -88,15 +88,6 @@ impl GenerateVideoTool {
             );
         }
         log::info!("[GenerateVideo] 进度: {}", message);
-    }
-}
-
-/// 内置清单只解析一次
-fn manifest() -> Result<&'static VideoManifest, String> {
-    static CACHE: OnceLock<Result<VideoManifest, String>> = OnceLock::new();
-    match CACHE.get_or_init(VideoManifest::builtin) {
-        Ok(manifest) => Ok(manifest),
-        Err(error) => Err(format!("[manifest_invalid] {}", error)),
     }
 }
 
@@ -330,7 +321,9 @@ impl ToolHandler for GenerateVideoTool {
         self.validate_model(&model, &provider)?;
 
         // ── 选规则并做本地校验 ──
-        let manifest = manifest()?;
+        let effective =
+            snapshot().map_err(|error| format!("[manifest_invalid] {}", error))?;
+        let manifest = &effective.manifest;
         let (rule, verified) = manifest
             .select(&model)
             .ok_or_else(|| format!("[manifest_invalid] 模型 '{}' 未命中任何规则", model))?;
@@ -464,6 +457,8 @@ impl ToolHandler for GenerateVideoTool {
             .collect();
         let echo = json!({
             "manifestVersion": manifest.version,
+            "manifestSource": effective.source.as_str(),
+            "manifestFetchedAt": effective.fetched_at,
             "matchedRule": rule.match_pattern,
             "createPath": rule.transport.create,
             "verified": verified,

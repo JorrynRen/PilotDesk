@@ -48,6 +48,8 @@ pub const AGENTS_CONFIG_PATH: &str = "/server/market/agents-config/agents-config
 pub const PLUGINS_INDEX_PATH: &str = "/server/market/plugins/plugins-index.json";
 pub const INSPIRATIONS_INDEX_PATH: &str = "/server/market/inspirations/index.json";
 pub const WORKFLOW_INDEX_PATH: &str = "/server/market/workflow/workflow-index.json";
+/// 工具模型清单：按「工具」而非具体模态命名，视频 / 图片清单同目录
+pub const VIDEO_MODELS_PATH: &str = "/server/market/tool-models/video-models.json";
 #[allow(dead_code)]
 pub const PLUGINS_DIR_PATH: &str = "/server/market/plugins";
 
@@ -106,8 +108,11 @@ fn http_client() -> reqwest::Client {
         .expect("Failed to build HTTP client")
 }
 
-/// 从单个 URL 获取文本内容（按 `max_attempts` 重试）
-async fn fetch_url(url: &str, max_attempts: u32) -> Result<String, String> {
+/// 从单个 URL 获取文本内容（按 `max_attempts` 重试）。
+///
+/// `pub(crate)`：工具模型清单需要逐源比较 `version`（取最高），
+/// 不能沿用「首个成功源即返回」的 [`fetch_market_text`]。
+pub(crate) async fn fetch_url(url: &str, max_attempts: u32) -> Result<String, String> {
     let mut last_err = String::new();
     for attempt in 1..=max_attempts {
         match http_client().get(url).send().await {

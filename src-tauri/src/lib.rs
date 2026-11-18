@@ -2894,6 +2894,11 @@ pub fn run() {
             commands::skills::skill_read_entry,
             commands::skills::skill_write_entry,
             commands::voice::transcribe_audio,
+            commands::video::video_manifest_info,
+            commands::video::video_manifest_source,
+            commands::video::save_video_manifest,
+            commands::video::refresh_video_manifest,
+            commands::video::reset_video_manifest,
             plugin::plugin_discover,
             plugin::plugin_list,
             plugin::plugin_enable,
@@ -3284,6 +3289,14 @@ pub fn run() {
 
             // ACP 官方目录后台刷新（24h TTL：缓存新鲜则直接返回，过期才打远端）
             agent::registry::spawn_background_refresh();
+
+            // 工具模型清单：先加载本地编辑层，再按 24h TTL 后台刷新市场缓存。
+            // 两者失败都只记日志，工具始终能回落到内置基线。
+            match pool.get() {
+                Ok(conn) => tools::video_manifest::init_local(&conn),
+                Err(e) => log::warn!("[VideoManifest] 取主库连接失败，跳过本地编辑加载：{}", e),
+            }
+            tools::video_manifest::spawn_background_refresh();
 
             // 启动云同步后台任务（每 10 分钟一次；仅「开关开启 + 已登录 + 有能力」时真正执行，
             // 其余静默跳过，失败只记日志——不影响离线可用）

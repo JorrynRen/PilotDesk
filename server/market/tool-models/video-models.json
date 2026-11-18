@@ -1,0 +1,241 @@
+{
+  "schemaVersion": 1,
+  "version": 1,
+  "updatedAt": "2026-11-18",
+  "rules": [
+    {
+      "match": "*",
+      "transport": {
+        "create": "/videos",
+        "poll": "/videos/{id}",
+        "content": "/videos/{id}/content",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "task": {
+        "idPaths": ["id", "task_id", "video_id"],
+        "statusPath": "status",
+        "successValues": ["completed"],
+        "failureValues": ["failed", "cancelled"],
+        "errorPath": "error.message"
+      },
+      "responseMode": "url",
+      "defaults": true,
+      "note": "OpenAI 兼容 /videos 形态。未命中条目的模型回落到此，回执标注未经清单验证",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "firstFrame": { "field": "image" },
+        "duration": { "field": "seconds", "transform": { "type": "string" } },
+        "aspectRatio": {
+          "field": "size",
+          "transform": { "type": "aspect_resolution_to_size", "defaultResolution": "720p" }
+        }
+      },
+      "limits": {},
+      "resultPaths": ["data.0.url", "data.0.video_url", "data.url", "url"]
+    },
+    {
+      "match": "*veo*",
+      "transport": {
+        "create": "/models/{model}:predictLongRunning",
+        "poll": "/{id}",
+        "auth": "x-goog-api-key",
+        "body": "json"
+      },
+      "task": {
+        "idPaths": ["name"],
+        "statusPath": "done",
+        "successValues": [true],
+        "failureValues": [true],
+        "errorPath": "error"
+      },
+      "responseMode": "url",
+      "note": "Veo predictLongRunning。参考图只接受 base64 或 gcsUri，公网 URL 在需要字节时按需下载；延长源需视频对象，P1 不开放",
+      "mapping": {
+        "prompt": { "field": "instances.0.prompt" },
+        "firstFrame": {
+          "field": "instances.0.image",
+          "transform": { "type": "data_uri_to_image_object" }
+        },
+        "lastFrame": {
+          "field": "instances.0.lastFrame",
+          "transform": { "type": "data_uri_to_image_object" }
+        },
+        "referenceImages": {
+          "field": "instances.0.referenceImages",
+          "transform": { "type": "data_uri_to_image_object_array", "referenceType": "asset" }
+        },
+        "duration": { "field": "parameters.durationSeconds", "transform": { "type": "number" } },
+        "aspectRatio": { "field": "parameters.aspectRatio" },
+        "resolution": { "field": "parameters.resolution" },
+        "negativePrompt": { "field": "parameters.negativePrompt" },
+        "seed": { "field": "parameters.seed", "transform": { "type": "number" } }
+      },
+      "limits": {
+        "referenceImages": 3,
+        "durations": [4, 6, 8],
+        "aspectRatios": ["16:9", "9:16"],
+        "resolutions": ["720p", "1080p", "4k"]
+      },
+      "resultPaths": ["response.generateVideoResponse.generatedSamples.0.video.uri"]
+    },
+    {
+      "match": "*kling*",
+      "transport": {
+        "create": "/videos/image2video",
+        "poll": "/videos/image2video/{id}",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "task": {
+        "idPaths": ["data.task_id"],
+        "statusPath": "data.task_status",
+        "successValues": ["succeed"],
+        "failureValues": ["failed"],
+        "errorPath": "data.task_status_msg"
+      },
+      "responseMode": "url",
+      "note": "Kling image2video。该接口无 aspect_ratio 与 seed；多图与视频参考在 omni 接口，P1 不开放",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "firstFrame": { "field": "image", "transform": { "type": "data_uri_to_base64" } },
+        "lastFrame": { "field": "image_tail", "transform": { "type": "data_uri_to_base64" } },
+        "duration": {
+          "field": "duration",
+          "transform": { "type": "enum_map", "values": { "5": "5", "10": "10" } }
+        },
+        "negativePrompt": { "field": "negative_prompt" }
+      },
+      "limits": { "durations": [5, 10] },
+      "resultPaths": ["data.task_result.videos.0.url"]
+    },
+    {
+      "match": "*seedance-2*",
+      "transport": {
+        "create": "/contents/generations/tasks",
+        "poll": "/contents/generations/tasks/{id}",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "task": {
+        "idPaths": ["id"],
+        "statusPath": "status",
+        "successValues": ["succeeded"],
+        "failureValues": ["failed", "cancelled"],
+        "errorPath": "error.message"
+      },
+      "responseMode": "url",
+      "note": "Seedance 2.x。多模态输入走 content 数组，用 role 区分语义",
+      "mapping": {
+        "prompt": { "field": "content[].text", "const": { "content[].type": "text" } },
+        "firstFrame": {
+          "field": "content[].image_url.url",
+          "const": { "content[].type": "image_url", "content[].role": "first_frame" }
+        },
+        "lastFrame": {
+          "field": "content[].image_url.url",
+          "const": { "content[].type": "image_url", "content[].role": "last_frame" }
+        },
+        "referenceImages": {
+          "field": "content[].image_url.url",
+          "const": { "content[].type": "image_url", "content[].role": "reference_image" }
+        },
+        "referenceVideo": {
+          "field": "content[].video_url.url",
+          "const": { "content[].type": "video_url", "content[].role": "reference_video" }
+        },
+        "duration": { "field": "duration", "transform": { "type": "number" } },
+        "aspectRatio": { "field": "ratio" },
+        "resolution": { "field": "resolution" },
+        "seed": { "field": "seed", "transform": { "type": "number" } }
+      },
+      "limits": {
+        "referenceImages": 9,
+        "durations": [4, 5, 8, 10],
+        "aspectRatios": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"],
+        "resolutions": ["480p", "720p", "1080p", "4k"]
+      },
+      "resultPaths": ["content.video_url"]
+    },
+    {
+      "match": "*seedance*",
+      "transport": {
+        "create": "/contents/generations/tasks",
+        "poll": "/contents/generations/tasks/{id}",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "task": {
+        "idPaths": ["id"],
+        "statusPath": "status",
+        "successValues": ["succeeded"],
+        "failureValues": ["failed", "cancelled"],
+        "errorPath": "error.message"
+      },
+      "responseMode": "url",
+      "note": "Seedance 1.x 及更早系列。无参考视频与多参考图",
+      "mapping": {
+        "prompt": { "field": "content[].text", "const": { "content[].type": "text" } },
+        "firstFrame": {
+          "field": "content[].image_url.url",
+          "const": { "content[].type": "image_url", "content[].role": "first_frame" }
+        },
+        "lastFrame": {
+          "field": "content[].image_url.url",
+          "const": { "content[].type": "image_url", "content[].role": "last_frame" }
+        },
+        "duration": { "field": "duration", "transform": { "type": "number" } },
+        "aspectRatio": { "field": "ratio" },
+        "resolution": { "field": "resolution" },
+        "seed": { "field": "seed", "transform": { "type": "number" } }
+      },
+      "limits": {
+        "durations": [4, 5, 8, 10],
+        "aspectRatios": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"],
+        "resolutions": ["480p", "720p", "1080p"]
+      },
+      "resultPaths": ["content.video_url"]
+    },
+    {
+      "match": "*luma*",
+      "transport": {
+        "create": "/generations",
+        "poll": "/generations/{id}",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "task": {
+        "idPaths": ["id"],
+        "statusPath": "state",
+        "successValues": ["completed"],
+        "failureValues": ["failed"],
+        "errorPath": "failure_reason"
+      },
+      "responseMode": "url",
+      "note": "Luma Dream Machine。keyframes 为对象，需同时写入 type=image",
+      "mapping": {
+        "prompt": { "field": "prompt" },
+        "firstFrame": {
+          "field": "keyframes.frame0.url",
+          "const": { "keyframes.frame0.type": "image" }
+        },
+        "lastFrame": {
+          "field": "keyframes.frame1.url",
+          "const": { "keyframes.frame1.type": "image" }
+        },
+        "duration": {
+          "field": "duration",
+          "transform": { "type": "enum_map", "values": { "5": "5s", "9": "9s" } }
+        },
+        "aspectRatio": { "field": "aspect_ratio" },
+        "resolution": { "field": "resolution" }
+      },
+      "limits": {
+        "durations": [5, 9],
+        "aspectRatios": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
+        "resolutions": ["540p", "720p", "1080p"]
+      },
+      "resultPaths": ["assets.video"]
+    }
+  ]
+}
