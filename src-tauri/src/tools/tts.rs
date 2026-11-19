@@ -307,8 +307,8 @@ impl TtsTool {
 
         Ok((
             format!(
-                "语音已生成（规则 {}）：\n![音频](<{}>)\n\nrequestEcho:\n{}",
-                rule.match_pattern, path, echo
+                "语音已生成（规则 {}）：\n![音频](<{}>)",
+                rule.match_pattern, path
             ),
             ToolArtifacts {
                 urls: Vec::new(),

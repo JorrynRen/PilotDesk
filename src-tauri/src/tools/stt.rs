@@ -394,10 +394,7 @@ impl SttTool {
             })?;
 
         Ok((
-            format!(
-                "转写文本（规则 {}）：\n{}\n\nrequestEcho:\n{}",
-                rule.match_pattern, text, echo
-            ),
+            format!("转写文本（规则 {}）：\n{}", rule.match_pattern, text),
             ToolArtifacts {
                 urls: Vec::new(),
                 local_paths: Vec::new(),

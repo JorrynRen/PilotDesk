@@ -509,10 +509,9 @@ impl GenerateVideoTool {
         if let Some(url) = &result.video_url {
             return Ok((
                 format!(
-                    "视频已生成（任务 {}）：\n![视频](<{}>)\n\nrequestEcho:\n{}",
+                    "视频已生成（任务 {}）：\n![视频](<{}>)",
                     result.task_id.as_deref().unwrap_or("-"),
-                    url,
-                    echo
+                    url
                 ),
                 ToolArtifacts {
                     urls: vec![url.clone()],
@@ -524,10 +523,7 @@ impl GenerateVideoTool {
         }
         if let Some(path) = &result.local_path {
             return Ok((
-                format!(
-                    "视频已生成，已保存到本地：{}\n\nrequestEcho:\n{}",
-                    path, echo
-                ),
+                format!("视频已生成，已保存到本地：{}", path),
                 ToolArtifacts {
                     urls: Vec::new(),
                     local_paths: vec![path.clone()],

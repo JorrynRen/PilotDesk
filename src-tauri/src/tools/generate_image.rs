@@ -442,10 +442,9 @@ impl GenerateImageTool {
 
         Ok((
             format!(
-                "已生成 {} 张图片：\n{}\n\nrequestEcho:\n{}",
+                "已生成 {} 张图片：\n{}",
                 images.len(),
-                images.join("\n"),
-                echo
+                images.join("\n")
             ),
             artifacts,
         ))
