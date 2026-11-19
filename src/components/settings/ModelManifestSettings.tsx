@@ -83,12 +83,12 @@ const KIND_META: Record<ModelManifestKind, { title: string; description: string;
     file: 'image-models.json',
   },
   tts: {
-    title: '语音合成（TTS）',
+    title: '语音合成（TTS）模型适配',
     description: '语音合成模型的端点、鉴权、参数映射与输出格式由这份清单决定；保存后立即生效，无需重启',
     file: 'tts-models.json',
   },
   stt: {
-    title: '语音转写（STT）',
+    title: '语音转写（STT）模型适配',
     description: '语音转写模型的端点、表单字段与结果取值由这份清单决定；保存后立即生效，无需重启',
     file: 'stt-models.json',
   },
