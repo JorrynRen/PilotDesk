@@ -2052,21 +2052,8 @@ impl WorkflowEngine {
                                     if let Some(val) = output.output.get("content") {
                                         m.insert("output".into(), val.clone());
                                     }
-                                    let file_paths: Vec<Value> = output
-                                        .output
-                                        .get("files")
-                                        .and_then(|v| v.as_array())
-                                        .map(|files| {
-                                            files
-                                                .iter()
-                                                .filter_map(|f| f.get("path"))
-                                                .filter(|p| p.is_string())
-                                                .cloned()
-                                                .collect()
-                                        })
-                                        .unwrap_or_default();
-                                    if !file_paths.is_empty() {
-                                        m.insert("filePaths".into(), Value::Array(file_paths));
+                                    if let Some(paths) = output.output.get("filePaths") {
+                                        m.insert("filePaths".into(), paths.clone());
                                     }
                                     if let Some(urls) = output.output.get("urls").cloned() {
                                         m.insert("urls".into(), urls);
@@ -4983,20 +4970,8 @@ fn rebuild_node_context_value(
                     .cloned()
                     .unwrap_or_else(|| node_output.clone()),
             );
-            let file_paths: Vec<Value> = node_output
-                .get("files")
-                .and_then(|v| v.as_array())
-                .map(|files| {
-                    files
-                        .iter()
-                        .filter_map(|f| f.get("path"))
-                        .filter(|p| p.is_string())
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            if !file_paths.is_empty() {
-                m.insert("filePaths".into(), Value::Array(file_paths));
+            if let Some(paths) = node_output.get("filePaths") {
+                m.insert("filePaths".into(), paths.clone());
             }
             if let Some(urls) = node_output.get("urls").cloned() {
                 m.insert("urls".into(), urls);
@@ -5252,10 +5227,7 @@ mod tests {
                 &serde_json::json!({
                     "content": "已生成 2 张图片",
                     "urls": ["https://example.com/a.png", "https://example.com/b.png"],
-                    "files": [
-                        {"path": "E:\\out\\a.png", "type": "image"},
-                        {"path": "E:\\out\\b.png", "type": "image"}
-                    ]
+                    "filePaths": ["E:\\out\\a.png", "E:\\out\\b.png"]
                 }),
                 None
             ),

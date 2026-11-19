@@ -394,9 +394,12 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType): OptionGroup[] | unde
     baseOptions.push({ value: '{{session_id}}', label: 'session_id（会话ID）' });
   }
 
-  // 媒体节点：全部远程结果 URL（执行结果直接用通用项 content）
+  // 媒体节点：全部产物路径与远程结果 URL（执行结果直接用通用项 content）
   if (nodeType === 'media') {
-    baseOptions.push({ value: '{{urls}}', label: 'urls（全部远程结果 URL）' });
+    baseOptions.push(
+      { value: '{{filePaths}}', label: 'filePaths（全部产物路径）' },
+      { value: '{{urls}}', label: 'urls（全部远程结果 URL）' },
+    );
   }
 
   return [{
