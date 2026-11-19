@@ -394,13 +394,9 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType): OptionGroup[] | unde
     baseOptions.push({ value: '{{session_id}}', label: 'session_id（会话ID）' });
   }
 
-  // 媒体节点：远程 URL 与产物文件明细（文本结果直接用通用项 content）
+  // 媒体节点：全部远程结果 URL（执行结果直接用通用项 content）
   if (nodeType === 'media') {
-    baseOptions.push(
-      { value: '{{urls[0]}}', label: 'urls[0]（远程结果 URL）' },
-      { value: '{{files[0].path}}', label: 'files[0].path（产物路径）' },
-      { value: '{{files[0].type}}', label: 'files[0].type（产物类型）' },
-    );
+    baseOptions.push({ value: '{{urls}}', label: 'urls（全部远程结果 URL）' });
   }
 
   return [{
@@ -549,11 +545,12 @@ function getPredecessorOutputOptions(
       });
     }
 
-    // 媒体节点未配置输出映射时，引擎默认暴露 output（执行结果）与 filePath（首个产物路径）
+    // 媒体节点未配置输出映射时，引擎默认暴露 output / filePaths / urls
     if (isMedia && outputKeys.length === 0) {
       fieldList.push(
         { value: `{{output.${pn.id}.${stageId}}}`, label: 'output（执行结果）' },
-        { value: `{{filePath.${pn.id}.${stageId}}}`, label: 'filePath（产物路径）' },
+        { value: `{{filePaths.${pn.id}.${stageId}}}`, label: 'filePaths（全部产物路径）' },
+        { value: `{{urls.${pn.id}.${stageId}}}`, label: 'urls（全部远程结果 URL）' },
       );
     }
 
