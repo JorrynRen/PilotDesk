@@ -150,7 +150,7 @@ import { ToolSettings } from '../components/settings/ToolSettings';
 import { PluginManager } from '../components/plugin/PluginManager';
 import { SkillBrowser } from '../components/panels/SkillBrowser';
 import { VoiceInputSettings } from '../components/settings/VoiceInputSettings';
-import { AudioModelManifestSettings, ModelManifestSettings } from '../components/settings/ModelManifestSettings';
+import { ToolModelManifestSettings } from '../components/settings/ModelManifestSettings';
 import { KbModelSettings } from '../components/settings/KbModelSettings';
 import { KbRootSettings } from '../components/settings/KbRootSettings';
 import { KbCloudSourceSettings } from '../components/settings/KbCloudSourceSettings';
@@ -920,7 +920,25 @@ function SortableProviderCard({
 
 
 /** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
-type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission' | 'video' | 'image' | 'audio';
+type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission' | 'models';
+
+/** 旧深链（video / image / audio / manifests）统一落到「模型适配」 */
+function normalizeApiSub(raw: string | null | undefined): ApiSubTab | null {
+  if (!raw) return null;
+  if (raw === 'video' || raw === 'image' || raw === 'audio' || raw === 'manifests') return 'models';
+  if (
+    raw === 'env' ||
+    raw === 'providers' ||
+    raw === 'usage' ||
+    raw === 'voice' ||
+    raw === 'mode' ||
+    raw === 'permission' ||
+    raw === 'models'
+  ) {
+    return raw;
+  }
+  return null;
+}
 
 function ApiConfig({
   deepLinkSub,
@@ -945,20 +963,11 @@ function ApiConfig({
   const urlApiTab = searchParams.get('apiTab');
   // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
   // 页面内点击优先，故用 override 叠加在 URL 之上——避免在 effect 里 setState 的级联渲染。
-  const [apiTabOverride, setApiTabOverride] = useState<ApiSubTab | null>(deepLinkSub ?? null);
-  // 旧深链 apiTab=manifests 统一落到「视频模型适配」，避免历史链接失效
-  const urlSub: ApiSubTab =
-    urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice'
-      ? urlApiTab
-      : urlApiTab === 'manifests' || urlApiTab === 'video'
-        ? 'video'
-        : urlApiTab === 'image'
-          ? 'image'
-          : urlApiTab === 'audio'
-            ? 'audio'
-            : hideProviders
-            ? 'env'
-            : 'providers';
+  // 旧深链（apiTab=manifests / video / image / audio）统一落到「模型适配」，避免历史链接失效
+  const [apiTabOverride, setApiTabOverride] = useState<ApiSubTab | null>(
+    normalizeApiSub(deepLinkSub) ?? null
+  );
+  const urlSub: ApiSubTab = normalizeApiSub(urlApiTab) ?? (hideProviders ? 'env' : 'providers');
   const apiTab: ApiSubTab = apiTabOverride ?? urlSub;
 
   // Load providers from SQLite on mount
@@ -1202,9 +1211,7 @@ function ApiConfig({
           { key: 'voice', label: t('settings.sub.api.voice', '语音识别') },
           { key: 'mode', label: t('settings.sub.api.mode', '对话模式') },
           { key: 'permission', label: t('settings.sub.api.permission', '权限规则') },
-          { key: 'video', label: t('settings.sub.api.video', '视频模型适配') },
-          { key: 'image', label: t('settings.sub.api.image', '图片模型适配') },
-          { key: 'audio', label: t('settings.sub.api.audio', '语音模型适配') },
+          { key: 'models', label: t('settings.sub.api.models', '模型适配') },
         ] as const)
           .filter((tab) => !(hideProviders && tab.key === 'providers'))
           .map((tab) => (
@@ -1290,9 +1297,7 @@ function ApiConfig({
       {apiTab === 'voice' && <VoiceInputSettings />}
       {apiTab === 'mode' && <ModePromptSettings />}
       {apiTab === 'permission' && <PermissionSettings />}
-      {apiTab === 'video' && <ModelManifestSettings kind="video" />}
-      {apiTab === 'image' && <ModelManifestSettings kind="image" />}
-      {apiTab === 'audio' && <AudioModelManifestSettings />}
+      {apiTab === 'models' && <ToolModelManifestSettings />}
     </div>
   );
 }

@@ -1381,6 +1381,7 @@ mod tests {
                 cwd TEXT DEFAULT '',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
                 origin TEXT,
                 project_id TEXT
              );

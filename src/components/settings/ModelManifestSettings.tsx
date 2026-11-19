@@ -94,28 +94,35 @@ const KIND_META: Record<ModelManifestKind, { title: string; description: string;
   },
 };
 
-/** 「语音模型适配」页签：页内二级切换语音合成 / 语音转写 */
-export function AudioModelManifestSettings() {
-  const [kind, setKind] = useState<'tts' | 'stt'>('tts');
+const MANIFEST_TABS: { kind: ModelManifestKind; label: string }[] = [
+  { kind: 'video', label: '视频' },
+  { kind: 'image', label: '图片' },
+  { kind: 'tts', label: '语音合成' },
+  { kind: 'stt', label: '语音转写' },
+];
+
+/** 「模型适配」页签：视频 / 图片 / 语音合成 / 语音转写 二级切换 */
+export function ToolModelManifestSettings() {
+  const [kind, setKind] = useState<ModelManifestKind>('video');
   return (
     <div className="space-y-4">
       <div
         className="inline-flex rounded-lg p-1"
         style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
       >
-        {(['tts', 'stt'] as const).map((item) => (
+        {MANIFEST_TABS.map((item) => (
           <button
-            key={item}
+            key={item.kind}
             type="button"
-            onClick={() => setKind(item)}
+            onClick={() => setKind(item.kind)}
             className="rounded px-3 py-1 text-xs transition-colors"
             style={
-              kind === item
+              kind === item.kind
                 ? { backgroundColor: 'var(--accent)', color: '#fff' }
                 : { color: 'var(--text-secondary)' }
             }
           >
-            {item === 'tts' ? '语音合成' : '语音转写'}
+            {item.label}
           </button>
         ))}
       </div>

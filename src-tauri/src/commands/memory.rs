@@ -297,10 +297,11 @@ mod project_root_tests {
 
         let resolved = resolve_memory_root(&conn, Some(&raw));
 
-        assert_eq!(
-            std::path::Path::new(&resolved),
-            std::fs::canonicalize(&root).unwrap()
+        // 与 normalize_absolute_path 一致：去掉 Windows verbatim 前缀后再比较
+        let expected = crate::utils::paths::strip_windows_verbatim_prefix(
+            &std::fs::canonicalize(&root).unwrap().to_string_lossy(),
         );
+        assert_eq!(resolved, expected);
         assert!(std::path::Path::new(&resolved).is_absolute());
         let _ = std::fs::remove_dir_all(&root);
     }
