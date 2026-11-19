@@ -9,8 +9,8 @@
 //!   本执行器再用 [`TemplateEngine::resolve_value`] 递归解析 `args` 中的占位符
 //!   （单个占位符保留原始类型，文本内嵌则插值，未解析按空处理并记录日志）；
 //! - `provider` / `model` 必填，不做隐式回退；
-//! - 输出统一为 `{ content, kind, text, urls, localPaths, files, provider, model, manifest }`，
-//!   `content` 与人工交互节点同名，便于复用默认输出映射。
+//! - 输出统一为 `{ content, urls, files }`：`content` 与人工交互节点同名，便于复用默认输出映射；
+//!   `files` 携带产物路径与类型（`files[0].path` / `files[0].type`）。
 
 use crate::db::init::DbPool;
 use crate::tools::generate_image::GenerateImageTool;
@@ -328,14 +328,8 @@ impl NodeExecutorTrait for MediaExecutor {
 
         let output = json!({
             "content": text,
-            "kind": kind,
-            "text": text,
             "urls": artifacts.urls,
-            "localPaths": artifacts.local_paths,
             "files": artifacts.files,
-            "provider": provider,
-            "model": model,
-            "manifest": artifacts.manifest.unwrap_or(Value::Null),
         });
 
         Ok(NodeOutput {

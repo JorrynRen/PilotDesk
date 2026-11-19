@@ -2040,14 +2040,35 @@ impl WorkflowEngine {
                                 );
                             } else {
                                 // 无 outputMapping：
-                                // - interact / media 节点：从 { content: xxx } 中提取 content 暴露为 output
+                                // - media 节点：暴露 output（content）与 filePath（files[0].path）
+                                // - interact 节点：从 { content: xxx } 中提取 content 暴露为 output
                                 // - agent 节点：裸字符串直接暴露为 output
                                 // - 其他节点：默认不暴露任何字段（空对象）
 
-                                let exposed = if matches!(
-                                    node.node_type,
-                                    WorkflowNodeType::Interact | WorkflowNodeType::Media
-                                ) {
+                                let exposed = if node.node_type == WorkflowNodeType::Media {
+                                    // 媒体节点无 outputMapping：默认暴露执行结果与首个产物路径，
+                                    // 下游可直接引用 {{output.节点ID.阶段ID}} / {{filePath.节点ID.阶段ID}}
+                                    let mut m = serde_json::Map::new();
+                                    if let Some(val) = output.output.get("content") {
+                                        m.insert("output".into(), val.clone());
+                                    }
+                                    if let Some(path) = output
+                                        .output
+                                        .get("files")
+                                        .and_then(|v| v.as_array())
+                                        .and_then(|arr| arr.first())
+                                        .and_then(|f| f.get("path"))
+                                        .and_then(|v| v.as_str())
+                                    {
+                                        m.insert("filePath".into(), Value::String(path.to_string()));
+                                    }
+                                    log::info!(
+                                        "[WorkflowEngine] media 节点 {} 无 outputMapping，暴露 output + filePath = {:?}",
+                                        nid,
+                                        m.get("filePath")
+                                    );
+                                    m
+                                } else if node.node_type == WorkflowNodeType::Interact {
                                     let mut m = serde_json::Map::new();
                                     let content_val = output.output.get("content");
                                     let output_keys: Vec<String> = output
@@ -4916,7 +4937,8 @@ fn rebuild_applies_output_mapping(node: &WorkflowNode) -> bool {
 /// - 有 outputMapping（且 [`rebuild_applies_output_mapping`] 为真）：按 [`expose_node_output`]
 ///   解析，与实时执行写入的值一致；
 /// - 无 outputMapping：与实时执行的「无 outputMapping」分支对齐 —— Agent 节点裸输出暴露为
-///   `output`，Interact 节点把 `{content: …}` 的 content 暴露为 `output`，其余类型写入空对象；
+///   `output`，Interact 节点把 `{content: …}` 的 content 暴露为 `output`，
+///   Media 节点暴露 `output`（content）与 `filePath`（files[0].path），其余类型写入空对象；
 ///   End 在实时执行里写的是输入映射的解析结果，无法从 node/result 还原，保留原始输出。
 ///   两侧口径一致，断点执行与全量执行的模板可解析性才相同。
 ///
@@ -4942,7 +4964,30 @@ fn rebuild_node_context_value(
 
     match node_type {
         WorkflowNodeType::Agent => serde_json::json!({ "output": node_output }),
-        WorkflowNodeType::Interact | WorkflowNodeType::Media => {
+        WorkflowNodeType::Media => {
+            let mut m = serde_json::Map::new();
+            let mut insert = |key: &str, value: Value| {
+                m.insert(key.to_string(), value);
+            };
+            insert(
+                "output",
+                node_output
+                    .get("content")
+                    .cloned()
+                    .unwrap_or_else(|| node_output.clone()),
+            );
+            if let Some(path) = node_output
+                .get("files")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|f| f.get("path"))
+                .and_then(|v| v.as_str())
+            {
+                insert("filePath", Value::String(path.to_string()));
+            }
+            Value::Object(m)
+        }
+        WorkflowNodeType::Interact => {
             serde_json::json!({ "output": node_output.get("content").unwrap_or(node_output) })
         }
         WorkflowNodeType::End => node_output.clone(),
@@ -5182,6 +5227,23 @@ mod tests {
                 None
             ),
             serde_json::json!({"output": "裸值"})
+        );
+        // Media 节点额外暴露首个产物路径
+        assert_eq!(
+            rebuild_node_context_value(
+                &WorkflowNodeType::Media,
+                None,
+                &serde_json::json!({
+                    "content": "已生成 1 张图片",
+                    "urls": ["https://example.com/a.png"],
+                    "files": [{"path": "E:\\out\\a.png", "type": "image"}]
+                }),
+                None
+            ),
+            serde_json::json!({
+                "output": "已生成 1 张图片",
+                "filePath": "E:\\out\\a.png"
+            })
         );
     }
 

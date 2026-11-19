@@ -394,14 +394,12 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType): OptionGroup[] | unde
     baseOptions.push({ value: '{{session_id}}', label: 'session_id（会话ID）' });
   }
 
-  // 媒体节点：文本结果、远程 URL、本地文件路径与文件明细
+  // 媒体节点：远程 URL 与产物文件明细（文本结果直接用通用项 content）
   if (nodeType === 'media') {
     baseOptions.push(
-      { value: '{{text}}', label: 'text（文本 / 转写结果）' },
       { value: '{{urls[0]}}', label: 'urls[0]（远程结果 URL）' },
-      { value: '{{localPaths[0]}}', label: 'localPaths[0]（本地文件路径）' },
-      { value: '{{files[0].path}}', label: 'files[0].path（文件路径）' },
-      { value: '{{files[0].type}}', label: 'files[0].type（文件类型）' },
+      { value: '{{files[0].path}}', label: 'files[0].path（产物路径）' },
+      { value: '{{files[0].type}}', label: 'files[0].type（产物类型）' },
     );
   }
 
@@ -536,8 +534,9 @@ function getPredecessorOutputOptions(
     // 节点输出映射：key 是用户自定义参数名，value 是引用路径（如 content, session_id 等）
     const outputMapping = pn.outputMapping || {};
     const outputKeys = Object.keys(outputMapping);
+    const isMedia = pn.type === 'media';
 
-    if (outputKeys.length === 0 && pn.type !== 'agent') continue;
+    if (outputKeys.length === 0 && pn.type !== 'agent' && !isMedia) continue;
 
     const fieldList: { value: string; label: string }[] = [];
 
@@ -548,6 +547,14 @@ function getPredecessorOutputOptions(
         value: `{{${key}.${pn.id}.${stageId}}}`,
         label: key,
       });
+    }
+
+    // 媒体节点未配置输出映射时，引擎默认暴露 output（执行结果）与 filePath（首个产物路径）
+    if (isMedia && outputKeys.length === 0) {
+      fieldList.push(
+        { value: `{{output.${pn.id}.${stageId}}}`, label: 'output（执行结果）' },
+        { value: `{{filePath.${pn.id}.${stageId}}}`, label: 'filePath（产物路径）' },
+      );
     }
 
     // Agent 节点的 session_id 需通过 outputMapping 显式声明后才能被引用
