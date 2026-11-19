@@ -3075,54 +3075,58 @@ impl WorkflowEngine {
             }
         }
 
-        // 开始节点：将输出映射作为初始上下文值
+        // 开始节点：将输出映射作为初始上下文值。
+        //
+        // 无论有没有输出映射都必须写入 context[node.id]：边连通性判断（any_incoming_edge_active）
+        // 以「上游出现在 context 里」作为「已执行」的证据。只在有映射时写入，会让未配置输出映射的
+        // 开始节点被误判为「上游未产出」，导致下游整链跳过；无映射时写空对象，与其它节点类型的
+        // 无映射分支保持一致。
 
         for stage in &def.stages {
             for node in &stage.nodes {
-                if node.node_type == WorkflowNodeType::Start {
-                    if let Some(mapping) = &node.output_mapping {
-                        if let Some(obj) = mapping.as_object() {
-                            // 开始节点：通过 TemplateEngine 解析 output_mapping 值
+                if node.node_type != WorkflowNodeType::Start {
+                    continue;
+                }
 
-                            // 支持 {{title}} 自动匹配 __input__.title（由 TemplateEngine 回退逻辑处理）
+                let mut output_obj = serde_json::Map::new();
+                if let Some(obj) = node.output_mapping.as_ref().and_then(|m| m.as_object()) {
+                    // 开始节点：通过 TemplateEngine 解析 output_mapping 值
 
-                            let ctx = context.lock().await.clone();
-                            let mut output_obj = serde_json::Map::new();
-                            for (k, v) in obj {
-                                if let Some(s) = v.as_str() {
-                                    // 宽松解析：未解析的占位符按空处理，不回退成 `{{...}}` 原文
-                                    let (resolved, unresolved_refs) =
-                                        TemplateEngine::resolve_lossy(s, &ctx);
-                                    if !unresolved_refs.is_empty() {
-                                        log::warn!(
-                                            "[WorkflowEngine] 开始节点 {} 输出映射[{}] 未解析（该值按空处理）：{:?}",
-                                            node.id, k, unresolved_refs
-                                        );
-                                    }
+                    // 支持 {{title}} 自动匹配 __input__.title（由 TemplateEngine 回退逻辑处理）
 
-                                    output_obj.insert(k.clone(), Value::String(resolved.clone()));
-
-                                    // 设置扁平键，支持简单 {{参数名}} 格式
-
-                                    context
-                                        .lock()
-                                        .await
-                                        .insert(k.clone(), Value::String(resolved));
-                                } else {
-                                    output_obj.insert(k.clone(), v.clone());
-                                    context.lock().await.insert(k.clone(), v.clone());
-                                }
+                    let ctx = context.lock().await.clone();
+                    for (k, v) in obj {
+                        if let Some(s) = v.as_str() {
+                            // 宽松解析：未解析的占位符按空处理，不回退成 `{{...}}` 原文
+                            let (resolved, unresolved_refs) =
+                                TemplateEngine::resolve_lossy(s, &ctx);
+                            if !unresolved_refs.is_empty() {
+                                log::warn!(
+                                    "[WorkflowEngine] 开始节点 {} 输出映射[{}] 未解析（该值按空处理）：{:?}",
+                                    node.id, k, unresolved_refs
+                                );
                             }
+
+                            output_obj.insert(k.clone(), Value::String(resolved.clone()));
+
+                            // 设置扁平键，支持简单 {{参数名}} 格式
 
                             context
                                 .lock()
                                 .await
-                                .insert(node.id.clone(), Value::Object(output_obj));
+                                .insert(k.clone(), Value::String(resolved));
+                        } else {
+                            output_obj.insert(k.clone(), v.clone());
+                            context.lock().await.insert(k.clone(), v.clone());
                         }
                     }
-
-                    break;
                 }
+
+                context
+                    .lock()
+                    .await
+                    .insert(node.id.clone(), Value::Object(output_obj));
+                break;
             }
         }
 
@@ -4411,7 +4415,7 @@ fn rebuild_context_from_records(
             // Start 在实时执行里走预填充（node/result 是定义原文），重建需重算。
             Some(node) if node.node_type == WorkflowNodeType::Start => {
                 let base = rebuild_resolution_base(&context, seed);
-                rebuild_start_node_value(node, &base).unwrap_or(node_output)
+                rebuild_start_node_value(node, &base)
             }
             Some(node) => {
                 let mapping = rebuild_applies_output_mapping(node)
@@ -4992,6 +4996,9 @@ fn rebuild_node_context_value(
 /// node/result 记的是定义原文；断点重建必须重算，否则 `{{<startId>.<field>}}` 取到的是
 /// `{{topic}}` 这样的原文，而不是解析后的值。
 ///
+/// 与实时预填充一致：没有 outputMapping 时返回空对象（**不是** `None`）。边连通性以 context
+/// 是否存在该节点键判断，返回 `None` 会让下游误判为「上游未产出」而整链跳过。
+///
 /// # Arguments
 ///
 /// * `node` - Start 节点定义
@@ -4999,13 +5006,11 @@ fn rebuild_node_context_value(
 ///
 /// # Returns
 ///
-/// `Some(object)` 为解析后的暴露对象；节点没有 outputMapping 对象时为 `None`，
-/// 由调用方退回 node/result 原文。
-fn rebuild_start_node_value(
-    node: &WorkflowNode,
-    context: &HashMap<String, Value>,
-) -> Option<Value> {
-    let mapping = node.output_mapping.as_ref()?.as_object()?;
+/// 解析后的暴露对象；无 outputMapping 时为空对象。
+fn rebuild_start_node_value(node: &WorkflowNode, context: &HashMap<String, Value>) -> Value {
+    let Some(mapping) = node.output_mapping.as_ref().and_then(|m| m.as_object()) else {
+        return Value::Object(serde_json::Map::new());
+    };
     let mut output_obj = serde_json::Map::new();
     for (key, value) in mapping {
         // 与实时预填充一致：未解析的占位符按空处理（不回退成 `{{...}}` 原文）；
@@ -5026,7 +5031,7 @@ fn rebuild_start_node_value(
         };
         output_obj.insert(key.clone(), resolved);
     }
-    Some(Value::Object(output_obj))
+    Value::Object(output_obj)
 }
 
 /// 重建上下文时 Start 节点 outputMapping 的解析基准。
@@ -5462,12 +5467,15 @@ mod tests {
 
         // 模板字段按种子解析，非字符串字段原样保留（与实时预填充一致）
         assert_eq!(
-            rebuild_start_node_value(&start, &context).unwrap(),
+            rebuild_start_node_value(&start, &context),
             serde_json::json!({"topic": "真实主题", "count": 3})
         );
 
-        // 无 outputMapping：调用方保持使用 node/result 原文
-        assert!(rebuild_start_node_value(&node("n_start", "start"), &context).is_none());
+        // 无 outputMapping：写入空对象（而不是 None），否则下游会被误判为「上游未产出」
+        assert_eq!(
+            rebuild_start_node_value(&node("n_start", "start"), &context),
+            serde_json::json!({})
+        );
     }
 
     #[test]
@@ -5491,6 +5499,25 @@ mod tests {
             context.get("n_start"),
             Some(&serde_json::json!({"topic": "真实主题"}))
         );
+    }
+
+    /// 开始节点没有输出映射时，重建上下文也必须写入该键（空对象）：
+    /// 否则下游边的连通性判断拿不到上游，会给出「上游节点未产出」并整链跳过。
+    #[test]
+    fn rebuild_start_without_mapping_exposes_empty_object() {
+        let def = definition(vec![stage(
+            "s1",
+            vec![node("n_start", "start"), node("n1", "agent")],
+        )]);
+        let outputs = outputs(&[("n_start", serde_json::json!({}))]);
+        let context = rebuild_context_from_records(
+            &outputs,
+            &sessions(&[]),
+            &def,
+            &scope(&[]),
+            &serde_json::json!({}),
+        );
+        assert_eq!(context.get("n_start"), Some(&serde_json::json!({})));
     }
 
     #[test]
