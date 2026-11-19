@@ -18,7 +18,7 @@ use crate::api_agent::skills::SkillLoader;
 use crate::api_agent::types::{ApiFormat, ToolDefinition};
 use crate::api_agent::web::SearchConfig;
 use crate::PendingApprovals;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod ask_user;
@@ -82,6 +82,33 @@ pub struct LocalPathArgument {
     pub path: String,
     /// 参数自身指定的相对路径基准；None 表示使用会话主工作目录。
     pub base: Option<String>,
+}
+
+/// 结构化工具产出（媒体工具用）：供工作流节点直接映射文件，无需解析 Markdown。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolArtifacts {
+    /// 远程结果 URL（图片 / 视频）
+    #[serde(default)]
+    pub urls: Vec<String>,
+    /// 本地落盘文件的绝对路径（音频、b64 图片、下载后的视频等）
+    #[serde(default)]
+    pub local_paths: Vec<String>,
+    /// 文件明细（路径 + 类型：image / video / audio / text）
+    #[serde(default)]
+    pub files: Vec<ToolFile>,
+    /// 命中规则与清单版本（`{"rule": "...", "version": "..."}`），供节点输出溯源
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<serde_json::Value>,
+}
+
+/// 单个产出文件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolFile {
+    pub path: String,
+    #[serde(rename = "type")]
+    pub file_type: String,
 }
 
 impl RiskLevel {
@@ -168,6 +195,18 @@ pub trait ToolHandler: Send + Sync {
     }
     /// 执行工具
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String>;
+
+    /// 执行工具并返回结构化产出（文本摘要 + 文件明细）。
+    ///
+    /// 默认实现退化为 [`ToolHandler::execute`] 且不带文件明细；媒体类工具覆写此方法，
+    /// 直接给出 urls / 本地路径，调用方（工作流 media 节点）无需解析 Markdown。
+    async fn execute_structured(
+        &self,
+        arguments: serde_json::Value,
+    ) -> Result<(String, ToolArtifacts), String> {
+        let text = self.execute(arguments).await?;
+        Ok((text, ToolArtifacts::default()))
+    }
 }
 
 /// 审批回调：返回 true 表示批准，false 表示拒绝

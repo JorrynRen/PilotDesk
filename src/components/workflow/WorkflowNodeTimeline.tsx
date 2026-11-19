@@ -52,13 +52,13 @@ const NODE_STATUS: Record<string, { label: string; color: string; bg: string; ic
 
 const NODE_TYPE_LABEL: Record<string, string> = {
   start: '开始', end: '结束', agent: '智能体', api: 'API', transform: '转换',
-  interact: '人工交互', plugin: '插件', subflow: '子工作流',
+  interact: '人工交互', media: '媒体生成', plugin: '插件', subflow: '子工作流',
 };
 
 /** 节点类型标记色（节点类型签标与文字色） */
 const NODE_TYPE_COLOR: Record<string, string> = {
   start: '#6B7280', end: '#6B7280', agent: '#3B82F6', api: '#8B5CF6',
-  transform: '#F59E0B', interact: '#EC4899', plugin: '#10B981', subflow: '#0EA5E9',
+  transform: '#F59E0B', interact: '#EC4899', media: '#DB61A2', plugin: '#10B981', subflow: '#0EA5E9',
 };
 
 /** 取不到类型时用中性灰（CSS 变量） */

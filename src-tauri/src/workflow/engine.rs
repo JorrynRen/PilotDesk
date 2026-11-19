@@ -685,6 +685,7 @@ impl WorkflowEngine {
                     "api" => "API",
                     "transform" => "代码转换",
                     "interact" => "人工交互",
+                    "media" => "媒体生成",
                     "subflow" => "子工作流",
                     _ => &type_str,
                 };
@@ -697,6 +698,9 @@ impl WorkflowEngine {
                         "script" => "脚本代码".to_string(),
                         "prompt" => "交互提示".to_string(),
                         "definitionId" => "子工作流".to_string(),
+                        "kind" => "媒体类型".to_string(),
+                        "provider" => "提供商".to_string(),
+                        "model" => "模型".to_string(),
                         _ => key.to_string(),
                     }
                 }
@@ -731,6 +735,15 @@ impl WorkflowEngine {
                         let mut m = Vec::new();
                         if get_param_str(&node.params, "prompt").map_or(true, |s| s.is_empty()) {
                             m.push("prompt");
+                        }
+                        m
+                    }
+                    "media" => {
+                        let mut m = Vec::new();
+                        for key in ["kind", "provider", "model"] {
+                            if get_param_str(&node.params, key).map_or(true, |s| s.is_empty()) {
+                                m.push(key);
+                            }
                         }
                         m
                     }
@@ -2027,11 +2040,14 @@ impl WorkflowEngine {
                                 );
                             } else {
                                 // 无 outputMapping：
-                                // - interact 节点：从 { content: xxx } 中提取 content 暴露为 output
+                                // - interact / media 节点：从 { content: xxx } 中提取 content 暴露为 output
                                 // - agent 节点：裸字符串直接暴露为 output
                                 // - 其他节点：默认不暴露任何字段（空对象）
 
-                                let exposed = if node.node_type == WorkflowNodeType::Interact {
+                                let exposed = if matches!(
+                                    node.node_type,
+                                    WorkflowNodeType::Interact | WorkflowNodeType::Media
+                                ) {
                                     let mut m = serde_json::Map::new();
                                     let content_val = output.output.get("content");
                                     let output_keys: Vec<String> = output
@@ -4926,7 +4942,7 @@ fn rebuild_node_context_value(
 
     match node_type {
         WorkflowNodeType::Agent => serde_json::json!({ "output": node_output }),
-        WorkflowNodeType::Interact => {
+        WorkflowNodeType::Interact | WorkflowNodeType::Media => {
             serde_json::json!({ "output": node_output.get("content").unwrap_or(node_output) })
         }
         WorkflowNodeType::End => node_output.clone(),

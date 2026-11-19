@@ -5,6 +5,7 @@ import {
   Circle,
   Code2,
   GitBranch,
+  Image as ImageIcon,
   Layers3,
   Play,
   Puzzle,
@@ -39,6 +40,8 @@ function NodeTypeIcon({ type, size = 12 }: { type: string; size?: number }) {
       return <Bot size={size} />;
     case 'interact':
       return <UserRound size={size} />;
+    case 'media':
+      return <ImageIcon size={size} />;
     case 'api':
       return <Code2 size={size} />;
     case 'transform':

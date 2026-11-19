@@ -19,7 +19,7 @@ use crate::tools::video_manifest::{
     apply_transform, snapshot, write_mapping, TransformCtx, MEDIA_SLOTS, SCALAR_SLOTS,
 };
 use crate::tools::tool_transport::{self, Execution};
-use crate::tools::{RiskLevel, ToolHandler, ToolTag};
+use crate::tools::{RiskLevel, ToolArtifacts, ToolFile, ToolHandler, ToolTag};
 
 /// 视频生成工具
 pub struct GenerateVideoTool {
@@ -209,6 +209,20 @@ impl ToolHandler for GenerateVideoTool {
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
+        self.run(arguments).await.map(|(text, _)| text)
+    }
+
+    async fn execute_structured(
+        &self,
+        arguments: serde_json::Value,
+    ) -> Result<(String, ToolArtifacts), String> {
+        self.run(arguments).await
+    }
+}
+
+impl GenerateVideoTool {
+    /// 执行并返回结构化产出（工作流 media 节点直接消费，无需解析 Markdown）。
+    async fn run(&self, arguments: serde_json::Value) -> Result<(String, ToolArtifacts), String> {
         let provider = text_arg(&arguments, "provider").ok_or_else(|| {
             "缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。\
              请先调用 list_models，把 provider_id 与模型名分别填入 provider / model"
@@ -487,18 +501,42 @@ impl ToolHandler for GenerateVideoTool {
         .await
         .map_err(|error| format!("[provider_rejected] {}\n\nrequestEcho:\n{}", error, echo))?;
 
+        let manifest_echo = json!({
+            "rule": rule.match_pattern,
+            "version": manifest.version,
+        });
+
         if let Some(url) = &result.video_url {
-            return Ok(format!(
-                "视频已生成（任务 {}）：\n![视频](<{}>)\n\nrequestEcho:\n{}",
-                result.task_id.as_deref().unwrap_or("-"),
-                url,
-                echo
+            return Ok((
+                format!(
+                    "视频已生成（任务 {}）：\n![视频](<{}>)\n\nrequestEcho:\n{}",
+                    result.task_id.as_deref().unwrap_or("-"),
+                    url,
+                    echo
+                ),
+                ToolArtifacts {
+                    urls: vec![url.clone()],
+                    local_paths: Vec::new(),
+                    files: Vec::new(),
+                    manifest: Some(manifest_echo),
+                },
             ));
         }
         if let Some(path) = &result.local_path {
-            return Ok(format!(
-                "视频已生成，已保存到本地：{}\n\nrequestEcho:\n{}",
-                path, echo
+            return Ok((
+                format!(
+                    "视频已生成，已保存到本地：{}\n\nrequestEcho:\n{}",
+                    path, echo
+                ),
+                ToolArtifacts {
+                    urls: Vec::new(),
+                    local_paths: vec![path.clone()],
+                    files: vec![ToolFile {
+                        path: path.clone(),
+                        file_type: "video".to_string(),
+                    }],
+                    manifest: Some(manifest_echo),
+                },
             ));
         }
         Err(format!(

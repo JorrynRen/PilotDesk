@@ -74,8 +74,8 @@ const FLOAT_BAR_SCALE = 1.25;
 /** 浮动工具栏内弹窗（操作帮助/工作流统计）的反向缩放因子：抵消容器放大，内容保持原尺寸 */
 const FLOAT_BAR_POPUP_SCALE = 1 / FLOAT_BAR_SCALE;
 
-/** 工具栏节点类型固定显示顺序（Agent任务、插件调用、人工交互、API调用、代码转换、子工作流、结束） */
-const PALETTE_ORDER = ['agent', 'plugin', 'interact', 'api', 'transform', 'subflow', 'end'];
+/** 工具栏节点类型固定显示顺序（Agent任务、插件调用、人工交互、媒体生成、API调用、代码转换、子工作流、结束） */
+const PALETTE_ORDER = ['agent', 'plugin', 'interact', 'media', 'api', 'transform', 'subflow', 'end'];
 
 /**
  * 拖放目标阶段（纯函数，模块级）：几何命中优先，未命中时取离落点最近的阶段。

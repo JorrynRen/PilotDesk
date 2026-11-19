@@ -16,6 +16,7 @@ export type WorkflowNodeType =
   | 'api'            // API 调用
   | 'transform'      // 代码/数据转换
   | 'interact'       // 人工交互（输入 + 审批）
+  | 'media'          // 媒体生成（图片/视频/语音合成/语音转写）
   | 'plugin'         // 插件命令
   | 'subflow';       // 子工作流
 

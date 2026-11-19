@@ -136,6 +136,10 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
       { key: 'timeoutMinutes', label: '超时时间(分钟)', type: 'number', placeholder: '30' },
     ],
   },
+  media: {
+    // 媒体节点的配置由下方专属面板渲染（kind / provider / model / args）
+    fields: [],
+  },
   plugin: {
     fields: [
       { key: 'plugin_id', label: '选择插件', type: 'plugin_select', placeholder: '选择插件' },
@@ -267,6 +271,17 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType): OptionGroup[] | unde
   // agent 类型节点额外提供 session_id
   if (nodeType === 'agent') {
     baseOptions.push({ value: '{{session_id}}', label: 'session_id（会话ID）' });
+  }
+
+  // 媒体节点：文本结果、远程 URL、本地文件路径与文件明细
+  if (nodeType === 'media') {
+    baseOptions.push(
+      { value: '{{text}}', label: 'text（文本 / 转写结果）' },
+      { value: '{{urls[0]}}', label: 'urls[0]（远程结果 URL）' },
+      { value: '{{localPaths[0]}}', label: 'localPaths[0]（本地文件路径）' },
+      { value: '{{files[0].path}}', label: 'files[0].path（文件路径）' },
+      { value: '{{files[0].type}}', label: 'files[0].type（文件类型）' },
+    );
   }
 
   return [{
@@ -1165,6 +1180,8 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const { providers: apiProviders, fetchProviders } = useApiProviderStore();
   /** API 类型 Agent 的「模型」是否用自定义输入（提供商没预置模型时也走输入框） */
   const [apiCustomModel, setApiCustomModel] = useState(false);
+  /** 媒体节点的「模型」是否用自定义输入（提供商没预置模型时也走输入框） */
+  const [mediaCustomModel, setMediaCustomModel] = useState(false);
   // 插件下拉的选中值直接取自节点参数，避免切节点时下拉与「插件配置」面板指向不同插件
   const selectedPluginId = (params.plugin_id as string) || node.pluginId || '';
   const inputBaseKeyRef = useRef<string>('');
@@ -2363,6 +2380,236 @@ useEffect(() => {
   );
 })()}
 
+{/* ===== 媒体节点专属配置（kind / provider / model / args） ===== */}
+{node.type === 'media' && (() => {
+  const kind = (params['kind'] as string) || 'image';
+  const args = (params['args'] as Record<string, unknown>) || {};
+  const providerId = (params['provider'] as string) || '';
+  const model = (params['model'] as string) || '';
+  const provider = apiProviders.find((p) => p.id === providerId);
+
+  const setArg = (key: string, value: unknown) => {
+    const next: Record<string, unknown> = { ...args };
+    if (value === '' || value === undefined || value === null || (Array.isArray(value) && value.length === 0)) {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+    handleParamChange('args', next);
+  };
+  const stringValue = (key: string) => (args[key] === undefined || args[key] === null ? '' : String(args[key]));
+  const listValue = (key: string) => (Array.isArray(args[key]) ? (args[key] as string[]).join('\n') : '');
+  const setList = (key: string, text: string) => {
+    setArg(key, text.split('\n').map((item) => item.trim()).filter(Boolean));
+  };
+  /** 各媒体类型支持的 args 键（与对应工具 parameters() 一致）；切换类型时丢弃不兼容的键，避免执行期报未知参数 */
+  const KIND_ARG_KEYS: Record<string, string[]> = {
+    image: ['prompt', 'size', 'n', 'referenceImages', 'mask'],
+    video: ['prompt', 'duration', 'aspectRatio', 'resolution', 'referenceImages'],
+    tts: ['text', 'voice', 'language', 'format', 'speed'],
+    stt: ['file', 'language', 'format', 'temperature'],
+  };
+  const switchKind = (next: string) => {
+    const allowed = KIND_ARG_KEYS[next] || [];
+    const nextArgs: Record<string, unknown> = {};
+    for (const key of allowed) {
+      if (key in args) nextArgs[key] = args[key];
+    }
+    // 镜像写入支持同一 tick 连续调用，kind 与 args 都会落盘
+    handleParamChange('kind', next);
+    handleParamChange('args', nextArgs);
+  };
+  const argField = (label: string, key: string, placeholder: string, type: 'text' | 'number' | 'textarea' = 'text') => (
+    <div style={S.fieldGap}>
+      <label style={S.label()}>{label}</label>
+      {type === 'textarea' ? (
+        <TemplateField
+          value={stringValue(key)}
+          onChange={(v) => setArg(key, v)}
+          variables={templateVariables}
+          placeholder={placeholder}
+          multiline
+          rows={3}
+          style={S.textarea}
+        />
+      ) : (
+        <input
+          type={type === 'number' ? 'number' : 'text'}
+          value={stringValue(key)}
+          onChange={(e) => setArg(key, type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
+          placeholder={placeholder}
+          style={S.input()}
+        />
+      )}
+    </div>
+  );
+  const listField = (label: string, key: string, placeholder: string) => (
+    <div style={S.fieldGap}>
+      <label style={S.label()}>{label}</label>
+      <textarea
+        value={listValue(key)}
+        onChange={(e) => setList(key, e.target.value)}
+        placeholder={placeholder}
+        rows={2}
+        style={S.textarea}
+      />
+      <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 2 }}>每行一个</div>
+    </div>
+  );
+
+  return (
+    <div style={S.sectionGap}>
+      <div style={S.sectionTitle}>媒体配置</div>
+
+      <div style={S.fieldGap}>
+        <label style={S.label()}>媒体类型</label>
+        <Select
+          value={kind}
+          onChange={switchKind}
+          options={[
+            { value: 'image', label: '图片生成' },
+            { value: 'video', label: '视频生成' },
+            { value: 'tts', label: '语音合成' },
+            { value: 'stt', label: '语音转写' },
+          ]}
+          placeholder="选择媒体类型"
+          className="w-full min-w-0"
+        />
+      </div>
+
+      <div style={S.fieldGap}>
+        <label style={S.label()}>提供商</label>
+        <Select
+          value={providerId}
+          onChange={(v) => handleParamChange('provider', v)}
+          options={[
+            { value: '', label: '选择提供商' },
+            ...(providerId && !apiProviders.some((p) => p.id === providerId)
+              ? [{ value: providerId, label: `${providerId}（该厂商已不在配置中）` }]
+              : []),
+            ...apiProviders.map((p) => ({
+              value: p.id,
+              label: `${p.name}${p.apiKeySet ? ' (已配置)' : ' (未配置Key)'}`,
+            })),
+          ]}
+          placeholder="选择提供商"
+          className="w-full min-w-0"
+        />
+      </div>
+
+      <div style={S.fieldGap}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <label style={{ ...S.label(), marginBottom: 0 }}>模型</label>
+          <button
+            onClick={() => setMediaCustomModel((v) => !v)}
+            style={{
+              padding: '1px 6px', fontSize: 'var(--fs-10)', borderRadius: 'var(--radius-md)',
+              cursor: 'pointer',
+              border: '1px solid var(--border)',
+              background: mediaCustomModel ? 'var(--bg-tertiary)' : 'transparent',
+              color: mediaCustomModel ? 'var(--accent)' : 'var(--text-tertiary)',
+            }}
+          >
+            {mediaCustomModel ? '取消自定义' : '自定义'}
+          </button>
+        </div>
+        {provider && !mediaCustomModel && provider.models.length > 0 ? (
+          <Select
+            value={model}
+            onChange={(v) => handleParamChange('model', v)}
+            style={{ marginTop: 4 }}
+            options={[
+              { value: '', label: '选择模型' },
+              ...(model && !provider.models.includes(model)
+                ? [{ value: model, label: `${model}（不在厂商模型清单中）` }]
+                : []),
+              ...provider.models.map((m) => ({ value: m, label: m })),
+            ]}
+            placeholder="选择模型"
+            className="w-full min-w-0"
+          />
+        ) : (
+          <input
+            value={model}
+            onChange={(e) => handleParamChange('model', e.target.value)}
+            placeholder={provider ? '输入该提供商支持的媒体模型名' : '请先选择提供商'}
+            style={{ ...S.input(), marginTop: 4 }}
+          />
+        )}
+      </div>
+
+      <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginBottom: 8 }}>
+        提供商与模型为必填项，不做隐式回退。动态值请先在「输入映射」中声明，再在参数里用 {'{{变量名}}'} 引用。
+      </div>
+
+      {kind === 'image' && (
+        <>
+          {argField('提示词 prompt（必填）', 'prompt', '描述要生成的图片，支持 {{变量}}', 'textarea')}
+          {argField('尺寸 size', 'size', '如 1024x1024')}
+          {argField('数量 n', 'n', '默认 1', 'number')}
+          {listField('参考图片 referenceImages', 'referenceImages', '每行一个图片 URL 或本地路径')}
+          {argField('遮罩 mask', 'mask', '可选：遮罩图片 URL 或本地路径')}
+        </>
+      )}
+      {kind === 'video' && (
+        <>
+          {argField('提示词 prompt（必填）', 'prompt', '描述要生成的视频，支持 {{变量}}', 'textarea')}
+          {argField('时长 duration', 'duration', '秒数，按模型清单限制', 'number')}
+          {argField('宽高比 aspectRatio', 'aspectRatio', '如 16:9')}
+          {argField('分辨率 resolution', 'resolution', '如 1080p')}
+          {listField('参考图片 referenceImages', 'referenceImages', '每行一个图片 URL 或本地路径')}
+        </>
+      )}
+      {kind === 'tts' && (
+        <>
+          {argField('文本 text（必填）', 'text', '要合成的文本，支持 {{变量}}', 'textarea')}
+          {argField('音色 voice', 'voice', '可选：音色 / 发音人')}
+          {argField('语言 language', 'language', '可选：如 zh-CN')}
+          <div style={S.fieldGap}>
+            <label style={S.label()}>格式 format</label>
+            <Select
+              value={stringValue('format') || 'mp3'}
+              onChange={(v) => setArg('format', v)}
+              options={[
+                { value: 'mp3', label: 'mp3' },
+                { value: 'wav', label: 'wav' },
+                { value: 'opus', label: 'opus' },
+                { value: 'aac', label: 'aac' },
+                { value: 'flac', label: 'flac' },
+              ]}
+              placeholder="mp3"
+              className="w-full min-w-0"
+            />
+          </div>
+          {argField('语速 speed', 'speed', '如 1.0', 'number')}
+        </>
+      )}
+      {kind === 'stt' && (
+        <>
+          {argField('音频文件 file（必填）', 'file', '本地绝对路径或可下载的 URL，支持 {{变量}}')}
+          {argField('语言 language', 'language', '可选：如 zh')}
+          <div style={S.fieldGap}>
+            <label style={S.label()}>格式 format</label>
+            <Select
+              value={stringValue('format') || 'mp3'}
+              onChange={(v) => setArg('format', v)}
+              options={[
+                { value: 'mp3', label: 'mp3' },
+                { value: 'wav', label: 'wav' },
+                { value: 'm4a', label: 'm4a' },
+                { value: 'ogg', label: 'ogg' },
+                { value: 'webm', label: 'webm' },
+              ]}
+              placeholder="mp3"
+              className="w-full min-w-0"
+            />
+          </div>
+          {argField('温度 temperature', 'temperature', '可选：0 ~ 1', 'number')}
+        </>
+      )}
+    </div>
+  );
+})()}
 
 {/* ===== 插件配置（命令级组件优先，其次插件默认组件，最后按所选命令的 input 模式生成） ===== */}
       {node.type === 'plugin' && params.plugin_id && (() => {

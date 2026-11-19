@@ -45,6 +45,9 @@ pub enum WorkflowNodeType {
     Plugin,
     #[serde(rename = "subflow")]
     Subflow,
+    /// 媒体节点：图片生成 / 视频生成 / 语音合成 / 语音转写
+    #[serde(rename = "media")]
+    Media,
     #[serde(rename = "start")]
     Start,
     #[serde(rename = "end")]

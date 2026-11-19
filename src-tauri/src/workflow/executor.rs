@@ -1,6 +1,7 @@
 use super::executors::agent_executor::{AgentExecutor, WorkflowApprovalManager};
 use super::executors::api_executor::ApiExecutor;
 use super::executors::interact_executor::{InteractExecutor, InteractManager};
+use super::executors::media_executor::MediaExecutor;
 use super::executors::plugin_executor::PluginExecuteManager;
 use super::executors::transform_executor::TransformExecutor;
 use super::registry::{
@@ -290,6 +291,31 @@ impl NodeExecutor {
                 "required": ["plugin_id", "command_id"]
             })),
             permissions: vec![],
+        });
+        // 媒体节点：图片生成 / 视频生成 / 语音合成 / 语音转写
+        registry.register(NodeTypeRegistration {
+            type_id: "media".into(),
+            name: "媒体生成".into(),
+            category: NodeCategory::Builtin,
+            executor: Arc::new(MediaExecutor::new(pool.clone())),
+            config_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["image", "video", "tts", "stt"],
+                        "description": "媒体类型：图片生成 / 视频生成 / 语音合成 / 语音转写"
+                    },
+                    "provider": { "type": "string", "description": "提供商 id（必填）" },
+                    "model": { "type": "string", "description": "模型名（必填）" },
+                    "args": {
+                        "type": "object",
+                        "description": "工具参数（键与工具 parameters() 同名）；动态值请先在输入映射中声明"
+                    }
+                },
+                "required": ["kind", "provider", "model"]
+            })),
+            permissions: vec!["network:http".to_string()],
         });
         let registry_arc = Arc::new(std::sync::Mutex::new(registry));
 

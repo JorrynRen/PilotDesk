@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::tools::audio_manifest;
 use crate::tools::tool_manifest::{apply_transform, write_mapping, TransformCtx};
 use crate::tools::tool_transport::{self, Execution};
-use crate::tools::{RiskLevel, ToolHandler, ToolTag};
+use crate::tools::{RiskLevel, ToolArtifacts, ToolFile, ToolHandler, ToolTag};
 
 pub struct TtsTool {
     api_endpoint: String,
@@ -126,6 +126,20 @@ impl ToolHandler for TtsTool {
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
+        self.run(arguments).await.map(|(text, _)| text)
+    }
+
+    async fn execute_structured(
+        &self,
+        arguments: serde_json::Value,
+    ) -> Result<(String, ToolArtifacts), String> {
+        self.run(arguments).await
+    }
+}
+
+impl TtsTool {
+    /// 执行并返回结构化产出（工作流 media 节点直接消费，无需解析 Markdown）。
+    async fn run(&self, arguments: serde_json::Value) -> Result<(String, ToolArtifacts), String> {
         let text = arguments["text"]
             .as_str()
             .map(str::trim)
@@ -291,9 +305,23 @@ impl ToolHandler for TtsTool {
             )
         })?;
 
-        Ok(format!(
-            "语音已生成（规则 {}）：\n![音频](<{}>)\n\nrequestEcho:\n{}",
-            rule.match_pattern, path, echo
+        Ok((
+            format!(
+                "语音已生成（规则 {}）：\n![音频](<{}>)\n\nrequestEcho:\n{}",
+                rule.match_pattern, path, echo
+            ),
+            ToolArtifacts {
+                urls: Vec::new(),
+                local_paths: vec![path.clone()],
+                files: vec![ToolFile {
+                    file_type: "audio".to_string(),
+                    path,
+                }],
+                manifest: Some(json!({
+                    "rule": rule.match_pattern,
+                    "version": effective.manifest.version,
+                })),
+            },
         ))
     }
 }

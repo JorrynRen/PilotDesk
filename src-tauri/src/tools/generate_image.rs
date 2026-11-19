@@ -16,7 +16,7 @@ use crate::tools::image_common::resolve_image_bytes;
 use crate::tools::image_manifest::{self, SPEC};
 use crate::tools::tool_manifest::{apply_transform, write_mapping, TransformCtx};
 use crate::tools::tool_transport::{self, Execution, FormPart};
-use crate::tools::{RiskLevel, ToolHandler, ToolTag};
+use crate::tools::{RiskLevel, ToolArtifacts, ToolFile, ToolHandler, ToolTag};
 
 /// 图片生成工具
 pub struct GenerateImageTool {
@@ -153,6 +153,20 @@ impl ToolHandler for GenerateImageTool {
     }
 
     async fn execute(&self, arguments: Value) -> Result<String, String> {
+        self.run(arguments).await.map(|(text, _)| text)
+    }
+
+    async fn execute_structured(
+        &self,
+        arguments: Value,
+    ) -> Result<(String, ToolArtifacts), String> {
+        self.run(arguments).await
+    }
+}
+
+impl GenerateImageTool {
+    /// 执行并返回结构化产出（工作流 media 节点直接消费，无需解析 Markdown）。
+    async fn run(&self, arguments: Value) -> Result<(String, ToolArtifacts), String> {
         let prompt = arguments["prompt"].as_str().ok_or("缺少 prompt 参数")?;
         // 模型名必须显式提供（各服务商可用模型不同，无通用默认值）：剥离前导 @ 与空白后为空则报错引导。
         let model = arguments["model"]
@@ -398,11 +412,42 @@ impl ToolHandler for GenerateImageTool {
             .enumerate()
             .map(|(index, url)| format!("![图片{}](<{}>)", index + 1, url))
             .collect();
-        Ok(format!(
-            "已生成 {} 张图片：\n{}\n\nrequestEcho:\n{}",
-            images.len(),
-            images.join("\n"),
-            echo
+
+        // 结构化产出：远程 URL 与本地落盘文件分开，供工作流节点直接映射。
+        let mut urls = Vec::new();
+        let mut local_paths = Vec::new();
+        for url in &result.urls {
+            if url.starts_with("http://") || url.starts_with("https://") {
+                urls.push(url.clone());
+            } else {
+                local_paths.push(url.clone());
+            }
+        }
+        let files = local_paths
+            .iter()
+            .map(|path| ToolFile {
+                path: path.clone(),
+                file_type: "image".to_string(),
+            })
+            .collect();
+        let artifacts = ToolArtifacts {
+            urls,
+            local_paths,
+            files,
+            manifest: Some(json!({
+                "rule": rule.match_pattern,
+                "version": manifest.version,
+            })),
+        };
+
+        Ok((
+            format!(
+                "已生成 {} 张图片：\n{}\n\nrequestEcho:\n{}",
+                images.len(),
+                images.join("\n"),
+                echo
+            ),
+            artifacts,
         ))
     }
 }
