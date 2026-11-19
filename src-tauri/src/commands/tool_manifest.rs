@@ -73,3 +73,26 @@ pub fn reset_tool_manifest(
         .map_err(|e| format!("数据库连接失败: {}", e))?;
     crate::tools::tool_manifest::reset_builtin(&conn, spec_of(&kind)?)
 }
+
+/// 媒体节点表单用的模型能力摘要（与生成工具共用同一份清单数据）。
+///
+/// 只读当前生效清单（未播种时回落到内置），不访问数据库；前端据此决定展示哪些
+/// 槽位控件、下拉可选档位与数值上限，避免用户填了表单却在执行期被拒。
+#[tauri::command]
+pub fn get_media_capability(kind: String, model: String) -> Result<serde_json::Value, String> {
+    let kind = kind.trim().to_ascii_lowercase();
+    let model = model.trim().trim_start_matches('@');
+    if model.is_empty() {
+        return Err("缺少模型名".to_string());
+    }
+    match kind.as_str() {
+        audio_manifest::KIND_TTS => audio_manifest::capability(audio_manifest::KIND_TTS, model),
+        audio_manifest::KIND_STT => audio_manifest::capability(audio_manifest::KIND_STT, model),
+        image_manifest::KIND_IMAGE => image_manifest::capability(model),
+        video_manifest::KIND_VIDEO => video_manifest::capability(model),
+        other => Err(format!(
+            "未知的媒体类型: {}（可选 image / video / tts / stt）",
+            other
+        )),
+    }
+}

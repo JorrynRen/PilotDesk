@@ -2899,6 +2899,7 @@ pub fn run() {
             commands::tool_manifest::refresh_tool_manifest,
             commands::tool_manifest::apply_tool_manifest,
             commands::tool_manifest::reset_tool_manifest,
+            commands::tool_manifest::get_media_capability,
             plugin::plugin_discover,
             plugin::plugin_list,
             plugin::plugin_enable,

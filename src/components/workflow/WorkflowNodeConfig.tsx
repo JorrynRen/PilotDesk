@@ -243,6 +243,127 @@ const S = {
   fieldGap: { marginBottom: 10 } as React.CSSProperties,
 };
 
+/* ---------- 媒体节点：槽位控件预设 + 模型能力 ---------- */
+
+type MediaKind = 'image' | 'video' | 'tts' | 'stt';
+
+/** `get_media_capability` 的返回结构（与 `tools::tool_manifest::capability` 对应） */
+interface MediaCapabilityLimits {
+  durations?: number[] | null;
+  referenceImages?: number | null;
+  maxN?: number | null;
+  aspectRatios?: string[] | null;
+  resolutions?: string[] | null;
+  sizes?: string[] | null;
+  voices?: string[] | null;
+  formats?: string[] | null;
+  languages?: string[] | null;
+  maxChars?: number | null;
+  maxBytes?: number | null;
+}
+
+interface MediaSlotCapability {
+  field?: string;
+  transform?: string;
+  /** enum_map 转换的合法档位（数值型会以 number 返回） */
+  allowed?: Array<string | number | boolean> | null;
+  const?: Record<string, unknown> | null;
+  /** 该槽位只参与本地推导，不会直接发给厂商 */
+  consumed?: boolean;
+}
+
+interface MediaCapabilityInfo {
+  model: string;
+  matchedRule: string;
+  verified: boolean;
+  note?: string | null;
+  manifestVersion?: number;
+  manifestSource?: string;
+  output?: string;
+  supported: Record<string, MediaSlotCapability>;
+  unsupported: string[];
+  limits: MediaCapabilityLimits;
+}
+
+type MediaLimitsArrayKey = 'durations' | 'sizes' | 'aspectRatios' | 'resolutions' | 'voices' | 'formats' | 'languages';
+type MediaLimitsNumberKey = 'referenceImages' | 'maxN';
+
+/**
+ * 媒体槽位控件的**静态预设**：标题、提示文案与默认约束全部在这里声明。
+ *
+ * 是否展示由 `get_media_capability` 的 `supported` 决定（清单里有通用兜底规则，
+ * 新模型无需在节点侧单独适配）；清单给出的 `allowed` / `limits` 会覆盖这里的
+ * 选项与上限，避免用户填了值却在执行期被 `[unsupported_input]` / `[limit_exceeded]` 拒绝。
+ */
+interface MediaSlotControl {
+  slot: string;
+  label: string;
+  control: 'text' | 'textarea' | 'number' | 'list' | 'select';
+  placeholder?: string;
+  hint?: string;
+  /** 静态兜底选项（清单没有给 allowed/limits 时使用） */
+  options?: string[];
+  min?: number;
+  max?: number;
+  step?: number;
+  /** 选项来自清单 limits 的哪个数组 */
+  optionsFrom?: MediaLimitsArrayKey;
+  /** 数值上限来自清单 limits 的哪个字段 */
+  maxFrom?: MediaLimitsNumberKey;
+  /** 列表项数上限来自清单 limits 的哪个字段 */
+  countFrom?: MediaLimitsNumberKey;
+  /** 依赖的前置槽位：前置不支持时本控件一并隐藏 */
+  dependsOn?: string;
+}
+
+const MEDIA_SLOT_CONTROLS: Record<MediaKind, MediaSlotControl[]> = {
+  image: [
+    { slot: 'prompt', label: '提示词 prompt（必填）', control: 'textarea', placeholder: '描述要生成的图片，支持 {{变量}}' },
+    { slot: 'size', label: '尺寸 size', control: 'select', optionsFrom: 'sizes', placeholder: '如 1024x1024' },
+    { slot: 'n', label: '数量 n', control: 'number', min: 1, max: 4, maxFrom: 'maxN', placeholder: '默认 1' },
+    { slot: 'referenceImages', label: '参考图片 referenceImages', control: 'list', countFrom: 'referenceImages', placeholder: '每行一个图片 URL 或本地路径' },
+    { slot: 'mask', label: '遮罩 mask', control: 'text', dependsOn: 'referenceImages', placeholder: '可选：遮罩图片 URL 或本地路径' },
+  ],
+  video: [
+    { slot: 'prompt', label: '提示词 prompt（必填）', control: 'textarea', placeholder: '描述要生成的视频，支持 {{变量}}' },
+    { slot: 'firstFrame', label: '首帧 firstFrame', control: 'text', placeholder: '可选：图片 URL 或本地路径' },
+    { slot: 'lastFrame', label: '尾帧 lastFrame', control: 'text', dependsOn: 'firstFrame', placeholder: '可选：尾帧图片 URL 或本地路径' },
+    { slot: 'referenceImages', label: '参考图片 referenceImages', control: 'list', countFrom: 'referenceImages', placeholder: '每行一个图片 URL 或本地路径' },
+    { slot: 'referenceVideo', label: '参考视频 referenceVideo', control: 'text', placeholder: '可选：视频 URL 或本地路径' },
+    { slot: 'sourceVideo', label: '编辑源视频 sourceVideo', control: 'text', placeholder: '可选：待编辑的视频 URL 或本地路径' },
+    { slot: 'extendVideo', label: '延长源视频 extendVideo', control: 'text', placeholder: '可选：待延长的视频 URL 或本地路径' },
+    { slot: 'duration', label: '时长 duration（秒）', control: 'select', optionsFrom: 'durations', placeholder: '按模型清单限制' },
+    { slot: 'aspectRatio', label: '宽高比 aspectRatio', control: 'select', optionsFrom: 'aspectRatios', placeholder: '如 16:9' },
+    { slot: 'resolution', label: '分辨率 resolution', control: 'select', optionsFrom: 'resolutions', placeholder: '如 1080p' },
+    { slot: 'seed', label: '随机种子 seed', control: 'number', min: 0, step: 1, placeholder: '可选：整数' },
+    { slot: 'negativePrompt', label: '负向提示词 negativePrompt', control: 'textarea', placeholder: '可选：不希望出现的内容' },
+  ],
+  tts: [
+    { slot: 'text', label: '文本 text（必填）', control: 'textarea', placeholder: '要合成的文本，支持 {{变量}}' },
+    { slot: 'voice', label: '音色 voice', control: 'select', optionsFrom: 'voices', placeholder: '可选：音色 / 发音人' },
+    { slot: 'language', label: '语言 language', control: 'select', optionsFrom: 'languages', placeholder: '可选：如 zh-CN' },
+    { slot: 'format', label: '格式 format', control: 'select', options: ['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm'], optionsFrom: 'formats', placeholder: 'mp3' },
+    { slot: 'speed', label: '语速 speed', control: 'number', min: 0.25, max: 4, step: 0.05, placeholder: '如 1.0' },
+  ],
+  stt: [
+    { slot: 'file', label: '音频文件 file（必填）', control: 'text', placeholder: '本地绝对路径或可下载的 URL，支持 {{变量}}' },
+    { slot: 'language', label: '语言 language', control: 'select', optionsFrom: 'languages', placeholder: '可选：如 zh' },
+    { slot: 'format', label: '格式 format', control: 'select', options: ['json', 'text', 'verbose_json'], placeholder: 'json' },
+    { slot: 'temperature', label: '温度 temperature', control: 'number', min: 0, max: 1, step: 0.1, placeholder: '可选：0 ~ 1' },
+  ],
+};
+
+/** 数值型槽位：下拉选中的是字符串，写回前必须转成 number（生成工具只接受 JSON 数字） */
+const MEDIA_NUMERIC_SLOTS = new Set(['n', 'duration', 'seed', 'speed', 'temperature']);
+
+/** 能力查询结果 + 它对应的 `kind|model`（只有与当前选择一致时才用于渲染） */
+interface MediaCapabilityState {
+  key: string;
+  loading: boolean;
+  error: string | null;
+  data: MediaCapabilityInfo | null;
+}
+
 /* ---------- 输出字段选项（按节点类型动态获取） ---------- */
 
 interface OptionGroup {
@@ -1182,6 +1303,13 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const [apiCustomModel, setApiCustomModel] = useState(false);
   /** 媒体节点的「模型」是否用自定义输入（提供商没预置模型时也走输入框） */
   const [mediaCustomModel, setMediaCustomModel] = useState(false);
+  /** 媒体节点的媒体类型 / 模型（能力查询与参数区渲染共用） */
+  const mediaNodeKind = ((params.kind as string) || 'image') as MediaKind;
+  const mediaNodeModel = (params.model as string) || '';
+  /** 当前模型的能力摘要；`key` 不匹配时说明是上一次选择的残留，渲染时忽略 */
+  const [mediaCapState, setMediaCapState] = useState<MediaCapabilityState | null>(null);
+  /** 因模型不支持而被清除的 args 键（提示用户一次） */
+  const [mediaHiddenSlots, setMediaHiddenSlots] = useState<string[]>([]);
   // 插件下拉的选中值直接取自节点参数，避免切节点时下拉与「插件配置」面板指向不同插件
   const selectedPluginId = (params.plugin_id as string) || node.pluginId || '';
   const inputBaseKeyRef = useRef<string>('');
@@ -1271,6 +1399,70 @@ useEffect(() => {
     setParams(newParams);
     onUpdate({ params: newParams });
   };
+
+  /**
+   * 媒体节点：按「类型 + 模型」拉取规则清单能力。
+   *
+   * 能力只用于**控制表单展示**（哪些槽位、可选档位、上限），执行期仍由同一份清单校验，
+   * 因此不会出现"表单能填、执行被拒"的两套判断。查询失败时回退展示全部预设控件。
+   */
+  useEffect(() => {
+    if (node.type !== 'media') {
+      setMediaCapState(null);
+      return;
+    }
+    const model = mediaNodeModel.trim();
+    if (!model) {
+      setMediaCapState(null);
+      return;
+    }
+    const key = `${mediaNodeKind}|${model}`;
+    let cancelled = false;
+    // 延续同一选择时保留旧数据（避免闪烁），换了选择则立即作废
+    setMediaCapState((prev) =>
+      prev?.key === key ? { ...prev, loading: true } : { key, loading: true, error: null, data: null },
+    );
+    invoke<MediaCapabilityInfo>('get_media_capability', { kind: mediaNodeKind, model })
+      .then((data) => {
+        if (!cancelled) setMediaCapState({ key, loading: false, error: null, data });
+      })
+      .catch((err) => {
+        if (!cancelled) setMediaCapState({ key, loading: false, error: String(err), data: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [node.type, mediaNodeKind, mediaNodeModel]);
+
+  /**
+   * 媒体节点：清掉模型不支持的旧 args。
+   *
+   * 隐藏控件不能让值继续留在参数里 —— 否则执行期仍会把它发给生成工具并触发
+   * `[unsupported_input]`。清掉的键记下来给用户提示一次。
+   */
+  useEffect(() => {
+    if (node.type !== 'media') return;
+    // 切换节点/模型后，上一条能力可能还在 state 里：不匹配当前选择时绝不能拿它清理参数
+    if (!mediaCapState || mediaCapState.key !== `${mediaNodeKind}|${mediaNodeModel.trim()}`) return;
+    const data = mediaCapState.data;
+    if (!data) return;
+    const args = (paramsRef.current.args as Record<string, unknown>) || {};
+    const removed = Object.keys(args).filter((key) => !(key in data.supported));
+    if (removed.length === 0) {
+      setMediaHiddenSlots((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+    const nextArgs = { ...args };
+    for (const key of removed) delete nextArgs[key];
+    const newParams = { ...paramsRef.current, args: nextArgs };
+    paramsRef.current = newParams;
+    setParams(newParams);
+    onUpdate({ params: newParams });
+    setMediaHiddenSlots(removed);
+    // onUpdate 由父组件传入、身份可能变化；本 effect 只应在"能力/节点/类型"变化时执行，
+    // 且清理后 removed 为空会立刻收敛，不会反复写回。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.type, node.id, mediaCapState, mediaNodeKind, mediaNodeModel]);
 
   /**
    * 切换命令后的节点参数：
@@ -2402,12 +2594,12 @@ useEffect(() => {
   const setList = (key: string, text: string) => {
     setArg(key, text.split('\n').map((item) => item.trim()).filter(Boolean));
   };
-  /** 各媒体类型支持的 args 键（与对应工具 parameters() 一致）；切换类型时丢弃不兼容的键，避免执行期报未知参数 */
+  /** 各媒体类型的槽位全集；切换类型时丢弃不属于新类型的键，避免执行期报未知参数 */
   const KIND_ARG_KEYS: Record<string, string[]> = {
-    image: ['prompt', 'size', 'n', 'referenceImages', 'mask'],
-    video: ['prompt', 'duration', 'aspectRatio', 'resolution', 'referenceImages'],
-    tts: ['text', 'voice', 'language', 'format', 'speed'],
-    stt: ['file', 'language', 'format', 'temperature'],
+    image: MEDIA_SLOT_CONTROLS.image.map((c) => c.slot),
+    video: MEDIA_SLOT_CONTROLS.video.map((c) => c.slot),
+    tts: MEDIA_SLOT_CONTROLS.tts.map((c) => c.slot),
+    stt: MEDIA_SLOT_CONTROLS.stt.map((c) => c.slot),
   };
   const switchKind = (next: string) => {
     const allowed = KIND_ARG_KEYS[next] || [];
@@ -2419,47 +2611,152 @@ useEffect(() => {
     handleParamChange('kind', next);
     handleParamChange('args', nextArgs);
   };
-  const argField = (label: string, key: string, placeholder: string, type: 'text' | 'number' | 'textarea' = 'text') => (
-    <div style={S.fieldGap}>
-      <label style={S.label()}>{label}</label>
-      {type === 'textarea' ? (
-        <TemplateField
-          value={stringValue(key)}
-          onChange={(v) => setArg(key, v)}
-          variables={templateVariables}
-          placeholder={placeholder}
-          multiline
-          rows={3}
-          style={S.textarea}
-        />
-      ) : (
+  /** 只有 `kind|model` 与当前选择一致的能力数据才用于渲染（切换瞬间不串用上一份） */
+  const capState = mediaCapState && mediaCapState.key === `${kind}|${model.trim()}` ? mediaCapState : null;
+  const cap = capState?.data || null;
+  const supportedSlots = cap ? Object.keys(cap.supported || {}) : null;
+  const slotControls = MEDIA_SLOT_CONTROLS[kind as MediaKind] || [];
+  /**
+   * 展示判断：
+   * - 没有能力数据（未选模型 / 查询失败）→ 展示全部预设，保持可编辑；
+   * - 有能力数据 → 只展示 `supported` 里的槽位；依赖项不支持时一并隐藏。
+   */
+  const isSlotVisible = (c: MediaSlotControl) => {
+    if (!supportedSlots) return true;
+    if (!supportedSlots.includes(c.slot)) return false;
+    if (c.dependsOn && !supportedSlots.includes(c.dependsOn)) return false;
+    return true;
+  };
+  const visibleControls = slotControls.filter(isSlotVisible);
+  const hiddenControls = supportedSlots ? slotControls.filter((c) => !isSlotVisible(c)) : [];
+  const mediaHintStyle: React.CSSProperties = {
+    fontSize: 'var(--fs-10)',
+    color: 'var(--text-tertiary)',
+    marginTop: 2,
+    lineHeight: 1.5,
+  };
+
+  /** 下拉选项：清单 `allowed`（enum_map 档位）优先，其次 limits 数组，最后才用静态预设 */
+  const optionList = (c: MediaSlotControl): string[] => {
+    const allowed = cap?.supported?.[c.slot]?.allowed;
+    if (allowed && allowed.length > 0) return allowed.map((v) => String(v));
+    if (c.optionsFrom) {
+      const arr = cap?.limits?.[c.optionsFrom];
+      if (Array.isArray(arr) && arr.length > 0) return arr.map((v) => String(v));
+    }
+    return c.options || [];
+  };
+  const numberMax = (c: MediaSlotControl): number | undefined => {
+    if (c.maxFrom) {
+      const v = cap?.limits?.[c.maxFrom];
+      if (typeof v === 'number') return v;
+    }
+    return c.max;
+  };
+  const countLimit = (c: MediaSlotControl): number | undefined => {
+    if (!c.countFrom) return undefined;
+    const v = cap?.limits?.[c.countFrom];
+    return typeof v === 'number' ? v : undefined;
+  };
+
+  const renderArgControl = (c: MediaSlotControl) => {
+    const options = optionList(c);
+    const slotCap = cap?.supported?.[c.slot];
+    const hintText = [
+      c.hint,
+      slotCap?.consumed ? '仅用于本地推导请求参数，不会直接发给厂商' : '',
+    ].filter(Boolean).join('；');
+    const max = numberMax(c);
+    const maxCount = countLimit(c);
+
+    if (options.length > 0) {
+      const current = stringValue(c.slot);
+      return (
+        <div style={S.fieldGap} key={c.slot}>
+          <label style={S.label()}>{c.label}</label>
+          <Select
+            value={current}
+            onChange={(v) =>
+              setArg(
+                c.slot,
+                MEDIA_NUMERIC_SLOTS.has(c.slot) && v !== '' && Number.isFinite(Number(v)) ? Number(v) : v,
+              )
+            }
+            options={[
+              // 旧值不在清单允许档位时仍展示出来，避免静默丢值
+              ...(current && !options.includes(current)
+                ? [{ value: current, label: `${current}（不在清单允许档位中）` }]
+                : []),
+              ...options.map((v) => ({ value: v, label: v })),
+            ]}
+            placeholder={c.placeholder || '使用默认值'}
+            className="w-full min-w-0"
+          />
+          {hintText && <div style={mediaHintStyle}>{hintText}</div>}
+        </div>
+      );
+    }
+
+    if (c.control === 'textarea') {
+      return (
+        <div style={S.fieldGap} key={c.slot}>
+          <label style={S.label()}>{c.label}</label>
+          <TemplateField
+            value={stringValue(c.slot)}
+            onChange={(v) => setArg(c.slot, v)}
+            variables={templateVariables}
+            placeholder={c.placeholder}
+            multiline
+            rows={3}
+            style={S.textarea}
+          />
+          {hintText && <div style={mediaHintStyle}>{hintText}</div>}
+        </div>
+      );
+    }
+
+    if (c.control === 'list') {
+      return (
+        <div style={S.fieldGap} key={c.slot}>
+          <label style={S.label()}>{c.label}</label>
+          <textarea
+            value={listValue(c.slot)}
+            onChange={(e) => setList(c.slot, e.target.value)}
+            placeholder={c.placeholder}
+            rows={2}
+            style={S.textarea}
+          />
+          <div style={mediaHintStyle}>
+            每行一个{maxCount ? `，最多 ${maxCount} 个` : ''}{hintText ? `；${hintText}` : ''}
+          </div>
+        </div>
+      );
+    }
+
+    const isNumber = c.control === 'number';
+    return (
+      <div style={S.fieldGap} key={c.slot}>
+        <label style={S.label()}>{c.label}</label>
         <input
-          type={type === 'number' ? 'number' : 'text'}
-          value={stringValue(key)}
-          onChange={(e) => setArg(key, type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
-          placeholder={placeholder}
+          type={isNumber ? 'number' : 'text'}
+          value={stringValue(c.slot)}
+          onChange={(e) =>
+            setArg(c.slot, isNumber ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)
+          }
+          placeholder={c.placeholder}
+          min={isNumber ? c.min : undefined}
+          max={isNumber ? max : undefined}
+          step={isNumber ? c.step : undefined}
           style={S.input()}
         />
-      )}
-    </div>
-  );
-  const listField = (label: string, key: string, placeholder: string) => (
-    <div style={S.fieldGap}>
-      <label style={S.label()}>{label}</label>
-      <textarea
-        value={listValue(key)}
-        onChange={(e) => setList(key, e.target.value)}
-        placeholder={placeholder}
-        rows={2}
-        style={S.textarea}
-      />
-      <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 2 }}>每行一个</div>
-    </div>
-  );
+        {hintText && <div style={mediaHintStyle}>{hintText}</div>}
+      </div>
+    );
+  };
 
   return (
     <div style={S.sectionGap}>
-      <div style={S.sectionTitle}>媒体配置</div>
+      <div style={S.sectionTitle}>模型配置</div>
 
       <div style={S.fieldGap}>
         <label style={S.label()}>媒体类型</label>
@@ -2542,69 +2839,35 @@ useEffect(() => {
         提供商与模型为必填项，不做隐式回退。动态值请先在「输入映射」中声明，再在参数里用 {'{{变量名}}'} 引用。
       </div>
 
-      {kind === 'image' && (
+      {!model.trim() ? (
+        <div style={mediaHintStyle}>选择模型后，将按该模型的规则清单显示可用参数。</div>
+      ) : (
         <>
-          {argField('提示词 prompt（必填）', 'prompt', '描述要生成的图片，支持 {{变量}}', 'textarea')}
-          {argField('尺寸 size', 'size', '如 1024x1024')}
-          {argField('数量 n', 'n', '默认 1', 'number')}
-          {listField('参考图片 referenceImages', 'referenceImages', '每行一个图片 URL 或本地路径')}
-          {argField('遮罩 mask', 'mask', '可选：遮罩图片 URL 或本地路径')}
-        </>
-      )}
-      {kind === 'video' && (
-        <>
-          {argField('提示词 prompt（必填）', 'prompt', '描述要生成的视频，支持 {{变量}}', 'textarea')}
-          {argField('时长 duration', 'duration', '秒数，按模型清单限制', 'number')}
-          {argField('宽高比 aspectRatio', 'aspectRatio', '如 16:9')}
-          {argField('分辨率 resolution', 'resolution', '如 1080p')}
-          {listField('参考图片 referenceImages', 'referenceImages', '每行一个图片 URL 或本地路径')}
-        </>
-      )}
-      {kind === 'tts' && (
-        <>
-          {argField('文本 text（必填）', 'text', '要合成的文本，支持 {{变量}}', 'textarea')}
-          {argField('音色 voice', 'voice', '可选：音色 / 发音人')}
-          {argField('语言 language', 'language', '可选：如 zh-CN')}
-          <div style={S.fieldGap}>
-            <label style={S.label()}>格式 format</label>
-            <Select
-              value={stringValue('format') || 'mp3'}
-              onChange={(v) => setArg('format', v)}
-              options={[
-                { value: 'mp3', label: 'mp3' },
-                { value: 'wav', label: 'wav' },
-                { value: 'opus', label: 'opus' },
-                { value: 'aac', label: 'aac' },
-                { value: 'flac', label: 'flac' },
-              ]}
-              placeholder="mp3"
-              className="w-full min-w-0"
-            />
-          </div>
-          {argField('语速 speed', 'speed', '如 1.0', 'number')}
-        </>
-      )}
-      {kind === 'stt' && (
-        <>
-          {argField('音频文件 file（必填）', 'file', '本地绝对路径或可下载的 URL，支持 {{变量}}')}
-          {argField('语言 language', 'language', '可选：如 zh')}
-          <div style={S.fieldGap}>
-            <label style={S.label()}>格式 format</label>
-            <Select
-              value={stringValue('format') || 'mp3'}
-              onChange={(v) => setArg('format', v)}
-              options={[
-                { value: 'mp3', label: 'mp3' },
-                { value: 'wav', label: 'wav' },
-                { value: 'm4a', label: 'm4a' },
-                { value: 'ogg', label: 'ogg' },
-                { value: 'webm', label: 'webm' },
-              ]}
-              placeholder="mp3"
-              className="w-full min-w-0"
-            />
-          </div>
-          {argField('温度 temperature', 'temperature', '可选：0 ~ 1', 'number')}
+          {capState?.loading && !cap && (
+            <div style={mediaHintStyle}>正在读取模型规则清单…</div>
+          )}
+          {capState?.error && (
+            <div style={{ ...mediaHintStyle, color: 'var(--warning, #d97706)' }}>
+              读取模型能力失败，已展示全部预设参数：{capState.error}
+            </div>
+          )}
+          {cap && (
+            <div style={mediaHintStyle} title={cap.note || undefined}>
+              规则 {cap.matchedRule}
+              {cap.verified ? '（已验证）' : '（未验证，按清单兜底）'}
+            </div>
+          )}
+          {visibleControls.map(renderArgControl)}
+          {hiddenControls.length > 0 && (
+            <div style={mediaHintStyle}>
+              当前模型不支持这些参数，已隐藏：{hiddenControls.map((c) => c.slot).join('、')}
+            </div>
+          )}
+          {mediaHiddenSlots.length > 0 && (
+            <div style={{ ...mediaHintStyle, color: 'var(--warning, #d97706)' }}>
+              已清除当前模型不支持的参数值：{mediaHiddenSlots.join('、')}
+            </div>
+          )}
         </>
       )}
     </div>
