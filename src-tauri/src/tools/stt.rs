@@ -65,7 +65,7 @@ fn text_of(value: &Value) -> String {
 }
 
 /// 按来源扩展名或字节头推断文件名与 MIME（multipart 文件 part 用）
-fn audio_file_meta(source: &str, bytes: &[u8]) -> (String, String) {
+pub(crate) fn audio_file_meta(source: &str, bytes: &[u8]) -> (String, String) {
     let sniffed = if bytes.starts_with(b"ID3")
         || (bytes.len() > 1 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
     {

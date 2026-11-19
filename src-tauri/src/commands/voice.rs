@@ -2,7 +2,7 @@
 //!
 //! 与 `tools::stt` 的分工：那个是 Agent 可自行调用的工具（由模型挑 provider/model）；
 //! 这里是用户按麦克风触发的固定路径 —— 用当前会话（或"快捷开始"草稿）已选的 provider/model，
-//! 不额外给用户挑模型的入口。两者共用同一套 OpenAI 兼容 `/audio/transcriptions` 契约。
+//! 不额外给用户挑模型的入口。两者共用同一份语音转写清单与执行器。
 //!
 //! 音频走 base64 而不是落盘：录音是"说完即丢"的临时数据，落盘还得管清理，
 //! 且无会话（草稿态）时没有可落盘的会话目录。
@@ -10,11 +10,13 @@
 use std::time::Duration;
 
 use base64::Engine;
+use serde_json::{json, Map, Value};
 
+use crate::tools::audio_manifest;
+use crate::tools::stt::audio_file_meta;
+use crate::tools::tool_manifest::{apply_transform, BodyKind, TransformCtx};
+use crate::tools::tool_transport::{self, Execution, FormPart};
 use crate::utils::errors::AppError;
-
-/// 音频上限：与 `tools::stt` 保持一致（超出后多数兼容实现会直接拒绝）
-const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
 
 /// 转写请求超时：一段语音的转写通常在数秒内返回，给足余量但别无限等
 const TRANSCRIBE_TIMEOUT_SECS: u64 = 120;
@@ -59,7 +61,7 @@ pub async fn transcribe_audio(
         .into());
     }
 
-    // Anthropic 原生格式没有 /audio/transcriptions（与 tools 侧注册 STT 工具的口径一致）
+    // Anthropic 原生格式没有语音转写端点（与 tools 侧注册 STT 工具的口径一致）
     if api_format.eq_ignore_ascii_case("anthropic") {
         return Err(AppError::InvalidInput(format!(
             "提供商「{}」是 Anthropic 原生格式，不支持语音转写；请在输入框切到 OpenAI 兼容的提供商/模型",
@@ -74,80 +76,157 @@ pub async fn transcribe_audio(
     if bytes.is_empty() {
         return Err(AppError::InvalidInput("录音内容为空".to_string()).into());
     }
-    if bytes.len() > MAX_AUDIO_BYTES {
+
+    // ── 选规则（与 Agent 侧 stt 工具同一份清单）──
+    let effective = audio_manifest::snapshot_stt()?;
+    let (rule, _) = effective
+        .manifest
+        .select(&model)
+        .ok_or_else(|| format!("语音转写清单缺少匹配模型 '{}' 的规则", model))?;
+
+    let max_bytes = rule.limits.max_bytes.unwrap_or(25 * 1024 * 1024);
+    if bytes.len() > max_bytes {
         return Err(AppError::InvalidInput(format!(
-            "录音过大（{:.1} MB），超过 {} MB 上限",
+            "录音过大（{:.1} MB），超过模型 '{}' 的 {} MB 上限",
             bytes.len() as f64 / 1_048_576.0,
-            MAX_AUDIO_BYTES / 1_048_576
+            model,
+            max_bytes / 1_048_576
         ))
         .into());
     }
 
-    let url = format!(
-        "{}/audio/transcriptions",
-        endpoint_base.trim_end_matches('/')
-    );
+    // ── 收集参数：音频 + 固定 json 返回（规则未声明则不传，交给服务端默认）──
     let mime = mime.unwrap_or_else(|| "audio/webm".to_string());
-    // 文件名带扩展名：部分兼容实现按文件名判断容器格式
-    let file_name = if mime.contains("wav") {
-        "speech.wav"
-    } else {
-        "speech.webm"
-    };
-    let form = reqwest::multipart::Form::new()
-        .text("model", model.clone())
-        // 用 json 而不是 text：text 是各家兼容层支持度最参差的取值的那个
-        .text("response_format", "json")
-        .part(
-            "file",
-            reqwest::multipart::Part::bytes(bytes)
-                .file_name(file_name)
-                .mime_str(&mime)
-                .map_err(|e| AppError::InvalidInput(format!("设置音频 MIME 失败: {}", e)))?,
-        );
+    let data_url = format!("data:{};base64,{}", mime, audio_base64);
+    let mut provided: Vec<(String, Value)> = vec![("file".to_string(), json!(data_url))];
+    if rule.mapping.contains_key("format") {
+        provided.push(("format".to_string(), json!("json")));
+    }
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(TRANSCRIBE_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| AppError::Network(format!("构造请求客户端失败: {}", e)))?;
-    let resp = client
-        .post(&url)
-        .bearer_auth(&api_key)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| AppError::Network(format!("语音识别请求失败: {}", e)))?;
+    // ── 构造请求 ──
+    let args: Map<String, Value> = provided.iter().cloned().collect();
+    let ctx = TransformCtx { args: &args };
+    let multipart = rule.transport.body == BodyKind::Multipart;
+    let mut body = json!({});
+    let mut parts: Vec<FormPart> = Vec::new();
 
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        let detail: String = body.trim().chars().take(400).collect();
-        return Err(AppError::External(explain_failure(
-            status.as_u16(),
-            &detail,
-            &provider_name,
-            &model,
+    if multipart {
+        if !rule.transport.create.contains("{model}") {
+            parts.push(FormPart::Text {
+                name: "model".to_string(),
+                value: model.clone(),
+            });
+        }
+    } else if !rule.transport.create.contains("{model}") {
+        body["model"] = json!(model);
+    }
+
+    for (name, value) in &provided {
+        let Some(mapping) = rule.mapping.get(name) else {
+            continue;
+        };
+        if mapping.ignore || mapping.consume {
+            continue;
+        }
+        if multipart {
+            let field = mapping
+                .field
+                .clone()
+                .ok_or_else(|| format!("语音转写清单参数 {} 缺少 field", name))?;
+            if mapping
+                .transform
+                .as_ref()
+                .is_some_and(|transform| transform.is_file_part())
+            {
+                let (file_name, file_mime) = audio_file_meta(&data_url, &bytes);
+                parts.push(FormPart::Binary {
+                    name: field,
+                    bytes: bytes.clone(),
+                    file_name,
+                    mime: file_mime,
+                });
+            } else {
+                let transformed = apply_transform(mapping.transform.as_ref(), value, &ctx)
+                    .await
+                    .map_err(|error| format!("语音转写参数 {} 转换失败: {}", name, error))?;
+                parts.push(FormPart::Text {
+                    name: field,
+                    value: text_of(&transformed),
+                });
+            }
+        } else {
+            let transformed = apply_transform(mapping.transform.as_ref(), value, &ctx)
+                .await
+                .map_err(|error| format!("语音转写参数 {} 转换失败: {}", name, error))?;
+            crate::tools::tool_manifest::write_mapping(&mut body, mapping, transformed)
+                .map_err(|error| format!("语音转写清单参数 {} 非法: {}", name, error))?;
+        }
+    }
+
+    // ── 交给通用执行器（端点、鉴权、字段全部来自清单）──
+    let output_dir = std::path::PathBuf::from(".");
+    let base = endpoint_base.trim_end_matches('/').to_string();
+    let noop = |_: &str| {};
+    let result = tokio::time::timeout(
+        Duration::from_secs(TRANSCRIBE_TIMEOUT_SECS),
+        tool_transport::execute(
+            &Execution {
+                base_url: &base,
+                api_key: &api_key,
+                model: &model,
+                body: &body,
+                parts: &parts,
+                rule,
+                output_dir: &output_dir,
+                label: "语音转写",
+                file_prefix: "transcript",
+            },
+            &noop,
+        ),
+    )
+    .await
+    .map_err(|_| {
+        AppError::Network(format!(
+            "语音识别超时（超过 {} 秒），请缩短录音后重试",
+            TRANSCRIBE_TIMEOUT_SECS
         ))
-        .into());
-    }
+    })?
+    .map_err(|error| failure_with_hint(&error, &provider_name, &model))?;
 
-    // 兼容两种返回：json（{text}）与部分实现仍回纯文本
-    let trimmed = body.trim();
-    let text = if trimmed.starts_with('{') {
-        serde_json::from_str::<serde_json::Value>(trimmed)
-            .ok()
-            .and_then(|v| v["text"].as_str().map(|s| s.trim().to_string()))
-            .unwrap_or_default()
-    } else {
-        trimmed.to_string()
-    };
-    if text.is_empty() {
-        return Err(AppError::InvalidInput(
-            "没有识别到语音内容（可能是静音或说得太短）".to_string(),
-        )
-        .into());
-    }
+    let text = result
+        .text
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| {
+            AppError::InvalidInput("没有识别到语音内容（可能是静音或说得太短）".to_string())
+        })?;
     Ok(text)
+}
+
+fn text_of(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// 从执行器错误里取出 HTTP 状态码，补上可行动的说明。
+fn failure_with_hint(error: &str, provider: &str, model: &str) -> String {
+    let status = error
+        .split("(HTTP ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|code| code.trim().parse::<u16>().ok());
+    match status {
+        Some(status) => {
+            let detail: String = error.chars().take(400).collect();
+            explain_failure(status, &detail, provider, model)
+        }
+        None => format!(
+            "语音识别失败：{}\n提供商「{}」· 模型「{}」",
+            error, provider, model
+        ),
+    }
 }
 
 /// 把各类 HTTP 失败翻译成"用户能据此行动"的说明。
@@ -158,7 +237,7 @@ fn explain_failure(status: u16, detail: &str, provider: &str, model: &str) -> St
     let hint = match status {
         401 | 403 => "鉴权失败：检查 设置 › API集成配置 里的 API Key 是否有效、是否有该模型的权限",
         402 => "该提供商账户余额/额度不足（与语音功能无关），充值或换用其它提供商即可",
-        404 => "该提供商没有 /audio/transcriptions 端点，或模型名不存在；确认提供商为 OpenAI 兼容格式、模型名与清单一致",
+        404 => "该提供商没有语音转写端点，或模型名不存在；确认提供商格式、模型名与语音模型清单一致",
         413 => "音频体积超出该提供商限制，请缩短录音",
         429 => "请求过于频繁或超出配额，稍后重试",
         500..=599 => "提供商服务端出错（请求已到达服务端）：可能是该接口对模型/参数的支持问题，也可能是一次瞬时故障，可稍后重试",
