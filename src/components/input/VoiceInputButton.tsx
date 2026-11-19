@@ -80,8 +80,8 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
-/** 录音 Blob → 16kHz 单声道 WAV（失败返回 null，调用方回退原格式） */
-async function blobToWav16k(blob: Blob): Promise<Blob | null> {
+/** 录音 Blob → 16kHz 单声道 WAV（失败返回 null，调用方回退原格式）；peak 用于判断是否录到人声 */
+async function blobToWav16k(blob: Blob): Promise<{ blob: Blob; peak: number } | null> {
   try {
     const decoded = await new AudioContext().decodeAudioData(await blob.arrayBuffer());
     const targetRate = 16000;
@@ -92,7 +92,13 @@ async function blobToWav16k(blob: Blob): Promise<Blob | null> {
     source.connect(offline.destination);
     source.start();
     const rendered = await offline.startRendering();
-    return encodeWav(rendered.getChannelData(0), targetRate);
+    const samples = rendered.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const value = Math.abs(samples[i]);
+      if (value > peak) peak = value;
+    }
+    return { blob: encodeWav(samples, targetRate), peak };
   } catch (e) {
     console.warn('[VoiceInput] 录音转 WAV 失败，回退原始格式:', e);
     return null;
@@ -162,7 +168,12 @@ export function VoiceInputButton({
     setTranscribing(true);
     try {
       const wav = await blobToWav16k(blob);
-      const audioBase64 = await blobToBase64(wav ?? blob);
+      // 峰值过低说明麦克风没收到有效声音：直接提示，避免把静音送去转写后拿到空文本
+      if (wav && wav.peak < 0.004) {
+        showToast('没有录到有效声音（输入电平过低），请检查麦克风设备或被静音后重试', 'error');
+        return;
+      }
+      const audioBase64 = await blobToBase64(wav?.blob ?? blob);
       const text = await invoke<string>('transcribe_audio', {
         providerId: target.providerId,
         model: target.model,

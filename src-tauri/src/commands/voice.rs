@@ -212,6 +212,26 @@ fn text_of(value: &Value) -> String {
 
 /// 从执行器错误里取出 HTTP 状态码，补上可行动的说明。
 fn failure_with_hint(error: &str, provider: &str, model: &str) -> String {
+    // 服务端 200 但没给文字：音频已被接收，问题在音频内容或模型能力
+    if error.contains("响应缺少转写文本") {
+        let seconds = error
+            .split("\"duration\":")
+            .nth(1)
+            .and_then(|rest| rest.split([',', '}']).next())
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .map(|duration| format!("约 {:.1} 秒", duration))
+            .unwrap_or_else(|| "未知".to_string());
+        return format!(
+            "没有识别到文字（音频时长{}，服务端已接收）。请依次确认：\n\
+             1. 录到的确实是清晰人声（系统麦克风有电平波动，不是静音/纯噪声）；\n\
+             2. 说话音量与距离正常，可换一个麦克风设备再试；\n\
+             3. 该模型支持当前语言（可在「模型适配 › 语音转写」的清单里查看 languages）；\n\
+             4. 仍为空则说明该模型对这段音频无法转写，请换一个转写模型。\n\
+             提供商「{}」· 模型「{}」\n服务端原始响应：{}",
+            seconds, provider, model, error
+        );
+    }
+
     let status = error
         .split("(HTTP ")
         .nth(1)
@@ -222,10 +242,7 @@ fn failure_with_hint(error: &str, provider: &str, model: &str) -> String {
             let detail: String = error.chars().take(400).collect();
             explain_failure(status, &detail, provider, model)
         }
-        None => format!(
-            "语音识别失败：{}\n提供商「{}」· 模型「{}」",
-            error, provider, model
-        ),
+        None => format!("{}\n提供商「{}」· 模型「{}」", error, provider, model),
     }
 }
 
