@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 1,
+  "version": 2,
   "updatedAt": "2026-11-19T00:00:00Z",
   "rules": [
     {
@@ -42,6 +42,28 @@
       },
       "limits": {
         "maxBytes": 26214400
+      }
+    },
+    {
+      "match": "*deepseek*",
+      "note": "DeepSeek 语音识别 /v1/tools/asr：multipart 上传 file，仅返回 text；语种自动识别，无 language / format / temperature 参数；音频 ≤ 8 MiB、≤ 120 秒",
+      "transport": {
+        "create": "/tools/asr",
+        "auth": "bearer",
+        "body": "multipart"
+      },
+      "responseMode": "url",
+      "resultPaths": ["text"],
+      "output": "text",
+      "omitModel": true,
+      "mapping": {
+        "file": {
+          "field": "file",
+          "transform": { "type": "file_part_binary" }
+        }
+      },
+      "limits": {
+        "maxBytes": 8388608
       }
     },
     {

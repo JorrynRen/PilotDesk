@@ -81,6 +81,9 @@ pub struct ModelRule {
     pub output_extension: Option<String>,
     #[serde(default)]
     pub defaults: bool,
+    /// 不向请求注入 `model`：部分厂商端点（如 DeepSeek 语音）没有 model 参数
+    #[serde(default)]
+    pub omit_model: bool,
     /// 说明文字，仅供人工阅读
     #[allow(dead_code)]
     #[serde(default)]

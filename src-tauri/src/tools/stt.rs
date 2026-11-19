@@ -289,15 +289,17 @@ impl SttTool {
         let mut body = json!({});
         let mut parts: Vec<FormPart> = Vec::new();
 
-        if multipart {
-            if !rule.transport.create.contains("{model}") {
-                parts.push(FormPart::Text {
-                    name: "model".to_string(),
-                    value: model.clone(),
-                });
+        if !rule.omit_model {
+            if multipart {
+                if !rule.transport.create.contains("{model}") {
+                    parts.push(FormPart::Text {
+                        name: "model".to_string(),
+                        value: model.clone(),
+                    });
+                }
+            } else if !rule.transport.create.contains("{model}") {
+                body["model"] = json!(model);
             }
-        } else if !rule.transport.create.contains("{model}") {
-            body["model"] = json!(model);
         }
 
         let mut echo_fields: Vec<Value> = Vec::new();

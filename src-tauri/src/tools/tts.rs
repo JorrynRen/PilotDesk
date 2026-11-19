@@ -237,7 +237,7 @@ impl TtsTool {
         let args: Map<String, Value> = provided.iter().cloned().collect();
         let ctx = TransformCtx { args: &args };
         let mut body = json!({});
-        if !rule.transport.create.contains("{model}") {
+        if !rule.omit_model && !rule.transport.create.contains("{model}") {
             body["model"] = json!(model);
         }
 

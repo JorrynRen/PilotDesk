@@ -65,3 +65,35 @@ pub fn capability(kind: &str, model: &str) -> Result<serde_json::Value, String> 
         .ok_or_else(|| format!("未知的语音清单 kind: {}（可选 tts / stt）", kind))?;
     super::tool_manifest::capability(spec, model)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::tool_manifest::ToolManifest;
+
+    #[test]
+    fn builtin_tts_and_stt_manifests_parse() {
+        ToolManifest::builtin(&TTS_SPEC).expect("tts 内置清单应可解析");
+        ToolManifest::builtin(&STT_SPEC).expect("stt 内置清单应可解析");
+    }
+
+    #[test]
+    fn deepseek_rules_select_and_omit_model() {
+        let tts = ToolManifest::builtin(&TTS_SPEC).unwrap();
+        let (rule, verified) = tts.select("deepseek-tts").unwrap();
+        assert!(verified, "deepseek 应命中专属规则而不是兜底");
+        assert_eq!(rule.match_pattern, "*deepseek*");
+        assert!(rule.omit_model, "DeepSeek 端点没有 model 参数");
+        assert_eq!(rule.transport.create, "/tools/tts");
+        assert_eq!(rule.mapping["voice"].field.as_deref(), Some("voice_id"));
+        assert!(rule.mapping.get("speed").is_none());
+
+        let stt = ToolManifest::builtin(&STT_SPEC).unwrap();
+        let (rule, verified) = stt.select("deepseek-asr").unwrap();
+        assert!(verified);
+        assert!(rule.omit_model);
+        assert_eq!(rule.transport.create, "/tools/asr");
+        assert!(rule.mapping.get("language").is_none());
+        assert_eq!(rule.limits.max_bytes, Some(8 * 1024 * 1024));
+    }
+}

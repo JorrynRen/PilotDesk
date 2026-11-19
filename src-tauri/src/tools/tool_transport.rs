@@ -605,6 +605,7 @@ fn extension_from_content_type(content_type: Option<&str>, fallback: &str) -> St
         ("opus", "opus"),
         ("flac", "flac"),
         ("aac", "aac"),
+        ("pcm", "pcm"),
         ("webm", "webm"),
         ("mp4", "mp4"),
     ] {

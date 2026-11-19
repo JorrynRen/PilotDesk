@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 1,
+  "version": 2,
   "updatedAt": "2026-11-19T00:00:00Z",
   "rules": [
     {
@@ -36,6 +36,37 @@
       "limits": {
         "formats": ["mp3", "opus", "aac", "flac", "wav", "pcm"],
         "maxChars": 4096
+      }
+    },
+    {
+      "match": "*deepseek*",
+      "note": "DeepSeek 语音合成 /v1/tools/tts：整段 JSON 合成，无 model 参数；音色仅 stella / tide；输出 wav / pcm；语种自动识别，不支持 speed / language",
+      "transport": {
+        "create": "/tools/tts",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "responseMode": "binary_body",
+      "output": "file",
+      "omitModel": true,
+      "mapping": {
+        "text": { "field": "text", "transform": { "type": "string" } },
+        "voice": { "field": "voice_id", "transform": { "type": "string" } },
+        "format": {
+          "field": "format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "wav": "wav",
+              "pcm": "pcm"
+            }
+          }
+        }
+      },
+      "limits": {
+        "formats": ["wav", "pcm"],
+        "voices": ["stella", "tide"],
+        "maxChars": 10000
       }
     },
     {
