@@ -1,10 +1,11 @@
-//! 通用生成任务执行器：按清单里的传输描述拼路径、发请求、判状态、取结果。
+//! 通用模型任务执行器：按清单里的传输描述拼路径、发请求、判状态、取结果。
 //!
+//! 视频、图片、语音合成、语音转写共用本执行器，差异全部由各自的清单表达；
 //! 本模块不含任何厂商字段名或端点，所有取值来自 [`ModelRule`]：
 //! - `transport`：创建 / 轮询 / 内容路径、鉴权方式、请求体编码（json / multipart）
 //! - `task`：任务标识候选路径、状态路径、成功与失败取值、错误路径
-//! - `responseMode`：`url` 直接取地址，`binary` 拉取内容落盘
-//! - `output`：`file` 落盘（视频默认），`markdown_url` 回传图片地址
+//! - `responseMode`：`url` 直接取地址，`binary` 拉取内容落盘，`binary_body` 响应体即结果
+//! - `output`：`file` 落盘，`markdown_url` 回传图片地址，`text` 回传文本
 
 use std::path::Path;
 use std::time::{Duration, Instant};

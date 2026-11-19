@@ -2,7 +2,7 @@
 //!
 //! 模型差异（端点、鉴权、字段名、结果编码、限制）全部写在
 //! `resources/tts-models.json` 里，由 [`audio_manifest`] 解释、
-//! [`video_transport`] 执行；本文件不包含厂商字段名。
+//! [`tool_transport`] 执行；本文件不包含厂商字段名。
 //!
 //! 模型选择走 list_models + resolve_provider 跨 provider 解析，并沿用图片 / 视频工具
 //! 相同的模型白名单校验；key 只进请求构造，绝不进入工具返回值。
@@ -15,7 +15,7 @@ use serde_json::{json, Map, Value};
 
 use crate::tools::audio_manifest;
 use crate::tools::tool_manifest::{apply_transform, write_mapping, TransformCtx};
-use crate::tools::video_transport::{self, Execution};
+use crate::tools::tool_transport::{self, Execution};
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 
 pub struct TtsTool {
@@ -267,7 +267,7 @@ impl ToolHandler for TtsTool {
         };
         let base = endpoint_base.trim_end_matches('/').to_string();
         let noop = |_: &str| {};
-        let result = video_transport::execute(
+        let result = tool_transport::execute(
             &Execution {
                 base_url: &base,
                 api_key: &api_key,

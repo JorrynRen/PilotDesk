@@ -2,7 +2,7 @@
 //!
 //! 模型差异（端点、编码方式、字段名、结果取值、限制）全部写在
 //! `resources/image-models.json` 里，由 [`image_manifest`] 解释、
-//! [`video_transport`] 执行；本文件不包含任何厂商字段名。
+//! [`tool_transport`] 执行；本文件不包含任何厂商字段名。
 //!
 //! 发送前的本地校验：不支持的参数直接报错，绝不静默丢弃；不支持的组合直接拒绝。
 
@@ -15,7 +15,7 @@ use serde_json::{json, Map, Value};
 use crate::tools::image_common::resolve_image_bytes;
 use crate::tools::image_manifest::{self, SPEC};
 use crate::tools::tool_manifest::{apply_transform, write_mapping, TransformCtx};
-use crate::tools::video_transport::{self, Execution, FormPart};
+use crate::tools::tool_transport::{self, Execution, FormPart};
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 
 /// 图片生成工具
@@ -369,7 +369,7 @@ impl ToolHandler for GenerateImageTool {
         let output_dir = PathBuf::from(&self.cwd).join("generated-images");
         let base = endpoint_base.trim_end_matches('/').to_string();
         let noop = |_: &str| {};
-        let result = video_transport::execute(
+        let result = tool_transport::execute(
             &Execution {
                 base_url: &base,
                 api_key: &api_key,

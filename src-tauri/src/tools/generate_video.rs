@@ -4,7 +4,7 @@
 //! 与六个标量（提示词/时长/画幅/分辨率/种子/负向提示词）。
 //! 模型差异（端点、字段名、任务判定、结果取值、限制）全部写在
 //! `resources/video-models.json` 里，由 [`video_manifest`] 解释、
-//! [`video_transport`] 执行；本文件不包含任何厂商字段名。
+//! [`tool_transport`] 执行；本文件不包含任何厂商字段名。
 //!
 //! 发送前的本地校验：不支持的参数直接报错，绝不静默丢弃；不支持的组合直接拒绝。
 
@@ -18,7 +18,7 @@ use tauri::Emitter;
 use crate::tools::video_manifest::{
     apply_transform, snapshot, write_mapping, TransformCtx, MEDIA_SLOTS, SCALAR_SLOTS,
 };
-use crate::tools::video_transport::{self, Execution};
+use crate::tools::tool_transport::{self, Execution};
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 
 /// 视频生成工具
@@ -470,7 +470,7 @@ impl ToolHandler for GenerateVideoTool {
         // ── 交给通用执行器 ──
         let output_dir = PathBuf::from(&self.cwd).join("generated-videos");
         let progress = |message: &str| self.emit_progress(message);
-        let result = video_transport::execute(
+        let result = tool_transport::execute(
             &Execution {
                 base_url: &base,
                 api_key: &api_key,

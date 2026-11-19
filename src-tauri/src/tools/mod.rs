@@ -58,7 +58,7 @@ pub mod tool_manifest;
 pub mod tts;
 pub mod video_capabilities;
 pub mod video_manifest;
-pub mod video_transport;
+pub mod tool_transport;
 pub mod work_history;
 pub mod write_file;
 
