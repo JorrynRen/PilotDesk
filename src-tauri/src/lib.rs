@@ -3300,11 +3300,15 @@ pub fn run() {
                     if let Err(e) = tools::image_manifest::ensure_seeded(&conn) {
                         log::warn!("[ToolManifest:image] 启动播种失败：{}", e);
                     }
+                    if let Err(e) = tools::audio_manifest::ensure_seeded(&conn) {
+                        log::warn!("[ToolManifest:audio] 启动播种失败：{}", e);
+                    }
                 }
                 Err(e) => log::warn!("[ToolManifest] 取主库连接失败，跳过启动播种：{}", e),
             }
             tools::video_manifest::spawn_background_refresh(pool.clone());
             tools::image_manifest::spawn_background_refresh(pool.clone());
+            tools::audio_manifest::spawn_background_refresh(pool.clone());
 
             // 启动云同步后台任务（每 10 分钟一次；仅「开关开启 + 已登录 + 有能力」时真正执行，
             // 其余静默跳过，失败只记日志——不影响离线可用）

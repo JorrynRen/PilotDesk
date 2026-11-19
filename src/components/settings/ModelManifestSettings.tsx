@@ -14,15 +14,15 @@ import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { SettingsButton, SettingsSection } from './index';
 
-export type ModelManifestKind = 'video' | 'image';
+export type ModelManifestKind = 'video' | 'image' | 'tts' | 'stt';
 
 type ManifestSource = 'builtin' | 'market' | 'local';
 
 interface RuleSummary {
   match: string;
   note?: string | null;
-  responseMode: 'url' | 'binary';
-  output: 'file' | 'markdown_url';
+  responseMode: 'url' | 'binary' | 'binary_body';
+  output: 'file' | 'markdown_url' | 'text';
   defaults: boolean;
   slots: string[];
   limits: {
@@ -32,6 +32,11 @@ interface RuleSummary {
     aspectRatios: string[];
     resolutions: string[];
     sizes: string[];
+    voices: string[];
+    formats: string[];
+    languages: string[];
+    maxChars: number | null;
+    maxBytes: number | null;
   };
 }
 
@@ -77,7 +82,47 @@ const KIND_META: Record<ModelManifestKind, { title: string; description: string;
     description: '图片生成 / 编辑模型的端点、参数映射与能力限制由这份清单决定；保存后立即生效，无需重启',
     file: 'image-models.json',
   },
+  tts: {
+    title: '语音合成（TTS）',
+    description: '语音合成模型的端点、鉴权、参数映射与输出格式由这份清单决定；保存后立即生效，无需重启',
+    file: 'tts-models.json',
+  },
+  stt: {
+    title: '语音转写（STT）',
+    description: '语音转写模型的端点、表单字段与结果取值由这份清单决定；保存后立即生效，无需重启',
+    file: 'stt-models.json',
+  },
 };
+
+/** 「语音模型适配」页签：页内二级切换语音合成 / 语音转写 */
+export function AudioModelManifestSettings() {
+  const [kind, setKind] = useState<'tts' | 'stt'>('tts');
+  return (
+    <div className="space-y-4">
+      <div
+        className="inline-flex rounded-lg p-1"
+        style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+      >
+        {(['tts', 'stt'] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => setKind(item)}
+            className="rounded px-3 py-1 text-xs transition-colors"
+            style={
+              kind === item
+                ? { backgroundColor: 'var(--accent)', color: '#fff' }
+                : { color: 'var(--text-secondary)' }
+            }
+          >
+            {item === 'tts' ? '语音合成' : '语音转写'}
+          </button>
+        ))}
+      </div>
+      <ModelManifestSettings key={kind} kind={kind} />
+    </div>
+  );
+}
 
 function fmtTime(secs: number | null): string {
   if (!secs) return '—';
@@ -395,7 +440,13 @@ export function ModelManifestSettings({ kind }: { kind: ModelManifestKind }) {
               <div className="flex flex-wrap items-center gap-2">
                 <code className="text-xs" style={{ color: 'var(--text-primary)' }}>{rule.match}</code>
                 <Badge
-                  text={rule.output === 'markdown_url' ? 'Markdown 图片' : '本地文件'}
+                  text={
+                    rule.output === 'markdown_url'
+                      ? 'Markdown 图片'
+                      : rule.output === 'text'
+                        ? '文本结果'
+                        : '本地文件'
+                  }
                   color="var(--text-secondary)"
                 />
                 {rule.defaults && <Badge text="通用兜底" color="#F59E0B" />}
@@ -410,14 +461,22 @@ export function ModelManifestSettings({ kind }: { kind: ModelManifestKind }) {
               )}
               {(rule.limits.durations.length > 0 || rule.limits.aspectRatios.length > 0
                 || rule.limits.resolutions.length > 0 || rule.limits.sizes.length > 0
-                || rule.limits.referenceImages != null || rule.limits.maxN != null) && (
+                || rule.limits.referenceImages != null || rule.limits.maxN != null
+                || rule.limits.voices.length > 0 || rule.limits.formats.length > 0
+                || rule.limits.languages.length > 0 || rule.limits.maxChars != null
+                || rule.limits.maxBytes != null) && (
                 <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   {rule.limits.durations.length > 0 && <span>时长 {rule.limits.durations.join('/')}s{'  '}</span>}
                   {rule.limits.aspectRatios.length > 0 && <span>画幅 {rule.limits.aspectRatios.join('/')}{'  '}</span>}
                   {rule.limits.resolutions.length > 0 && <span>分辨率 {rule.limits.resolutions.join('/')}{'  '}</span>}
                   {rule.limits.sizes.length > 0 && <span>尺寸 {rule.limits.sizes.join('/')}{'  '}</span>}
                   {rule.limits.maxN != null && <span>生成数量上限 {rule.limits.maxN}{'  '}</span>}
-                  {rule.limits.referenceImages != null && <span>参考图上限 {rule.limits.referenceImages} 张</span>}
+                  {rule.limits.referenceImages != null && <span>参考图上限 {rule.limits.referenceImages} 张{'  '}</span>}
+                  {rule.limits.formats.length > 0 && <span>格式 {rule.limits.formats.join('/')}{'  '}</span>}
+                  {rule.limits.voices.length > 0 && <span>音色 {rule.limits.voices.join('/')}{'  '}</span>}
+                  {rule.limits.languages.length > 0 && <span>语言 {rule.limits.languages.join('/')}{'  '}</span>}
+                  {rule.limits.maxChars != null && <span>文本上限 {rule.limits.maxChars} 字符{'  '}</span>}
+                  {rule.limits.maxBytes != null && <span>音频上限 {Math.round(rule.limits.maxBytes / 1024 / 1024)} MB</span>}
                 </div>
               )}
             </div>

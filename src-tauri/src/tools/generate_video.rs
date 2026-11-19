@@ -480,6 +480,7 @@ impl ToolHandler for GenerateVideoTool {
                 rule,
                 output_dir: &output_dir,
                 label: "视频",
+                file_prefix: "video",
             },
             &progress,
         )

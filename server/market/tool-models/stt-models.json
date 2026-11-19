@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "version": 1,
+  "updatedAt": "2026-11-19T00:00:00Z",
+  "rules": [
+    {
+      "match": "*",
+      "defaults": true,
+      "note": "通用兜底：任意 OpenAI 兼容 /audio/transcriptions；未配置专属规则的模型都走这条",
+      "transport": {
+        "create": "/audio/transcriptions",
+        "auth": "bearer",
+        "body": "multipart"
+      },
+      "responseMode": "url",
+      "resultPaths": ["text"],
+      "output": "text",
+      "mapping": {
+        "file": {
+          "field": "file",
+          "transform": { "type": "file_part_binary" }
+        },
+        "language": {
+          "field": "language",
+          "transform": { "type": "string" }
+        },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "json": "json",
+              "text": "text",
+              "verbose_json": "verbose_json"
+            }
+          }
+        },
+        "temperature": {
+          "field": "temperature",
+          "transform": { "type": "number" }
+        }
+      },
+      "limits": {
+        "maxBytes": 26214400
+      }
+    },
+    {
+      "match": "*whisper-1*",
+      "note": "OpenAI whisper-1：支持 language / response_format / temperature",
+      "transport": {
+        "create": "/audio/transcriptions",
+        "auth": "bearer",
+        "body": "multipart"
+      },
+      "responseMode": "url",
+      "resultPaths": ["text"],
+      "output": "text",
+      "mapping": {
+        "file": {
+          "field": "file",
+          "transform": { "type": "file_part_binary" }
+        },
+        "language": {
+          "field": "language",
+          "transform": { "type": "string" }
+        },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "json": "json",
+              "text": "text",
+              "verbose_json": "verbose_json"
+            }
+          }
+        },
+        "temperature": {
+          "field": "temperature",
+          "transform": { "type": "number" }
+        }
+      },
+      "limits": {
+        "maxBytes": 26214400
+      }
+    },
+    {
+      "match": "*gpt-4o-transcribe*",
+      "note": "OpenAI gpt-4o-transcribe：只支持 json / text，且不接受 temperature",
+      "transport": {
+        "create": "/audio/transcriptions",
+        "auth": "bearer",
+        "body": "multipart"
+      },
+      "responseMode": "url",
+      "resultPaths": ["text"],
+      "output": "text",
+      "mapping": {
+        "file": {
+          "field": "file",
+          "transform": { "type": "file_part_binary" }
+        },
+        "language": {
+          "field": "language",
+          "transform": { "type": "string" }
+        },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "json": "json",
+              "text": "text"
+            }
+          }
+        }
+      },
+      "limits": {
+        "maxBytes": 26214400
+      }
+    },
+    {
+      "match": "*azure*",
+      "note": "Azure OpenAI：model 为部署名（deployment），create 路径带 api-version，鉴权用 api-key 头",
+      "transport": {
+        "create": "/openai/deployments/{model}/audio/transcriptions?api-version=2024-02-15-preview",
+        "auth": "api-key",
+        "body": "multipart"
+      },
+      "responseMode": "url",
+      "resultPaths": ["text"],
+      "output": "text",
+      "mapping": {
+        "file": {
+          "field": "file",
+          "transform": { "type": "file_part_binary" }
+        },
+        "language": {
+          "field": "language",
+          "transform": { "type": "string" }
+        },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "json": "json",
+              "text": "text",
+              "verbose_json": "verbose_json"
+            }
+          }
+        },
+        "temperature": {
+          "field": "temperature",
+          "transform": { "type": "number" }
+        }
+      },
+      "limits": {
+        "maxBytes": 26214400
+      }
+    }
+  ]
+}

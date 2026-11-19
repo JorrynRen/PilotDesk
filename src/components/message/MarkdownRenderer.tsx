@@ -1,6 +1,6 @@
 import { memo, useState, useCallback } from 'react';
 import { Copy, Check, Eye, Code2 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -219,11 +219,27 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
           // 放行自定义路径协议，并保留安全的外部/相对链接，其余（javascript: 等）置空
           if (url.startsWith('pilotdesk-path:')) return url;
           if (/^(https?:|mailto:|tel:|data:)/i.test(url)) return url;
+          // 本机绝对路径（语音落盘结果）交给 asset 协议播放
+          if (/^[a-zA-Z]:[\\/]/.test(url) || url.startsWith('file://')) return url;
           if (url.startsWith('#') || url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) return url;
           return '';
         }}
         components={{
           img({ src, alt, ...props }) {
+            // 音频：工具返回 `![音频](<本地路径>)` → 渲染播放控件（本地路径需转 asset 协议）
+            const isAudio =
+              alt === '音频' || /\.(mp3|wav|ogg|flac|m4a|aac|opus|pcm)([?#]|$)/i.test(src || '');
+            if (isAudio && src) {
+              const audioSrc = /^(https?:|data:|blob:|asset:)/i.test(src) ? src : convertFileSrc(src);
+              return (
+                <audio
+                  src={audioSrc}
+                  controls
+                  preload="metadata"
+                  style={{ width: '100%', maxWidth: 420, display: 'block' }}
+                />
+              );
+            }
             // 视频：工具返回 `![视频](<url>)`（或视频扩展名 URL）→ 渲染可播放的视频控件
             const isVideo = alt === '视频' || /\.(mp4|webm|mov|m4v)([?#]|$)/i.test(src || '');
             if (isVideo && src) {

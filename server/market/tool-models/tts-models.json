@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "version": 1,
+  "updatedAt": "2026-11-19T00:00:00Z",
+  "rules": [
+    {
+      "match": "*",
+      "defaults": true,
+      "note": "通用兜底：任意 OpenAI 兼容 /audio/speech 厂商；未配置专属规则的模型都走这条",
+      "transport": {
+        "create": "/audio/speech",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "responseMode": "binary_body",
+      "output": "file",
+      "mapping": {
+        "text": { "field": "input", "transform": { "type": "string" } },
+        "voice": { "field": "voice", "transform": { "type": "string" } },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "mp3": "mp3",
+              "opus": "opus",
+              "aac": "aac",
+              "flac": "flac",
+              "wav": "wav",
+              "pcm": "pcm"
+            }
+          }
+        },
+        "speed": { "field": "speed", "transform": { "type": "number" } }
+      },
+      "limits": {
+        "formats": ["mp3", "opus", "aac", "flac", "wav", "pcm"],
+        "maxChars": 4096
+      }
+    },
+    {
+      "match": "tts-1",
+      "note": "OpenAI tts-1：响应体直接是音频二进制，扩展名由 Content-Type 推断",
+      "transport": {
+        "create": "/audio/speech",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "responseMode": "binary_body",
+      "output": "file",
+      "mapping": {
+        "text": { "field": "input", "transform": { "type": "string" } },
+        "voice": { "field": "voice", "transform": { "type": "string" } },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "mp3": "mp3",
+              "opus": "opus",
+              "aac": "aac",
+              "flac": "flac",
+              "wav": "wav",
+              "pcm": "pcm"
+            }
+          }
+        },
+        "speed": { "field": "speed", "transform": { "type": "number" } }
+      },
+      "limits": {
+        "formats": ["mp3", "opus", "aac", "flac", "wav", "pcm"],
+        "voices": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+        "maxChars": 4096
+      }
+    },
+    {
+      "match": "*gpt-4o-mini-tts*",
+      "note": "OpenAI gpt-4o-mini-tts：字段与 tts-1 一致，额外支持 instructions（需在清单里自行扩展）",
+      "transport": {
+        "create": "/audio/speech",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "responseMode": "binary_body",
+      "output": "file",
+      "mapping": {
+        "text": { "field": "input", "transform": { "type": "string" } },
+        "voice": { "field": "voice", "transform": { "type": "string" } },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "mp3": "mp3",
+              "opus": "opus",
+              "aac": "aac",
+              "flac": "flac",
+              "wav": "wav",
+              "pcm": "pcm"
+            }
+          }
+        },
+        "speed": { "field": "speed", "transform": { "type": "number" } }
+      },
+      "limits": {
+        "formats": ["mp3", "opus", "aac", "flac", "wav", "pcm"],
+        "voices": ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"],
+        "maxChars": 4096
+      }
+    },
+    {
+      "match": "*azure*",
+      "note": "Azure OpenAI：model 为部署名（deployment），create 路径带 api-version，鉴权用 api-key 头",
+      "transport": {
+        "create": "/openai/deployments/{model}/audio/speech?api-version=2024-02-15-preview",
+        "auth": "api-key",
+        "body": "json"
+      },
+      "responseMode": "binary_body",
+      "output": "file",
+      "mapping": {
+        "text": { "field": "input", "transform": { "type": "string" } },
+        "voice": { "field": "voice", "transform": { "type": "string" } },
+        "format": {
+          "field": "response_format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "mp3": "mp3",
+              "opus": "opus",
+              "aac": "aac",
+              "flac": "flac",
+              "wav": "wav",
+              "pcm": "pcm"
+            }
+          }
+        },
+        "speed": { "field": "speed", "transform": { "type": "number" } }
+      },
+      "limits": {
+        "formats": ["mp3", "opus", "aac", "flac", "wav", "pcm"],
+        "maxChars": 4096
+      }
+    },
+    {
+      "match": "*speech-*",
+      "note": "MiniMax t2a_v2：结果以 hex 内联在 data.audio，落盘为 mp3",
+      "transport": {
+        "create": "/v1/t2a_v2",
+        "auth": "bearer",
+        "body": "json"
+      },
+      "responseMode": "url",
+      "resultPaths": ["data.audio"],
+      "resultEncoding": "hex",
+      "output": "file",
+      "outputExtension": "mp3",
+      "mapping": {
+        "text": {
+          "field": "text",
+          "transform": { "type": "string" },
+          "const": {
+            "stream": false,
+            "voice_setting.vol": 1,
+            "voice_setting.pitch": 0,
+            "audio_setting.sample_rate": 32000,
+            "audio_setting.bitrate": 128000,
+            "audio_setting.channel": 1
+          }
+        },
+        "voice": {
+          "field": "voice_setting.voice_id",
+          "transform": { "type": "string" }
+        },
+        "format": {
+          "field": "audio_setting.format",
+          "transform": {
+            "type": "enum_map",
+            "values": {
+              "mp3": "mp3",
+              "wav": "wav",
+              "pcm": "pcm",
+              "flac": "flac"
+            }
+          }
+        },
+        "speed": {
+          "field": "voice_setting.speed",
+          "transform": { "type": "number" }
+        }
+      },
+      "limits": {
+        "formats": ["mp3", "wav", "pcm", "flac"],
+        "maxChars": 10000
+      }
+    }
+  ]
+}

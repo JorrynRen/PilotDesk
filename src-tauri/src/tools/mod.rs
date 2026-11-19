@@ -22,6 +22,8 @@ use serde::Serialize;
 use std::sync::Arc;
 
 pub mod ask_user;
+pub mod audio_capabilities;
+pub mod audio_manifest;
 pub mod browser;
 pub mod create_document;
 pub mod deps;
@@ -616,6 +618,8 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
                 env.resolve_provider.clone(),
                 model_getter.clone(),
             )));
+            // 能力查询只读本地清单，不依赖 endpoint/key。
+            tools.push(Arc::new(audio_capabilities::ListAudioCapabilitiesTool));
             tools.push(Arc::new(embed::EmbedTool::new(
                 endpoint.clone(),
                 key.clone(),

@@ -150,7 +150,7 @@ import { ToolSettings } from '../components/settings/ToolSettings';
 import { PluginManager } from '../components/plugin/PluginManager';
 import { SkillBrowser } from '../components/panels/SkillBrowser';
 import { VoiceInputSettings } from '../components/settings/VoiceInputSettings';
-import { ModelManifestSettings } from '../components/settings/ModelManifestSettings';
+import { AudioModelManifestSettings, ModelManifestSettings } from '../components/settings/ModelManifestSettings';
 import { KbModelSettings } from '../components/settings/KbModelSettings';
 import { KbRootSettings } from '../components/settings/KbRootSettings';
 import { KbCloudSourceSettings } from '../components/settings/KbCloudSourceSettings';
@@ -920,7 +920,7 @@ function SortableProviderCard({
 
 
 /** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
-type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission' | 'video' | 'image';
+type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission' | 'video' | 'image' | 'audio';
 
 function ApiConfig({
   deepLinkSub,
@@ -954,7 +954,9 @@ function ApiConfig({
         ? 'video'
         : urlApiTab === 'image'
           ? 'image'
-          : hideProviders
+          : urlApiTab === 'audio'
+            ? 'audio'
+            : hideProviders
             ? 'env'
             : 'providers';
   const apiTab: ApiSubTab = apiTabOverride ?? urlSub;
@@ -1202,6 +1204,7 @@ function ApiConfig({
           { key: 'permission', label: t('settings.sub.api.permission', '权限规则') },
           { key: 'video', label: t('settings.sub.api.video', '视频模型适配') },
           { key: 'image', label: t('settings.sub.api.image', '图片模型适配') },
+          { key: 'audio', label: t('settings.sub.api.audio', '语音模型适配') },
         ] as const)
           .filter((tab) => !(hideProviders && tab.key === 'providers'))
           .map((tab) => (
@@ -1289,6 +1292,7 @@ function ApiConfig({
       {apiTab === 'permission' && <PermissionSettings />}
       {apiTab === 'video' && <ModelManifestSettings kind="video" />}
       {apiTab === 'image' && <ModelManifestSettings kind="image" />}
+      {apiTab === 'audio' && <AudioModelManifestSettings />}
     </div>
   );
 }

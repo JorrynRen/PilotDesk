@@ -379,6 +379,7 @@ impl ToolHandler for GenerateImageTool {
                 rule,
                 output_dir: &output_dir,
                 label: "图片",
+                file_prefix: "image",
             },
             &noop,
         )

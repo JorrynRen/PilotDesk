@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::Value;
 
-use super::video_manifest::{AuthKind, BodyKind, ModelRule, OutputKind, ResponseMode, TaskSpec};
+use super::tool_manifest::ResultEncoding;
+use super::video_manifest::{
+    AuthKind, BodyKind, ModelRule, OutputKind, ResponseMode, TaskSpec,
+};
 
 /// 轮询间隔与整体超时
 const POLL_INTERVAL_SECS: u64 = 3;
@@ -24,6 +27,13 @@ pub enum FormPart {
     Text { name: String, value: String },
     /// 已按 PNG 归一化的文件 part
     Png { name: String, bytes: Vec<u8> },
+    /// 原始文件 part（音频等），保留来源扩展名与 MIME
+    Binary {
+        name: String,
+        bytes: Vec<u8>,
+        file_name: String,
+        mime: String,
+    },
 }
 
 /// 执行入参
@@ -38,8 +48,10 @@ pub struct Execution<'a> {
     pub rule: &'a ModelRule,
     /// `binary` 模式与 `b64_json` 落盘目录
     pub output_dir: &'a Path,
-    /// 错误与进度文案里的名词（"视频" / "图片"）
+    /// 错误与进度文案里的名词（"视频" / "图片" / "语音"）
     pub label: &'a str,
+    /// 落盘文件前缀（`video` / `image` / `tts` / `audio`）
+    pub file_prefix: &'a str,
 }
 
 /// 执行结果
@@ -49,6 +61,8 @@ pub struct ExecutionResult {
     pub local_path: Option<String>,
     /// `url` 模式下的全部结果（图片可能多张）
     pub urls: Vec<String>,
+    /// `text` 输出模式下的文本结果（语音转写）
+    pub text: Option<String>,
 }
 
 /// 任务状态判定
@@ -91,6 +105,18 @@ pub async fn execute(
                         .map_err(|e| format!("设置图片 MIME 失败: {}", e))?;
                     form = form.part(name.clone(), file);
                 }
+                FormPart::Binary {
+                    name,
+                    bytes,
+                    file_name,
+                    mime,
+                } => {
+                    let file = reqwest::multipart::Part::bytes(bytes.clone())
+                        .file_name(file_name.clone())
+                        .mime_str(mime)
+                        .map_err(|e| format!("设置文件 MIME 失败: {}", e))?;
+                    form = form.part(name.clone(), file);
+                }
             }
         }
         request = request.multipart(form);
@@ -98,11 +124,51 @@ pub async fn execute(
         request = request.json(execution.body);
     }
     let request = with_auth(request, execution.rule.transport.auth, execution.api_key);
+    let request = with_headers(request, &execution.rule.transport.headers);
     let response = request
         .send()
         .await
         .map_err(|e| format!("{}任务创建请求失败: {}", label, e))?;
     let status = response.status();
+
+    // 创建响应体即二进制结果（TTS 等同步音频接口）
+    if execution.rule.response_mode == ResponseMode::BinaryBody {
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "{}任务创建失败 (HTTP {}): {}",
+                label,
+                status.as_u16(),
+                text
+            ));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("读取{}失败: {}", label, e))?;
+        if bytes.is_empty() {
+            return Err(format!("服务端返回空{}内容", label));
+        }
+        let extension = execution
+            .rule
+            .output_extension
+            .clone()
+            .unwrap_or_else(|| extension_from_content_type(content_type.as_deref(), "bin"));
+        let path = save_bytes(execution, &bytes, &extension)?;
+        return Ok(ExecutionResult {
+            task_id: None,
+            video_url: None,
+            local_path: Some(path),
+            urls: Vec::new(),
+            text: None,
+        });
+    }
+
     let text = response
         .text()
         .await
@@ -115,10 +181,47 @@ pub async fn execute(
             text
         ));
     }
+
+    // 文本输出（语音转写）：JSON 取值，非 JSON 则按纯文本处理
+    if execution.rule.output == OutputKind::Text {
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            if let Some(result) = result_text(&value, execution.rule) {
+                return Ok(ExecutionResult {
+                    task_id: None,
+                    video_url: None,
+                    local_path: None,
+                    urls: Vec::new(),
+                    text: Some(result),
+                });
+            }
+            return Err(format!("响应缺少转写文本: {}", text));
+        }
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err("转写结果为空".to_string());
+        }
+        return Ok(ExecutionResult {
+            task_id: None,
+            video_url: None,
+            local_path: None,
+            urls: Vec::new(),
+            text: Some(trimmed.to_string()),
+        });
+    }
+
     let created: Value =
         serde_json::from_str(&text).map_err(|e| format!("解析创建响应失败: {}", e))?;
 
     // 创建响应即最终结果（同步接口或响应已带地址）
+    if let Some(path) = save_encoded_result(&created, execution)? {
+        return Ok(ExecutionResult {
+            task_id: None,
+            video_url: None,
+            local_path: Some(path),
+            urls: Vec::new(),
+            text: None,
+        });
+    }
     if execution.rule.output == OutputKind::MarkdownUrl {
         let urls = collect_outputs(&created, execution)?;
         if !urls.is_empty() {
@@ -127,6 +230,7 @@ pub async fn execute(
                 video_url: urls.first().cloned(),
                 local_path: None,
                 urls,
+                text: None,
             });
         }
     } else if let Some(url) = result_url(&created, execution.rule) {
@@ -135,6 +239,7 @@ pub async fn execute(
             video_url: Some(url.clone()),
             local_path: None,
             urls: vec![url],
+            text: None,
         });
     }
     if execution.rule.transport.poll.is_none() {
@@ -145,6 +250,7 @@ pub async fn execute(
                 video_url: None,
                 local_path: Some(path),
                 urls: Vec::new(),
+                text: None,
             });
         }
         return Err(format!("响应缺少{}地址: {}", label, text));
@@ -220,6 +326,27 @@ pub async fn execute(
                 return Err(format!("{}生成失败（任务 {}）: {}", label, task_id, message))
             }
             TaskState::Success => {
+                if execution.rule.output == OutputKind::Text {
+                    if let Some(result) = result_text(&current, execution.rule) {
+                        return Ok(ExecutionResult {
+                            task_id: Some(task_id),
+                            video_url: None,
+                            local_path: None,
+                            urls: Vec::new(),
+                            text: Some(result),
+                        });
+                    }
+                    return Err(format!("任务已完成但响应缺少转写文本: {}", text));
+                }
+                if let Some(path) = save_encoded_result(&current, execution)? {
+                    return Ok(ExecutionResult {
+                        task_id: Some(task_id),
+                        video_url: None,
+                        local_path: Some(path),
+                        urls: Vec::new(),
+                        text: None,
+                    });
+                }
                 if execution.rule.output == OutputKind::MarkdownUrl {
                     let urls = collect_outputs(&current, execution)?;
                     if !urls.is_empty() {
@@ -228,6 +355,7 @@ pub async fn execute(
                             video_url: urls.first().cloned(),
                             local_path: None,
                             urls,
+                            text: None,
                         });
                     }
                 } else if let Some(url) = result_url(&current, execution.rule) {
@@ -236,6 +364,7 @@ pub async fn execute(
                         video_url: Some(url.clone()),
                         local_path: None,
                         urls: vec![url],
+                        text: None,
                     });
                 }
                 if execution.rule.response_mode == ResponseMode::Binary {
@@ -245,6 +374,7 @@ pub async fn execute(
                         video_url: None,
                         local_path: Some(path),
                         urls: Vec::new(),
+                        text: None,
                     });
                 }
                 return Err(format!("任务已完成但响应缺少{}地址: {}", label, text));
@@ -282,7 +412,19 @@ fn with_auth(
     match auth {
         AuthKind::Bearer => request.bearer_auth(api_key),
         AuthKind::GoogleApiKey => request.header("x-goog-api-key", api_key),
+        AuthKind::ApiKey => request.header("api-key", api_key),
     }
+}
+
+/// 追加清单里声明的固定请求头
+fn with_headers(
+    mut request: reqwest::RequestBuilder,
+    headers: &std::collections::BTreeMap<String, String>,
+) -> reqwest::RequestBuilder {
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    request
 }
 
 /// 按点号读取字段（纯数字段按数组下标处理）
@@ -383,6 +525,127 @@ pub fn result_url(response: &Value, rule: &ModelRule) -> Option<String> {
     })
 }
 
+/// 按 `resultPaths` 顺序提取首个文本结果（语音转写）
+fn result_text(response: &Value, rule: &ModelRule) -> Option<String> {
+    rule.result_paths.iter().find_map(|path| {
+        get_path(response, path)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    })
+}
+
+/// 内联编码结果（base64 / hex）解码落盘；无 `resultEncoding` 时返回 None
+fn save_encoded_result(
+    response: &Value,
+    execution: &Execution<'_>,
+) -> Result<Option<String>, String> {
+    let Some(encoding) = execution.rule.result_encoding else {
+        return Ok(None);
+    };
+    let Some(text) = result_url(response, execution.rule) else {
+        return Ok(None);
+    };
+    let bytes = decode_inline(&text, encoding)?;
+    let extension = execution
+        .rule
+        .output_extension
+        .as_deref()
+        .unwrap_or("bin");
+    let path = save_bytes(execution, &bytes, extension)?;
+    log::info!(
+        "[Generate:{}] 内联结果落盘: {} ({} 字节)",
+        execution.label,
+        path,
+        bytes.len()
+    );
+    Ok(Some(path))
+}
+
+fn decode_inline(text: &str, encoding: ResultEncoding) -> Result<Vec<u8>, String> {
+    match encoding {
+        ResultEncoding::Base64 => {
+            let payload = text.split_once(',').map(|(_, rest)| rest).unwrap_or(text);
+            base64::engine::general_purpose::STANDARD
+                .decode(payload.trim())
+                .map_err(|e| format!("解码 base64 结果失败: {}", e))
+        }
+        ResultEncoding::Hex => {
+            let cleaned = text.trim();
+            if cleaned.len() % 2 != 0 {
+                return Err("hex 结果长度不是偶数".to_string());
+            }
+            let mut bytes = Vec::with_capacity(cleaned.len() / 2);
+            for pair in cleaned.as_bytes().chunks(2) {
+                let part = std::str::from_utf8(pair)
+                    .map_err(|e| format!("hex 结果包含非法字符: {}", e))?;
+                bytes.push(
+                    u8::from_str_radix(part, 16)
+                        .map_err(|e| format!("解码 hex 结果失败: {}", e))?,
+                );
+            }
+            Ok(bytes)
+        }
+    }
+}
+
+/// 按内容类型推断扩展名（音频与视频通用）
+fn extension_from_content_type(content_type: Option<&str>, fallback: &str) -> String {
+    let Some(value) = content_type else {
+        return fallback.to_string();
+    };
+    let value = value.to_ascii_lowercase();
+    for (needle, extension) in [
+        ("mpeg", "mp3"),
+        ("mp3", "mp3"),
+        ("wav", "wav"),
+        ("ogg", "ogg"),
+        ("opus", "opus"),
+        ("flac", "flac"),
+        ("aac", "aac"),
+        ("webm", "webm"),
+        ("mp4", "mp4"),
+    ] {
+        if value.contains(needle) {
+            return extension.to_string();
+        }
+    }
+    fallback.to_string()
+}
+
+/// 写入结果文件（前缀-时间戳[-序号].扩展名）
+fn save_bytes(
+    execution: &Execution<'_>,
+    bytes: &[u8],
+    extension: &str,
+) -> Result<String, String> {
+    std::fs::create_dir_all(execution.output_dir).map_err(|e| {
+        format!(
+            "创建{}目录失败: {}",
+            execution.label, e
+        )
+    })?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let mut path = execution
+        .output_dir
+        .join(format!("{}-{}.{}", execution.file_prefix, stamp, extension));
+    let mut index = 1;
+    while path.exists() {
+        index += 1;
+        path = execution.output_dir.join(format!(
+            "{}-{}-{}.{}",
+            execution.file_prefix, stamp, index, extension
+        ));
+    }
+    std::fs::write(&path, bytes)
+        .map_err(|e| format!("保存{}失败: {}", execution.label, e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// 收集 `resultPaths` 的全部结果：地址原样返回，`b64_json` 落盘后返回本地路径。
 fn collect_outputs(
     response: &Value,
@@ -470,39 +733,25 @@ async fn download_content(
     if !status.is_success() {
         return Err(format!("下载{}失败 (HTTP {})", label, status.as_u16()));
     }
-    let extension = response
+    let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_ascii_lowercase())
-        .map(|value| {
-            if value.contains("webm") {
-                "webm"
-            } else {
-                "mp4"
-            }
-        })
-        .unwrap_or("mp4");
+        .and_then(|value| value.to_str().ok());
+    let extension = execution
+        .rule
+        .output_extension
+        .clone()
+        .unwrap_or_else(|| extension_from_content_type(content_type, "mp4"));
     let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("读取{}失败: {}", label, e))?;
-
-    std::fs::create_dir_all(execution.output_dir)
-        .map_err(|e| format!("创建{}目录失败: {}", label, e))?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let path = execution
-        .output_dir
-        .join(format!("video-{}.{}", stamp, extension));
-    std::fs::write(&path, &bytes).map_err(|e| format!("保存{}失败: {}", label, e))?;
+    let path = save_bytes(execution, &bytes, &extension)?;
     log::info!(
         "[Generate:{}] binary 落盘: {} ({} 字节)",
         label,
-        path.display(),
+        path,
         bytes.len()
     );
-    Ok(path.to_string_lossy().to_string())
+    Ok(path)
 }

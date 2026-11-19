@@ -4,13 +4,15 @@
 //! 这里只负责按 kind 选清单、取数据库连接 / 连接池、把入参转发过去。
 
 use crate::tools::tool_manifest::{ManifestInfo, ManifestSourceText, ManifestSpec};
-use crate::tools::{image_manifest, video_manifest};
+use crate::tools::{audio_manifest, image_manifest, video_manifest};
 use crate::DbState;
 
 fn spec_of(kind: &str) -> Result<&'static ManifestSpec, String> {
     match kind {
         video_manifest::KIND_VIDEO => Ok(&video_manifest::SPEC),
         image_manifest::KIND_IMAGE => Ok(&image_manifest::SPEC),
+        audio_manifest::KIND_TTS => Ok(&audio_manifest::TTS_SPEC),
+        audio_manifest::KIND_STT => Ok(&audio_manifest::STT_SPEC),
         other => Err(format!("未知的清单类型: {}", other)),
     }
 }

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::db::init::DbPool;
-use super::image_common::{normalize_http_url, MAX_IMAGE_BYTES};
+use super::image_common::{load_raw_bytes, normalize_http_url, MAX_IMAGE_BYTES};
 
 /// 图像转换的超时与体积上限（与 image_common 保持一致）
 const IMAGE_FETCH_TIMEOUT_SECS: u64 = 10;
@@ -73,6 +73,12 @@ pub struct ModelRule {
     /// 结果输出策略；视频默认落盘，图片显式 `markdown_url`
     #[serde(default)]
     pub output: OutputKind,
+    /// 结果字段的编码方式：部分厂商把音频以 base64 / hex 内联在 JSON 里
+    #[serde(default)]
+    pub result_encoding: Option<ResultEncoding>,
+    /// 落盘扩展名（二进制响应、内联编码结果共用）
+    #[serde(default)]
+    pub output_extension: Option<String>,
     #[serde(default)]
     pub defaults: bool,
     /// 说明文字，仅供人工阅读
@@ -102,6 +108,9 @@ pub struct Transport {
     pub auth: AuthKind,
     #[serde(default)]
     pub body: BodyKind,
+    /// 固定请求头（如 `X-DashScope-Async: enable`），值不含凭据
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -111,6 +120,9 @@ pub enum AuthKind {
     Bearer,
     #[serde(rename = "x-goog-api-key")]
     GoogleApiKey,
+    /// `api-key: <key>`（Azure OpenAI）
+    #[serde(rename = "api-key")]
+    ApiKey,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -128,6 +140,16 @@ pub enum ResponseMode {
     #[default]
     Url,
     Binary,
+    /// 创建响应体本身就是二进制内容（如 TTS `/audio/speech`），同步返回、无任务标识
+    BinaryBody,
+}
+
+/// 结果字段的编码方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultEncoding {
+    Base64,
+    Hex,
 }
 
 /// 结果输出策略
@@ -139,6 +161,8 @@ pub enum OutputKind {
     File,
     /// 以 Markdown 图片语法回传地址；`b64_json` 落盘后回本地路径
     MarkdownUrl,
+    /// 结果是文本（语音转写），按 `resultPaths` 取值
+    Text,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -187,6 +211,21 @@ pub struct Limits {
     pub resolutions: Vec<String>,
     #[serde(default)]
     pub sizes: Vec<String>,
+    /// 语音合成：可用音色（空表示由服务端决定）
+    #[serde(default)]
+    pub voices: Vec<String>,
+    /// 语音：可用输出格式
+    #[serde(default)]
+    pub formats: Vec<String>,
+    /// 语音：支持的语言
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// 语音合成：单次文本字符上限
+    #[serde(default)]
+    pub max_chars: Option<usize>,
+    /// 语音转写：单次音频字节上限
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
 }
 
 /// 值转换：只允许枚举，不接受表达式与条件
@@ -217,6 +256,10 @@ pub enum Transform {
     ImageRefUriSingle,
     /// multipart 文件 part：读取后按 PNG 归一化（仅 `body: multipart` 可用）
     FilePartPng,
+    /// multipart 文件 part：原始字节，按来源推断扩展名与 MIME（音频等）
+    FilePartBinary,
+    /// 把本地文件 / URL / Data URI 统一转成 base64（用于内联音频请求体）
+    FileBase64,
 }
 
 impl Transform {
@@ -235,12 +278,14 @@ impl Transform {
             Transform::ImageRefUri => "image_ref_uri",
             Transform::ImageRefUriSingle => "image_ref_uri_single",
             Transform::FilePartPng => "file_part_png",
+            Transform::FilePartBinary => "file_part_binary",
+            Transform::FileBase64 => "file_base64",
         }
     }
 
     /// 该转换只用于 multipart 文件 part
     pub fn is_file_part(&self) -> bool {
-        matches!(self, Transform::FilePartPng)
+        matches!(self, Transform::FilePartPng | Transform::FilePartBinary)
     }
 }
 
@@ -338,7 +383,7 @@ impl ToolManifest {
                     .any(|mapping| mapping.transform.as_ref().is_some_and(Transform::is_file_part));
                 if !has_file_part {
                     return Err(format!(
-                        "规则 '{}'.transport.body 为 multipart，但没有任何 file_part_png 映射",
+                        "规则 '{}'.transport.body 为 multipart，但没有任何文件 part 映射（file_part_png / file_part_binary）",
                         rule.match_pattern
                     ));
                 }
@@ -348,7 +393,7 @@ impl ToolManifest {
                 .any(|mapping| mapping.transform.as_ref().is_some_and(Transform::is_file_part))
             {
                 return Err(format!(
-                    "规则 '{}'.mapping 使用了 file_part_png，但 transport.body 不是 multipart",
+                    "规则 '{}'.mapping 使用了文件 part 转换，但 transport.body 不是 multipart",
                     rule.match_pattern
                 ));
             }
@@ -357,6 +402,25 @@ impl ToolManifest {
                     "规则 '{}': markdown_url 输出不能与 binary 响应模式同时使用",
                     rule.match_pattern
                 ));
+            }
+            if rule.output == OutputKind::Text && rule.response_mode == ResponseMode::Binary {
+                return Err(format!(
+                    "规则 '{}': text 输出不能与 binary 响应模式同时使用",
+                    rule.match_pattern
+                ));
+            }
+            if let Some(extension) = &rule.output_extension {
+                let valid = !extension.is_empty()
+                    && extension.len() <= 10
+                    && extension
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric());
+                if !valid {
+                    return Err(format!(
+                        "规则 '{}'.outputExtension 非法（只允许字母数字，最长 10）: {}",
+                        rule.match_pattern, extension
+                    ));
+                }
             }
 
             // ── task ──
@@ -446,6 +510,18 @@ impl ToolManifest {
                     rule.match_pattern
                 ));
             }
+            if rule.limits.max_chars == Some(0) {
+                return Err(format!(
+                    "规则 '{}'.limits.maxChars 必须大于 0",
+                    rule.match_pattern
+                ));
+            }
+            if rule.limits.max_bytes == Some(0) {
+                return Err(format!(
+                    "规则 '{}'.limits.maxBytes 必须大于 0",
+                    rule.match_pattern
+                ));
+            }
 
             // ── 结果取值 ──
             match rule.response_mode {
@@ -461,11 +537,39 @@ impl ToolManifest {
                             format!("规则 '{}'.resultPaths: {}", rule.match_pattern, e)
                         })?;
                     }
+                    if rule.result_encoding.is_some() {
+                        if rule.output == OutputKind::MarkdownUrl {
+                            return Err(format!(
+                                "规则 '{}'.resultEncoding 不能与 markdown_url 输出同时使用",
+                                rule.match_pattern
+                            ));
+                        }
+                        if rule.output_extension.is_none() {
+                            return Err(format!(
+                                "规则 '{}'.resultEncoding 需要同时声明 outputExtension",
+                                rule.match_pattern
+                            ));
+                        }
+                    }
                 }
                 ResponseMode::Binary => {
                     if rule.transport.content.is_none() {
                         return Err(format!(
                             "规则 '{}'.transport.content 在 binary 模式下必填",
+                            rule.match_pattern
+                        ));
+                    }
+                }
+                ResponseMode::BinaryBody => {
+                    if rule.transport.poll.is_some() || rule.transport.content.is_some() {
+                        return Err(format!(
+                            "规则 '{}': binary_body 是同步响应，不能配置 poll / content",
+                            rule.match_pattern
+                        ));
+                    }
+                    if rule.output == OutputKind::Text {
+                        return Err(format!(
+                            "规则 '{}': binary_body 不能与 text 输出同时使用",
                             rule.match_pattern
                         ));
                     }
@@ -559,6 +663,11 @@ pub struct LimitsSummary {
     pub aspect_ratios: Vec<String>,
     pub resolutions: Vec<String>,
     pub sizes: Vec<String>,
+    pub voices: Vec<String>,
+    pub formats: Vec<String>,
+    pub languages: Vec<String>,
+    pub max_chars: Option<usize>,
+    pub max_bytes: Option<usize>,
 }
 
 /// 设置页展示的清单状态
@@ -710,11 +819,13 @@ fn summarize(manifest: &ToolManifest) -> Vec<RuleSummary> {
             response_mode: match rule.response_mode {
                 ResponseMode::Url => "url",
                 ResponseMode::Binary => "binary",
+                ResponseMode::BinaryBody => "binary_body",
             }
             .to_string(),
             output: match rule.output {
                 OutputKind::File => "file",
                 OutputKind::MarkdownUrl => "markdown_url",
+                OutputKind::Text => "text",
             }
             .to_string(),
             defaults: rule.defaults,
@@ -731,6 +842,11 @@ fn summarize(manifest: &ToolManifest) -> Vec<RuleSummary> {
                 aspect_ratios: rule.limits.aspect_ratios.clone(),
                 resolutions: rule.limits.resolutions.clone(),
                 sizes: rule.limits.sizes.clone(),
+                voices: rule.limits.voices.clone(),
+                formats: rule.limits.formats.clone(),
+                languages: rule.limits.languages.clone(),
+                max_chars: rule.limits.max_chars,
+                max_bytes: rule.limits.max_bytes,
             },
         })
         .collect()
@@ -787,6 +903,7 @@ pub fn capability(spec: &ManifestSpec, model: &str) -> Result<Value, String> {
         "output": match rule.output {
             OutputKind::File => "file",
             OutputKind::MarkdownUrl => "markdown_url",
+            OutputKind::Text => "text",
         },
         "supported": supported,
         "unsupported": unsupported,
@@ -797,6 +914,11 @@ pub fn capability(spec: &ManifestSpec, model: &str) -> Result<Value, String> {
             "aspectRatios": rule.limits.aspect_ratios,
             "resolutions": rule.limits.resolutions,
             "sizes": rule.limits.sizes,
+            "voices": rule.limits.voices,
+            "formats": rule.limits.formats,
+            "languages": rule.limits.languages,
+            "maxChars": rule.limits.max_chars,
+            "maxBytes": rule.limits.max_bytes,
         }
     }))
 }
@@ -1620,9 +1742,18 @@ pub async fn apply_transform(
             };
             Ok(Value::String(image_ref_uri(source).await?))
         }
-        Transform::FilePartPng => Err(
-            "file_part_png 只能用于 multipart 文件 part，不能写入 JSON 请求体".to_string(),
+        Transform::FilePartPng | Transform::FilePartBinary => Err(
+            "文件 part 转换只能用于 multipart 表单，不能写入 JSON 请求体".to_string(),
         ),
+        Transform::FileBase64 => {
+            let source = raw
+                .as_str()
+                .ok_or_else(|| "文件参数必须是字符串".to_string())?;
+            let bytes = load_raw_bytes(source).await?;
+            Ok(Value::String(
+                base64::engine::general_purpose::STANDARD.encode(bytes),
+            ))
+        }
     }
 }
 
