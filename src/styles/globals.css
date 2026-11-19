@@ -2794,11 +2794,14 @@ body {
   white-space: nowrap;
 }
 
+/* 「批量选择范围」浮窗：触发器在批量条左侧，right:0 会让浮窗向左展开并被容器左缘裁切，
+   改为与触发器左对齐、向右展开。 */
 .pd-batch-menu {
   position: absolute;
   z-index: 80;
   top: calc(100% + 4px);
-  right: 0;
+  left: 0;
+  right: auto;
   min-width: 152px;
 }
 
