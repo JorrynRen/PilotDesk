@@ -2965,6 +2965,10 @@ useEffect(() => {
             valuePlaceholder={'输入文本或选择输出字段（支持 content.score 这类路径）'}
             baseKeyRef={outputBaseKeyRef}
             valueOptions={getOutputFieldOptions(node.type as WorkflowNodeType)} />
+          {/* 多值字段无法通过下拉直接选中单项，这里给出下标引用写法 */}
+          <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>
+            {'多值（数组）字段可按下标精确取值，如 {{filePaths[1]}}、{{content[0].name}}；下标从 0 开始，越界会退化为整个输出。下游按上方字段名引用。'}
+          </div>
       </div>
       )}
 
