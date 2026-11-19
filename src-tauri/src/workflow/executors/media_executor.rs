@@ -7,7 +7,9 @@
 //! - `args` 的键与对应工具 `parameters()` 同名；未知键直接报错，绝不静默丢弃；
 //! - 动态值先在节点 `input_mapping` 中声明，引擎解析后得到 `resolved_input`，
 //!   本执行器再用 [`TemplateEngine::resolve_value`] 递归解析 `args` 中的占位符
-//!   （单个占位符保留原始类型，文本内嵌则插值，未解析按空处理并记录日志）；
+//!   （文本内嵌则插值，未解析按空处理并记录日志）；
+//! - 路径类槽位（参考图/首尾帧/参考视频/STT 文件）可用 `{{映射键}}` 引用前序产物；
+//!   列表槽位允许整段引用一个数组，单值槽位解析出多个文件时报错；
 //! - `provider` / `model` 必填，不做隐式回退；
 //! - 输出统一为 `{ content, urls, filePaths }`：`content` 与人工交互节点同名，便于复用默认输出映射；
 //!   `filePaths` 为全部产物路径，`urls` 为全部远程结果 URL。
@@ -33,6 +35,109 @@ const DEFAULT_IMAGE_TIMEOUT_MS: u64 = 180_000;
 const DEFAULT_VIDEO_TIMEOUT_MS: u64 = 1_200_000;
 const DEFAULT_TTS_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_STT_TIMEOUT_MS: u64 = 180_000;
+
+/// 列表型路径槽位：允许整段填一个 `{{变量}}`，由上游数组展开。
+fn list_path_slots(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "image" | "video" => &["referenceImages"],
+        _ => &[],
+    }
+}
+
+/// 单值路径槽位：解析出多个值时直接报错，避免静默取错文件。
+fn single_path_slots(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "image" => &["mask"],
+        "video" => &[
+            "firstFrame",
+            "lastFrame",
+            "referenceVideo",
+            "sourceVideo",
+            "extendVideo",
+        ],
+        "stt" => &["file"],
+        _ => &[],
+    }
+}
+
+/// 把槽位值展开成路径列表：
+/// - 数组逐项展开；
+/// - 单个字符串若是 JSON 数组文本（输入映射把上游数组序列化后的形态），解析后展开；
+/// - 其余非空字符串视为一项。
+fn flatten_path_items(slot: &str, value: Value) -> Result<Vec<String>, AppError> {
+    fn push(items: &mut Vec<String>, slot: &str, value: Value) -> Result<(), AppError> {
+        match value {
+            Value::Null => Ok(()),
+            Value::String(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    return Ok(());
+                }
+                if trimmed.starts_with('[') {
+                    if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(trimmed) {
+                        for item in arr {
+                            push(items, slot, item)?;
+                        }
+                        return Ok(());
+                    }
+                }
+                items.push(s);
+                Ok(())
+            }
+            Value::Array(arr) => {
+                for item in arr {
+                    push(items, slot, item)?;
+                }
+                Ok(())
+            }
+            other => Err(AppError::InvalidInput(format!(
+                "参数 {} 需要文件路径（字符串）列表，收到：{}",
+                slot, other
+            ))),
+        }
+    }
+
+    let mut items = Vec::new();
+    push(&mut items, slot, value)?;
+    Ok(items)
+}
+
+/// 规范化路径类 args：列表槽位展平、单值槽位只保留一项（多项报错）。
+fn normalize_path_args(kind: &str, args: &mut Map<String, Value>) -> Result<(), AppError> {
+    for slot in list_path_slots(kind) {
+        let Some(value) = args.get(*slot).cloned() else {
+            continue;
+        };
+        let items = flatten_path_items(slot, value)?;
+        if items.is_empty() {
+            args.remove(*slot);
+        } else {
+            args.insert((*slot).to_string(), json!(items));
+        }
+    }
+
+    for slot in single_path_slots(kind) {
+        let Some(value) = args.get(*slot).cloned() else {
+            continue;
+        };
+        let mut items = flatten_path_items(slot, value)?;
+        match items.len() {
+            0 => {
+                args.remove(*slot);
+            }
+            1 => {
+                args.insert((*slot).to_string(), json!(items.remove(0)));
+            }
+            n => {
+                return Err(AppError::InvalidInput(format!(
+                    "参数 {} 只接受单个文件，解析出 {} 个；请先在输出映射里按下标引用单个产物（如 {{{{filePaths[0]}}}}）",
+                    slot, n
+                )))
+            }
+        }
+    }
+    Ok(())
+}
 
 /// 媒体节点执行器
 pub struct MediaExecutor {
@@ -246,6 +351,8 @@ impl NodeExecutorTrait for MediaExecutor {
             Value::Object(map) => map,
             _ => Map::new(),
         };
+        // 列表槽位允许整段填 `{{变量}}`（上游数组），单值槽位解析出多个文件直接报错。
+        normalize_path_args(&kind, &mut resolved_args)?;
 
         // 读取提供商配置（数据库取 endpoint / key），并拒绝 Anthropic 协议。
         let (endpoint, api_key) = {
@@ -339,5 +446,41 @@ impl NodeExecutorTrait for MediaExecutor {
             input_data: None,
             artifacts_path,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flatten_list_expands_json_array_text() {
+        let items = flatten_path_items("referenceImages", json!("[\"a.png\",\"b.png\"]")).unwrap();
+        assert_eq!(items, vec!["a.png", "b.png"]);
+    }
+
+    #[test]
+    fn normalize_single_slot_rejects_multiple_files() {
+        let mut args = Map::new();
+        args.insert("firstFrame".into(), json!(["a.png", "b.png"]));
+        let result = normalize_path_args("video", &mut args);
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("只接受单个文件"));
+    }
+
+    #[test]
+    fn normalize_single_slot_unwraps_one_file() {
+        let mut args = Map::new();
+        args.insert("file".into(), json!("[\"a.mp3\"]"));
+        normalize_path_args("stt", &mut args).unwrap();
+        assert_eq!(args.get("file"), Some(&json!("a.mp3")));
+    }
+
+    #[test]
+    fn normalize_list_slot_accepts_single_placeholder_value() {
+        let mut args = Map::new();
+        args.insert("referenceImages".into(), json!("[\"a.png\",\"b.png\"]"));
+        normalize_path_args("image", &mut args).unwrap();
+        assert_eq!(args.get("referenceImages"), Some(&json!(["a.png", "b.png"])));
     }
 }

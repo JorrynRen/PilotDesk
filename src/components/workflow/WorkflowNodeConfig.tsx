@@ -25,6 +25,7 @@ import type { TemplateVariableGroup } from './templateVariables';
 import type { SecurityModeValue } from '../security/SecurityModeSelector';
 import { Select } from '../common/Select';
 import { showToast } from '../../utils/toast';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
 /**
  * API Agent 节点的「工具授权」（`security_mode`，节点级）。
@@ -314,6 +315,10 @@ interface MediaSlotControl {
   countFrom?: MediaLimitsNumberKey;
   /** 依赖的前置槽位：前置不支持时本控件一并隐藏 */
   dependsOn?: string;
+  /** 路径类槽位：显示文件选择器，并按类型过滤 */
+  pick?: 'image' | 'video' | 'audio';
+  /** 列表槽位允许一次选择多个文件 */
+  multiple?: boolean;
 }
 
 const MEDIA_SLOT_CONTROLS: Record<MediaKind, MediaSlotControl[]> = {
@@ -321,17 +326,17 @@ const MEDIA_SLOT_CONTROLS: Record<MediaKind, MediaSlotControl[]> = {
     { slot: 'prompt', label: '提示词 prompt（必填）', control: 'textarea', placeholder: '描述要生成的图片，支持 {{变量}}' },
     { slot: 'size', label: '尺寸 size', control: 'select', optionsFrom: 'sizes', placeholder: '如 1024x1024' },
     { slot: 'n', label: '数量 n', control: 'number', min: 1, max: 4, maxFrom: 'maxN', placeholder: '默认 1' },
-    { slot: 'referenceImages', label: '参考图片 referenceImages', control: 'list', countFrom: 'referenceImages', placeholder: '每行一个图片 URL 或本地路径' },
-    { slot: 'mask', label: '遮罩 mask', control: 'text', dependsOn: 'referenceImages', placeholder: '可选：遮罩图片 URL 或本地路径' },
+    { slot: 'referenceImages', label: '参考图片 referenceImages', control: 'list', countFrom: 'referenceImages', pick: 'image', multiple: true, placeholder: '每行一个图片 URL 或本地路径' },
+    { slot: 'mask', label: '遮罩 mask', control: 'text', dependsOn: 'referenceImages', pick: 'image', placeholder: '可选：遮罩图片 URL 或本地路径' },
   ],
   video: [
     { slot: 'prompt', label: '提示词 prompt（必填）', control: 'textarea', placeholder: '描述要生成的视频，支持 {{变量}}' },
-    { slot: 'firstFrame', label: '首帧 firstFrame', control: 'text', placeholder: '可选：图片 URL 或本地路径' },
-    { slot: 'lastFrame', label: '尾帧 lastFrame', control: 'text', dependsOn: 'firstFrame', placeholder: '可选：尾帧图片 URL 或本地路径' },
-    { slot: 'referenceImages', label: '参考图片 referenceImages', control: 'list', countFrom: 'referenceImages', placeholder: '每行一个图片 URL 或本地路径' },
-    { slot: 'referenceVideo', label: '参考视频 referenceVideo', control: 'text', placeholder: '可选：视频 URL 或本地路径' },
-    { slot: 'sourceVideo', label: '编辑源视频 sourceVideo', control: 'text', placeholder: '可选：待编辑的视频 URL 或本地路径' },
-    { slot: 'extendVideo', label: '延长源视频 extendVideo', control: 'text', placeholder: '可选：待延长的视频 URL 或本地路径' },
+    { slot: 'firstFrame', label: '首帧 firstFrame', control: 'text', pick: 'image', placeholder: '可选：图片 URL 或本地路径' },
+    { slot: 'lastFrame', label: '尾帧 lastFrame', control: 'text', dependsOn: 'firstFrame', pick: 'image', placeholder: '可选：尾帧图片 URL 或本地路径' },
+    { slot: 'referenceImages', label: '参考图片 referenceImages', control: 'list', countFrom: 'referenceImages', pick: 'image', multiple: true, placeholder: '每行一个图片 URL 或本地路径' },
+    { slot: 'referenceVideo', label: '参考视频 referenceVideo', control: 'text', pick: 'video', placeholder: '可选：视频 URL 或本地路径' },
+    { slot: 'sourceVideo', label: '编辑源视频 sourceVideo', control: 'text', pick: 'video', placeholder: '可选：待编辑的视频 URL 或本地路径' },
+    { slot: 'extendVideo', label: '延长源视频 extendVideo', control: 'text', pick: 'video', placeholder: '可选：待延长的视频 URL 或本地路径' },
     { slot: 'duration', label: '时长 duration（秒）', control: 'select', optionsFrom: 'durations', placeholder: '按模型清单限制' },
     { slot: 'aspectRatio', label: '宽高比 aspectRatio', control: 'select', optionsFrom: 'aspectRatios', placeholder: '如 16:9' },
     { slot: 'resolution', label: '分辨率 resolution', control: 'select', optionsFrom: 'resolutions', placeholder: '如 1080p' },
@@ -346,7 +351,7 @@ const MEDIA_SLOT_CONTROLS: Record<MediaKind, MediaSlotControl[]> = {
     { slot: 'speed', label: '语速 speed', control: 'number', min: 0.25, max: 4, step: 0.05, placeholder: '如 1.0' },
   ],
   stt: [
-    { slot: 'file', label: '音频文件 file（必填）', control: 'text', placeholder: '本地绝对路径或可下载的 URL，支持 {{变量}}' },
+    { slot: 'file', label: '音频文件 file（必填）', control: 'text', pick: 'audio', placeholder: '本地绝对路径或可下载的 URL，支持 {{变量}}' },
     { slot: 'language', label: '语言 language', control: 'select', optionsFrom: 'languages', placeholder: '可选：如 zh' },
     { slot: 'format', label: '格式 format', control: 'select', options: ['json', 'text', 'verbose_json'], placeholder: 'json' },
     { slot: 'temperature', label: '温度 temperature', control: 'number', min: 0, max: 1, step: 0.1, placeholder: '可选：0 ~ 1' },
@@ -355,6 +360,13 @@ const MEDIA_SLOT_CONTROLS: Record<MediaKind, MediaSlotControl[]> = {
 
 /** 数值型槽位：下拉选中的是字符串，写回前必须转成 number（生成工具只接受 JSON 数字） */
 const MEDIA_NUMERIC_SLOTS = new Set(['n', 'duration', 'seed', 'speed', 'temperature']);
+
+/** 路径槽位文件选择器的类型过滤 */
+const MEDIA_PICK_FILTERS: Record<'image' | 'video' | 'audio', { name: string; extensions: string[] }> = {
+  image: { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
+  video: { name: '视频', extensions: ['mp4', 'mov', 'webm', 'mkv'] },
+  audio: { name: '音频', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus'] },
+};
 
 /** 能力查询结果 + 它对应的 `kind|model`（只有与当前选择一致时才用于渲染） */
 interface MediaCapabilityState {
@@ -2597,7 +2609,13 @@ useEffect(() => {
     handleParamChange('args', next);
   };
   const stringValue = (key: string) => (args[key] === undefined || args[key] === null ? '' : String(args[key]));
-  const listValue = (key: string) => (Array.isArray(args[key]) ? (args[key] as string[]).join('\n') : '');
+  const listValue = (key: string) => {
+    const v = args[key];
+    if (Array.isArray(v)) return v.map(String).join('\n');
+    // 兼容整段填一个 {{输入映射键}} 的写法（后端会展开数组）
+    if (typeof v === 'string') return v;
+    return '';
+  };
   const setList = (key: string, text: string) => {
     setArg(key, text.split('\n').map((item) => item.trim()).filter(Boolean));
   };
@@ -2666,6 +2684,50 @@ useEffect(() => {
     return typeof v === 'number' ? v : undefined;
   };
 
+  /** 打开系统文件选择器：单值槽位覆盖原值，列表槽位按行追加并去重 */
+  const pickPath = async (c: MediaSlotControl) => {
+    if (!c.pick) return;
+    const picked = await openDialog({
+      multiple: !!c.multiple,
+      directory: false,
+      filters: [MEDIA_PICK_FILTERS[c.pick]],
+    });
+    if (!picked) return;
+    const paths = (Array.isArray(picked) ? picked : [picked]).filter(
+      (p): p is string => typeof p === 'string' && p.length > 0,
+    );
+    if (paths.length === 0) return;
+    if (c.multiple) {
+      const existing = Array.isArray(args[c.slot]) ? (args[c.slot] as unknown[]).map(String) : [];
+      setArg(c.slot, Array.from(new Set([...existing, ...paths])));
+    } else {
+      setArg(c.slot, paths[0]);
+    }
+  };
+
+  const renderPickButton = (c: MediaSlotControl) =>
+    c.pick ? (
+      <button
+        type="button"
+        onClick={() => { void pickPath(c); }}
+        title={`选择${MEDIA_PICK_FILTERS[c.pick].name}文件`}
+        style={{
+          flexShrink: 0,
+          height: 30,
+          padding: '0 10px',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border)',
+          background: 'var(--bg-primary)',
+          color: 'var(--text-secondary)',
+          fontSize: 'var(--fs-11)',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        选择
+      </button>
+    ) : null;
+
   const renderArgControl = (c: MediaSlotControl) => {
     const options = optionList(c);
     const slotCap = cap?.supported?.[c.slot];
@@ -2726,21 +2788,48 @@ useEffect(() => {
       return (
         <div style={S.fieldGap} key={c.slot}>
           <label style={S.label()}>{c.label}</label>
-          <textarea
-            value={listValue(c.slot)}
-            onChange={(e) => setList(c.slot, e.target.value)}
-            placeholder={c.placeholder}
-            rows={2}
-            style={S.textarea}
-          />
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <TemplateField
+                value={listValue(c.slot)}
+                onChange={(v) => setList(c.slot, v)}
+                variables={templateVariables}
+                placeholder={c.placeholder}
+                multiline
+                rows={2}
+                style={S.textarea}
+              />
+            </div>
+            {renderPickButton(c)}
+          </div>
           <div style={mediaHintStyle}>
-            每行一个{maxCount ? `，最多 ${maxCount} 个` : ''}{hintText ? `；${hintText}` : ''}
+            {`每行一个${maxCount ? `，最多 ${maxCount} 个` : ''}${hintText ? `；${hintText}` : ''}；也可只填一个 {{输入映射键}} 引用前序产物数组`}
           </div>
         </div>
       );
     }
 
     const isNumber = c.control === 'number';
+    // 路径类单值槽位：支持 {{}} 补全 + 系统文件选择
+    if (c.pick) {
+      return (
+        <div style={S.fieldGap} key={c.slot}>
+          <label style={S.label()}>{c.label}</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <TemplateField
+              value={stringValue(c.slot)}
+              onChange={(v) => setArg(c.slot, v)}
+              variables={templateVariables}
+              placeholder={c.placeholder}
+              style={{ ...S.input(), flex: 1, minWidth: 0 }}
+            />
+            {renderPickButton(c)}
+          </div>
+          {hintText && <div style={mediaHintStyle}>{hintText}</div>}
+        </div>
+      );
+    }
+
     return (
       <div style={S.fieldGap} key={c.slot}>
         <label style={S.label()}>{c.label}</label>
@@ -2842,8 +2931,8 @@ useEffect(() => {
         )}
       </div>
 
-      <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginBottom: 8 }}>
-        提供商与模型为必填项，不做隐式回退。动态值请先在「输入映射」中声明，再在参数里用 {'{{变量名}}'} 引用。
+      <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginBottom: 8, lineHeight: 1.5 }}>
+        提供商与模型为必填项，不做隐式回退。动态引用：先在「输入映射」里引用前序产物（如 refs → {'{{filePaths.节点ID.阶段ID}}'}），再在参数里填 {'{{refs}}'}；路径参数可点右侧「选择」直接选本地文件。
       </div>
 
       {!model.trim() ? (
