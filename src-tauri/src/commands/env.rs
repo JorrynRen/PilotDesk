@@ -379,7 +379,10 @@ pub(crate) async fn probe_agent(
 ///
 /// 只覆盖协议交互，不含 npx 首次下载安装的耗时；超时即判「对端未响应」，
 /// 因为这轮会话同样会因握手失败而起不来。
-const ACP_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// 取 60s 而非 30s：Hermes 的适配器启动要做插件发现（本机实测 initialize ≈20s、
+/// session/new ≈8–12s），环境检测又会并发跑多个探测，30s 会把已装好的对端误判为异常。
+const ACP_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 跑一遍真实的 ACP 握手，用来回答「这个 Agent 现在能不能真的干起活来」。
 ///
