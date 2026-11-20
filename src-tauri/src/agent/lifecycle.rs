@@ -500,8 +500,24 @@ pub fn extract_semver(text: &str) -> Option<String> {
         }
     }
     let re = regex::Regex::new(r"(\d+\.\d+\.\d+[\w.\-]*)").ok()?;
-    re.captures(&stripped)
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+    // 裸 semver 逐行回退时跳过 `Python: 3.13.13` / `OpenAI SDK: 2.24.0` 这类依赖信息行：
+    // `hermes --version` 在自身版本未知时会输出 `Hermes Agent vunknown`，随后列出宿主运行时版本，
+    // 直接取首个裸 semver 会把 Python 版本当成 Agent 版本。键名含 version/release 的行仍参与匹配。
+    let kv = regex::Regex::new(r"^\s*([A-Za-z][\w .-]*):").ok()?;
+    for line in stripped.lines() {
+        if let Some(c) = kv.captures(line) {
+            let key = c.get(1).map(|m| m.as_str().to_ascii_lowercase()).unwrap_or_default();
+            if !key.contains("version") && !key.contains("release") {
+                continue;
+            }
+        }
+        if let Some(c) = re.captures(line) {
+            if let Some(m) = c.get(1) {
+                return Some(m.as_str().to_string());
+            }
+        }
+    }
+    None
 }
 
 /// 方向感知的版本比较：`candidate` 是否**严格新于** `base`。
@@ -752,6 +768,23 @@ mod tests {
         // 构建日期不带括号且排在版本前面时，仍要取带 v 前缀的真实版本
         assert_eq!(
             extract_semver("built 2026.9.24\nHermes Agent v0.19.0").as_deref(),
+            Some("0.19.0")
+        );
+    }
+
+    #[test]
+    fn semver_extraction_skips_host_runtime_versions() {
+        // Hermes 自身版本未知时会输出依赖信息，不能把 Python / OpenAI SDK 的版本当成 Agent 版本
+        let output = "Hermes Agent vunknown (2026.9.24)\n\
+                      Install directory: C:\\Python313\\Lib\\site-packages\n\
+                      Install method: unknown\n\
+                      Python: 3.13.13\n\
+                      OpenAI SDK: 2.24.0";
+        assert!(extract_semver(output).is_none());
+
+        // 键名与版本相关时仍可识别
+        assert_eq!(
+            extract_semver("Hermes Agent\nVersion: 0.19.0").as_deref(),
             Some("0.19.0")
         );
     }
