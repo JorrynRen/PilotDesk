@@ -453,9 +453,12 @@ export function AgentConfigMarket() {
                         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                           {agent.displayName}
                         </span>
-                        {/* 配置版本：ACP 条目取适配器版本，预置条目取清单版本 */}
+                        {/* 版本标签按来源区分：ACP 目录条目是适配器版本，
+                            预置 ACP 条目是清单配置版本；不加区分会和宿主的运行时版本混淆 */}
                         <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                          v{agent.version || '—'}
+                          {agent.category === 'acp'
+                            ? `${agent.source === 'acp-registry' ? '适配器' : '配置'} v${agent.version || '—'}`
+                            : `v${agent.version || '—'}`}
                         </span>
                         {/* 独立适配器且目录版本与配置版本不一致时，单独标注适配器版本 */}
                         {!agent.adapterEmbedded &&
@@ -469,14 +472,19 @@ export function AgentConfigMarket() {
                               适配器 v{agent.registryVersion}
                             </span>
                           )}
-                        {/* 宿主最新版本：预置条目与独立适配器条目展示，避免与配置版本混淆 */}
+                        {/* 运行时最新版本：适配器内置于宿主时两者同源，统一叫「适配器」，
+                            避免同一版本既像宿主又像适配器；独立适配器时才区分宿主 */}
                         {agent.hostLatestVersion && (
                           <span
                             className="text-[10px]"
                             style={{ color: 'var(--text-tertiary)' }}
-                            title="宿主最新版本"
+                            title={
+                              agent.adapterEmbedded
+                                ? '适配器内置于宿主，版本与宿主一致'
+                                : '宿主最新版本'
+                            }
                           >
-                            宿主 v{agent.hostLatestVersion}
+                            {agent.adapterEmbedded ? '适配器' : '宿主'} v{agent.hostLatestVersion}
                           </span>
                         )}
                         {/* 来源徽标：ACP 官方用强调色，预置用中性色，避免与状态标记混在一起 */}

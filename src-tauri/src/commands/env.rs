@@ -249,15 +249,24 @@ pub(crate) async fn probe_agent(
                         .execute_command_output_async(&cmd, "", probe_timeout, &label)
                         .await
                     {
-                        Ok(out) => match lifecycle {
-                            // 有安装规格就只认它自己的解析：解析不出来说明版本真的不可知，
-                            // 回退到「从整段输出里猜数字」会把构建日期（如 `(2026.9.24)`）当成版本号。
-                            Some(l) => l.parse_installed_version(&out),
-                            // 手工配置的 Agent 没有规格，只能按通用规则猜
-                            None => {
-                                Some(clean_version_string(&out)).filter(|v| !v.trim().is_empty())
+                        Ok(out) => {
+                            let parsed = match lifecycle {
+                                // 有安装规格就只认它自己的解析：解析不出来说明版本真的不可知，
+                                // 回退到「从整段输出里猜数字」会把构建日期（如 `(2026.9.24)`）当成版本号。
+                                Some(l) => l.parse_installed_version(&out),
+                                // 手工配置的 Agent 没有规格，只能按通用规则猜
+                                None => {
+                                    Some(clean_version_string(&out)).filter(|v| !v.trim().is_empty())
+                                }
+                            };
+                            // Hermes 在安装戳缺失时 `--version` 只会输出 `vunknown`，解析不到数字；
+                            // 托管安装的 install-stamp.json 才是官方权威版本来源。
+                            match parsed {
+                                Some(v) => Some(v),
+                                None if agent.agent_type == "hermes" => hermes_stamp_version(),
+                                None => None,
                             }
-                        },
+                        }
                         Err(err) => {
                             let stamp = if agent.agent_type == "hermes" {
                                 hermes_stamp_version()

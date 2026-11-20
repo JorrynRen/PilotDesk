@@ -199,8 +199,18 @@ export function AgentManager() {
   // 手工升级或历史脏值（把构建日期当版本）都会让这里显示过期/错误的版本号。
   const groupedAgents = [...agents]
     .map((a) => {
-      const live = envInfo?.agentVersions?.[a.agentType];
-      if (!live || !a.pkgState || a.pkgState.installedVersion === live) return a;
+      const versions = envInfo?.agentVersions;
+      // 实时探测为准：只要本轮探测覆盖了该 Agent（`null` 也代表「已探测、版本未知」），
+      // 就不再使用安装时的旧记录。否则历史脏值（例如把 Python 版本当成 Hermes 版本）
+      // 会在探测结果为未知时继续显示，造成与其它页面不一致。
+      if (!versions || !(a.agentType in versions) || !a.pkgState) return a;
+      const live = versions[a.agentType];
+      if (live === a.pkgState.installedVersion) return a;
+      if (!live) {
+        const pkgState = { ...a.pkgState };
+        delete pkgState.installedVersion;
+        return { ...a, pkgState };
+      }
       return { ...a, pkgState: { ...a.pkgState, installedVersion: live } };
     })
     .sort(
@@ -729,10 +739,15 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
 
   // 是否真存在「新版本」：本机探测到的安装版本 vs 市场/目录最新版本。
   // 已是最新时按钮改为「重装」，避免点了「更新」却装回同一个版本（提示成功、版本号不变）。
+  // 本机版本同样以实时探测为准，只有该 Agent 未被本轮探测覆盖时才回退安装记录。
+  const liveInstalledVersion =
+    form.agentType && envInfo?.agentVersions && form.agentType in envInfo.agentVersions
+      ? envInfo.agentVersions[form.agentType]
+      : undefined;
   const installedVersion =
-    form.pkgState?.installedVersion ??
-    (form.agentType ? envInfo?.agentVersions?.[form.agentType] : null) ??
-    null;
+    liveInstalledVersion !== undefined
+      ? liveInstalledVersion
+      : form.pkgState?.installedVersion ?? null;
   const latestVersion = form.agentType
     ? envInfo?.agentLatestVersions?.[form.agentType] ?? null
     : null;
@@ -757,7 +772,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
           lifecycle={form.lifecycle}
           detectedInstalled={detectedHealth?.installed}
           detectedAvailable={detectedHealth?.available}
-          detectedVersion={form.agentType ? envInfo?.agentVersions?.[form.agentType] ?? null : null}
+          // `undefined` = 本轮未探测到；`null` = 已探测但版本未知。两者不能混用，
+          // 否则「版本未知」会回退到安装记录里的历史脏值。
+          detectedVersion={liveInstalledVersion}
           canUpdate={!!form.distSource && form.distSource.source !== 'manual'}
           hasNewerVersion={hasNewerVersion}
           onInstall={onInstall}
@@ -1092,8 +1109,10 @@ function InstallStatusSection({ agentType, displayName, transport, pkgState, lif
     : failed || detectedAvailable === false
       ? 'var(--danger, #dc2626)'
       : 'var(--warning, #d97706)';
-  // 与列表同口径：优先用实时探测到的版本（安装记录可能过期或含历史脏值）
-  const shownVersion = detectedVersion || pkgState?.installedVersion;
+  // 与列表同口径：优先用实时探测到的版本（安装记录可能过期或含历史脏值）。
+  // `undefined` 才是「本轮未探测」，此时才回退安装记录；`null` 代表探测为未知。
+  const shownVersion =
+    detectedVersion !== undefined ? detectedVersion : pkgState?.installedVersion;
   const statusText = ready
     ? `已就绪${shownVersion ? ` v${shownVersion}` : ''}`
     : failed
