@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Pencil, X, Loader2, Download, Upload, Info, Terminal, Repeat, RefreshCw, BookOpen, Store as StoreIcon, Play, Package } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, Loader2, Download, Upload, Info, Terminal, Repeat, BookOpen, Store as StoreIcon, Package } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { errorMessage } from '../../utils/errorMessage';
-import { needsUnverifiedConsent } from '../../utils/agentIntegrity';
 
 import type { AgentConfig, LifecycleSpec, PkgState } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton, SettingsToggle } from '../settings';
@@ -38,129 +36,15 @@ export function AgentManager() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { agents, loading, fetchAgents } = useAgentRegistry();
-  // 安装/更新/卸载会改变本机版本：同步刷新全局环境信息，
-  // 否则「设置 › 运行与策略」仍显示更新前的版本（跨页面共用同一份 envInfo）。
-  const { envInfo, refresh: refreshEnv } = useEnvInfo();
+  // 环境检测结果（版本/健康状态）在这里只读展示，安装与升级在「环境检测」页完成。
+  const { envInfo } = useEnvInfo();
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<AgentConfig> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addForm, setAddForm] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
 
-  // ── 市场草稿的安装 ──
-  const [installing, setInstalling] = useState<string | null>(null);
-  const [uninstalling, setUninstalling] = useState<string | null>(null);
-  const [updating, setUpdating] = useState<string | null>(null);
-  const [installMsg, setInstallMsg] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    const un = listen<{ agent: string; message: string }>('install-progress', (e) => {
-      const { agent, message } = e.payload;
-      setInstallMsg((m) => ({ ...m, [agent]: message }));
-    });
-    return () => {
-      void un.then((f) => f());
-    };
-  }, []);
-
-  /**
-   * 二进制安装包没有 registry 校验值时，先让用户显式确认。
-   * 后端仍会尝试厂商校验文件（.sha256 / checksums.txt），有就照常校验。
-   */
-  const confirmUnverified = async (agentType: string): Promise<boolean> => {
-    const agent = agents.find((a) => a.agentType === agentType);
-    if (!needsUnverifiedConsent(agent?.lifecycle)) return false;
-    const ok = await confirmDialog({
-      title: '确认安装（未提供校验值）',
-      message: `『${agent?.displayName || agentType}』的安装包没有提供校验值。安装时会先尝试厂商发布的校验文件；若仍取不到，将不校验完整性直接解压安装。\n\n仅在你信任该来源时继续。`,
-      confirmText: '仍然安装',
-      danger: true,
-    });
-    return ok;
-  };
-
-  /** 执行本机安装（npm/shell/binary），完成后刷新状态；失败原因由后端落到 pkgState.lastError。 */
-  const handleInstall = async (agentType: string) => {
-    const needsConsent = needsUnverifiedConsent(
-      agents.find((a) => a.agentType === agentType)?.lifecycle
-    );
-    if (needsConsent && !(await confirmUnverified(agentType))) return;
-    setInstalling(agentType);
-    try {
-      await invoke('agent_market_install', { agentType, allowUnverified: needsConsent });
-      showToast('安装完成，Agent 已就绪', 'success');
-    } catch (err) {
-      showToast(`安装失败: ${errorMessage(err)}`, 'error');
-    }
-    setInstalling(null);
-    const fresh = await fetchAgents();
-    void refreshEnv();
-    // 编辑面板若正开着这个 Agent，同步包状态——否则用户会一直看到「待安装」。
-    const updated = fresh.find((a) => a.agentType === agentType);
-    setEditForm((prev) =>
-      prev && prev.agentType === agentType
-        ? { ...prev, pkgState: updated?.pkgState, lifecycle: updated?.lifecycle }
-        : prev
-    );
-  };
-  /** 卸载本机依赖（适配器 / CLI 包）：保留 Agent 配置，只把包状态退回「待安装」。 */
-  const handleUninstall = async (agentType: string) => {
-    const name = agents.find((a) => a.agentType === agentType)?.displayName || agentType;
-    const target = transportMap[agentType] === 'acp' ? 'ACP 适配器' : '本地 CLI 包';
-    const ok = await confirmDialog({
-      title: '确认卸载',
-      message: `将从本机卸载 ${name} 的${target}。Agent 配置会保留，卸载后需重新安装才能用于会话。`,
-      confirmText: '卸载',
-      danger: true,
-    });
-    if (!ok) return;
-    setUninstalling(agentType);
-    try {
-      await invoke('uninstall_agent', { agentType });
-      showToast('已卸载本机依赖', 'success');
-    } catch (err) {
-      showToast(`卸载失败: ${errorMessage(err)}`, 'error');
-    }
-    setUninstalling(null);
-    const fresh = await fetchAgents();
-    void refreshEnv();
-    const updated = fresh.find((a) => a.agentType === agentType);
-    setEditForm((prev) =>
-      prev && prev.agentType === agentType
-        ? { ...prev, pkgState: updated?.pkgState, lifecycle: updated?.lifecycle }
-        : prev
-    );
-  };
-
-  /** 更新：按市场最新规格覆盖本地配置后重装（仅市场提供版本信息的条目）。 */
-  const handleUpdate = async (agentType: string) => {
-    const needsConsent = needsUnverifiedConsent(
-      agents.find((a) => a.agentType === agentType)?.lifecycle
-    );
-    if (needsConsent && !(await confirmUnverified(agentType))) return;
-    setUpdating(agentType);
-    try {
-      await invoke('agent_market_update', { agentType, allowUnverified: needsConsent });
-      // 按钮在「已是最新」时语义是重装，文案不带「更新到最新」以免误导
-      showToast('已按市场最新规格完成安装', 'success');
-    } catch (err) {
-      showToast(`操作失败: ${errorMessage(err)}`, 'error');
-    }
-    setUpdating(null);
-    const fresh = await fetchAgents();
-    void refreshEnv();
-    const updated = fresh.find((a) => a.agentType === agentType);
-    setEditForm((prev) =>
-      prev && prev.agentType === agentType
-        ? {
-            ...prev,
-            pkgState: updated?.pkgState,
-            lifecycle: updated?.lifecycle,
-            distSource: updated?.distSource,
-          }
-        : prev
-    );
-  };
+  // 集成配置只负责编辑与展示：安装/升级/卸载统一由「资源市集」与「环境检测」承载。
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -224,7 +108,7 @@ export function AgentManager() {
     setEditForm({ ...agent });
   };
 
-  // 深链 `/settings?tab=agents&agent=<agentType>`：市场「获取」后直接落到该 Agent 的编辑/安装态。
+  // 深链 `/settings?tab=agents&agent=<agentType>`：从其它页面直接打开该 Agent 的编辑表单。
   // 用状态记录已打开的深链，避免用户关掉表单后又被 URL 反复拉回来。
   // 这是"由外部输入派生本地状态"的渲染期修正，放在渲染阶段而不是 effect（effect 内同步 setState 会级联渲染）。
   const [deepOpened, setDeepOpened] = useState<string | null>(null);
@@ -535,13 +419,6 @@ export function AgentManager() {
                       handleToggleEnabled={handleToggleEnabled}
                       handleEdit={handleEdit}
                       requestDelete={requestDelete}
-                      onInstall={handleInstall}
-                      onUninstall={handleUninstall}
-                      onUpdate={handleUpdate}
-                      installing={installing}
-                      uninstalling={uninstalling}
-                      updating={updating}
-                      installMsg={installMsg[agent.agentType]}
                     />
                   </React.Fragment>
                 );
@@ -559,21 +436,15 @@ export function AgentManager() {
 //  Sub-components
 // ──────────────────────────────────────────────
 
-function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, installMsg }: {
+function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
   form: Partial<AgentConfig>;
   onChange: (f: Partial<AgentConfig>) => void;
   onSubmit: () => void;
   onCancel: () => void;
   saving: boolean;
   mode: 'add' | 'edit';
-  onInstall?: (agentType: string) => void;
-  onUninstall?: (agentType: string) => void;
-  onUpdate?: (agentType: string) => void;
-  installing?: string | null;
-  uninstalling?: string | null;
-  updating?: string | null;
-  installMsg?: string;
 }) {
+  const navigate = useNavigate();
   // ── 接入方式（设计文档 §4.2）──
   // state 就放在 `form` 里（TS 类型已加可选的 transport/conn），由**父组件**在创建/更新成功后
   // 统一落库（set_agent_transport）——添加态没有既存行，只能建完再设。
@@ -689,29 +560,64 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
   const lcHostPackage =
     (form.lifecycle?.packages ?? []).find((p) => p.role === 'host') ??
     form.lifecycle?.packages?.[0];
-  // 环境检测结果：用于「本机安装」区纠正「有规格但没通过市集装过」被显示成未安装的问题
+  // 环境检测结果：只读展示本机探测版本
   const { envInfo } = useEnvInfo();
   const detectedHealth = form.agentType ? envInfo?.agentHealth?.[form.agentType] : undefined;
+  const liveInstalledVersion =
+    form.agentType && envInfo?.agentVersions && form.agentType in envInfo.agentVersions
+      ? envInfo.agentVersions[form.agentType]
+      : undefined;
+  const installedVersion =
+    liveInstalledVersion !== undefined
+      ? liveInstalledVersion
+      : form.pkgState?.installedVersion ?? null;
+
+  /** 市集同名条目：用于展示「市场配置版本 / 配置可升级」，并给历史配置预填规格 */
+  const [marketInfo, setMarketInfo] = useState<{
+    version: string;
+    updateAvailable: boolean;
+    configUpdateAvailable: boolean;
+    adapterEmbedded: boolean;
+  } | null>(null);
   /**
    * 历史配置（v11 之前创建的内置 Agent）库里没有生命周期规格：编辑时按市集同名条目预填。
    * 只补到内存，保存才落库 —— 避免用户看到一片空字段以为功能坏了。
+   * 同时记录市场配置版本，用于展示「配置有更新」并引导去资源市集。
    */
   useEffect(() => {
-    if (mode !== 'edit' || !form.agentType || form.lifecycle || !form.transport) return;
+    if (mode !== 'edit' || !form.agentType || !form.transport) return;
     const transport = form.transport;
     let alive = true;
-    invoke<Array<{ agentType: string; transport: string; lifecycle?: LifecycleSpec }>>(
-      'agent_market_list',
-      { category: transport === 'acp' ? 'acp' : 'cli' },
-    )
+    invoke<
+      Array<{
+        agentType: string;
+        transport: string;
+        lifecycle?: LifecycleSpec;
+        version?: string;
+        updateAvailable?: boolean;
+        configUpdateAvailable?: boolean;
+        adapterEmbedded?: boolean;
+      }>
+    >('agent_market_list', { category: transport === 'acp' ? 'acp' : 'cli' })
       .then((list) => {
         if (!alive) return;
         const hit = (list ?? []).find(
           (e) => e.agentType === form.agentType && e.transport === transport,
         );
-        if (!hit?.lifecycle) return;
-        setPrefilledFromMarket(true);
-        onChange({ ...form, lifecycle: hit.lifecycle });
+        if (!hit) {
+          setMarketInfo(null);
+          return;
+        }
+        setMarketInfo({
+          version: hit.version || '',
+          updateAvailable: !!hit.updateAvailable,
+          configUpdateAvailable: !!hit.configUpdateAvailable,
+          adapterEmbedded: !!hit.adapterEmbedded,
+        });
+        if (!form.lifecycle && hit.lifecycle) {
+          setPrefilledFromMarket(true);
+          onChange({ ...form, lifecycle: hit.lifecycle });
+        }
       })
       .catch(() => {
         // 市集不可用就保持空表单，允许手工填写
@@ -737,53 +643,30 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
     return at > 0 ? raw.slice(0, at) : raw;
   })();
 
-  // 是否真存在「新版本」：本机探测到的安装版本 vs 市场/目录最新版本。
-  // 已是最新时按钮改为「重装」，避免点了「更新」却装回同一个版本（提示成功、版本号不变）。
-  // 本机版本同样以实时探测为准，只有该 Agent 未被本轮探测覆盖时才回退安装记录。
-  const liveInstalledVersion =
-    form.agentType && envInfo?.agentVersions && form.agentType in envInfo.agentVersions
-      ? envInfo.agentVersions[form.agentType]
-      : undefined;
-  const installedVersion =
-    liveInstalledVersion !== undefined
-      ? liveInstalledVersion
-      : form.pkgState?.installedVersion ?? null;
-  const latestVersion = form.agentType
-    ? envInfo?.agentLatestVersions?.[form.agentType] ?? null
-    : null;
-  const hasNewerVersion =
-    !!installedVersion &&
-    !!latestVersion &&
-    installedVersion.replace(/^v/i, '') !== latestVersion.replace(/^v/i, '');
-
   // ACP 的命令/参数由市场下发（官方目录条目安装后会自动填入解析结果），
   // 集成配置页只保留「自定义填写」入口——预置不再硬编码在前端。
 
   return (
     <div className="w-full space-y-4">
-      {/* 市场获取的实例：本机安装状态与后续动作（预置/官方目录的安装规格由市集下发，
-          这里不再让用户手填安装命令）。 */}
-      {mode === 'edit' && form.lifecycle && (
-        <InstallStatusSection
+      {/* 本页只读展示配置版本与本机状态：配置升级 / 宿主与适配器安装都在别处完成 */}
+      {mode === 'edit' && (
+        <ConfigStatusSection
           agentType={form.agentType!}
           displayName={form.displayName}
           transport={form.transport ?? 'subprocess'}
           pkgState={form.pkgState}
           lifecycle={form.lifecycle}
+          configVersion={form.version ?? ''}
+          marketVersion={marketInfo?.version ?? null}
+          hasMarketUpdate={
+            !!marketInfo && (marketInfo.updateAvailable || marketInfo.configUpdateAvailable)
+          }
+          adapterEmbedded={marketInfo?.adapterEmbedded ?? true}
           detectedInstalled={detectedHealth?.installed}
           detectedAvailable={detectedHealth?.available}
-          // `undefined` = 本轮未探测到；`null` = 已探测但版本未知。两者不能混用，
-          // 否则「版本未知」会回退到安装记录里的历史脏值。
-          detectedVersion={liveInstalledVersion}
-          canUpdate={!!form.distSource && form.distSource.source !== 'manual'}
-          hasNewerVersion={hasNewerVersion}
-          onInstall={onInstall}
-          onUninstall={onUninstall}
-          onUpdate={onUpdate}
-          installing={!!installing && installing === form.agentType}
-          uninstalling={!!uninstalling && uninstalling === form.agentType}
-          updating={!!updating && updating === form.agentType}
-          message={installMsg}
+          installedVersion={installedVersion}
+          onOpenMarket={() => navigate('/market?tab=agents')}
+          onOpenEnv={() => navigate('/settings?tab=api&apiTab=env')}
         />
       )}
       <div className="grid grid-cols-2 gap-2 mb-4">
@@ -1061,185 +944,81 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode, onInstall
   );
 }
 
-/** 「本机安装」区：呈现包安装状态并提供安装/重试动作。
- *  安装规格（包名、安装/版本命令、运行参数）由市集下发，这里只呈现结果、不提供编辑。 */
-function InstallStatusSection({ agentType, displayName, transport, pkgState, lifecycle, detectedInstalled, detectedAvailable, detectedVersion, canUpdate, hasNewerVersion, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, message }: {
+/** 「配置版本」区：只读展示本地/市场配置版本与本机依赖状态。
+ *  配置升级去资源市集，宿主/适配器安装去环境检测 —— 本页不再提供安装/卸载动作。 */
+function ConfigStatusSection({ agentType, displayName, transport, pkgState, lifecycle, configVersion, marketVersion, hasMarketUpdate, adapterEmbedded, detectedInstalled, detectedAvailable, installedVersion, onOpenMarket, onOpenEnv }: {
   agentType: string;
-  /** 用于提示「装的是适配器，不是这个 Agent 本身」 */
   displayName?: string;
   transport: string;
   pkgState?: PkgState | null;
-  lifecycle: LifecycleSpec;
-  /** 环境检测的安装 / 可用状态：纠正「有规格但没通过市集装过」被显示成未安装 */
+  lifecycle?: LifecycleSpec | null;
+  configVersion: string;
+  marketVersion: string | null;
+  hasMarketUpdate: boolean;
+  adapterEmbedded: boolean;
   detectedInstalled?: boolean;
   detectedAvailable?: boolean;
-  detectedVersion?: string | null;
-  /** 市场是否提供可更新的版本信息（预置/手工配置没有，就不给「更新」按钮） */
-  canUpdate?: boolean;
-  /** 市场/目录版本确实高于本机安装版本：false 时按钮语义降级为「重装」 */
-  hasNewerVersion?: boolean;
-  onInstall?: (agentType: string) => void;
-  onUninstall?: (agentType: string) => void;
-  onUpdate?: (agentType: string) => void;
-  installing?: boolean;
-  uninstalling?: boolean;
-  updating?: boolean;
-  message?: string;
+  installedVersion?: string | null;
+  onOpenMarket: () => void;
+  onOpenEnv: () => void;
 }) {
   const isAcp = transport === 'acp';
-  // 卸载的对象按接入方式说清楚：ACP 卸的是适配器，CLI 卸的是它自己那个包
-  const uninstallLabel = isAcp ? '卸载适配器' : '卸载 CLI 包';
-  // 标题必须点明「装的是什么」：ACP 只装适配器，写成「本机安装」会被读成装 Agent 本身
-  const installTitle = isAcp ? '本机安装（ACP 适配器）' : '本机安装（CLI 包）';
-  // npm / shell 由前端判定；binary 由后端按「平台 + .zip + sha256 + 非 .cmd」复核，
-  // 这里放行按钮，不合规时把后端返回的原因回显在下方（不重复一份平台判定）。
-  const supported =
-    lifecycle.kind === 'npm' || lifecycle.kind === 'shell' || lifecycle.kind === 'binary';
-  const status = pkgState?.status;
-  const ready = status === 'ready';
-  const failed = status === 'failed';
-  const packages = (lifecycle.packages ?? []).map((p) => p.package).join(' + ');
-  const runtime = lifecycle.runtime
+  const failed = pkgState?.status === 'failed';
+  const detectedReady = detectedInstalled === true;
+  const packages = (lifecycle?.packages ?? []).map((p) => p.package).join(' + ');
+  const runtime = lifecycle?.runtime
     ? [lifecycle.runtime.command, ...(lifecycle.runtime.args ?? [])].join(' ')
     : '';
-  // 没有市集安装记录（pkgState 为空）但环境检测已装好：本机直接可用，不能显示「未安装」
-  const detectedReady = !ready && !failed && !status && !!detectedInstalled;
-  const tone = ready || detectedReady
-    ? 'var(--success, #16a34a)'
-    : failed || detectedAvailable === false
-      ? 'var(--danger, #dc2626)'
-      : 'var(--warning, #d97706)';
-  // 与列表同口径：优先用实时探测到的版本（安装记录可能过期或含历史脏值）。
-  // `undefined` 才是「本轮未探测」，此时才回退安装记录；`null` 代表探测为未知。
-  const shownVersion =
-    detectedVersion !== undefined ? detectedVersion : pkgState?.installedVersion;
-  const statusText = ready
-    ? `已就绪${shownVersion ? ` v${shownVersion}` : ''}`
+  const targetLabel = !isAcp ? 'CLI' : adapterEmbedded ? '宿主' : '适配器';
+  const localState = detectedAvailable === false
+    ? '本机不可用'
     : failed
-      ? '安装失败'
-      : status === 'pending_install'
-        ? '待安装'
-        : detectedReady
-          ? `本机已安装${detectedVersion ? ` v${detectedVersion}` : ''}`
-          : '未安装';
+      ? '上次安装失败'
+      : detectedReady
+        ? '本机已安装' + (installedVersion ? ' v' + installedVersion : '')
+        : '本机未检测到';
 
   return (
-    <div
-      className="p-2.5 rounded-lg"
-      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-    >
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-secondary)' }}>{installTitle}</span>
-        <span className="text-[10px]" style={{ color: tone }}>{statusText}</span>
+    <div className="p-2.5 rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-secondary)' }}>配置版本</span>
+        <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>本地 v{configVersion || '—'}</span>
+        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>市场 v{marketVersion || '—'}</span>
+        {hasMarketUpdate && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}>
+            配置可升级
+          </span>
+        )}
         <span className="flex-1" />
-        {!ready && (
-          <SettingsButton
-            onClick={() => onInstall?.(agentType)}
-            variant="primary"
-            disabled={!supported || installing || uninstalling || updating}
-            icon={installing ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
-            title={
-              supported
-                ? isAcp
-                  ? '仅安装 ACP 适配器；宿主 Agent 的安装与登录需另行完成'
-                  : undefined
-                : '当前版本暂不支持该安装方式'
-            }
-          >
-            {installing ? '安装中' : failed ? '重试' : '安装'}
-          </SettingsButton>
-        )}
-        {ready && canUpdate && (
-          <SettingsButton
-            onClick={() => onUpdate?.(agentType)}
-            variant="secondary"
-            disabled={installing || uninstalling || updating}
-            icon={
-              updating ? (
-                <Loader2 size={11} className="animate-spin" />
-              ) : hasNewerVersion ? (
-                <Repeat size={11} />
-              ) : (
-                <RefreshCw size={11} />
-              )
-            }
-            title={
-              hasNewerVersion
-                ? '按市场最新规格更新（Agent 配置保留）'
-                : '已是最新版本；按市场规格重新安装（Agent 配置保留；若本机版本更高，会回到市场版本）'
-            }
-          >
-            {updating
-              ? hasNewerVersion ? '更新中' : '重装中'
-              : hasNewerVersion ? '更新' : '重装'}
-          </SettingsButton>
-        )}
-        {(ready || failed) && (
-          <SettingsButton
-            onClick={() => onUninstall?.(agentType)}
-            variant="danger"
-            disabled={installing || uninstalling || updating}
-            icon={uninstalling ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
-            title={`${uninstallLabel}（保留 Agent 配置，卸载后需重新安装才能用于会话）`}
-          >
-            {uninstalling ? '卸载中' : uninstallLabel}
+        {hasMarketUpdate && (
+          <SettingsButton variant="secondary" onClick={onOpenMarket}>
+            去资源市集升级
           </SettingsButton>
         )}
       </div>
-      {isAcp && (
-        <div className="text-[10px] mt-1.5" style={{ color: 'var(--warning, #d97706)' }}>
-          {/* 适配器与本体是否分离因厂商而异：有独立适配器包（codex/claude）→ 分离；
-              没有包、只有运行时命令（hermes）→ 适配器内置于本体，升级即升本体。 */}
-          {(lifecycle.packages ?? []).length === 0
-            ? `${displayName || agentType} 的 ACP 适配器内置于本体：更新适配器会一并更新本体，版本没变化通常说明已是最新。`
-            : `这里只安装 ACP 适配器，不包含 ${displayName || agentType} 本体：若该 Agent 需要单独的命令行工具或账号，请先在本机安装，并在终端完成登录；否则建立会话会在握手阶段失败（具体原因见「环境检测」）。`}
-        </div>
-      )}
-      {(ready || failed) && (
-        <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-          卸载只移除本机{isAcp ? '适配器' : 'CLI 包'}，Agent 配置与接入方式保留。
-        </div>
-      )}
-      {detectedReady && (
-        <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-          本机已检测到该 Agent 可用，只是还没通过市集安装过；点「安装」会按上面的规格写入安装记录，
-          之后可统一升级 / 卸载。
-        </div>
-      )}
-      {!supported && (
-        <div className="text-[10px] mt-1" style={{ color: 'var(--warning, #d97706)' }}>
-          该条目为 {lifecycle.kind} 安装方式，当前版本暂不支持，后续版本提供。
-        </div>
-      )}
+      <div className="text-[10px] mt-1 flex items-center gap-2 flex-wrap">
+        <span style={{ color: detectedAvailable === false || failed ? 'var(--danger, #dc2626)' : detectedReady ? 'var(--success, #16a34a)' : 'var(--text-tertiary)' }}>
+          {localState}
+        </span>
+        <SettingsButton variant="secondary" onClick={onOpenEnv}>
+          去环境检测管理{targetLabel}
+        </SettingsButton>
+      </div>
+      <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
+        {isAcp && !adapterEmbedded
+          ? '独立 ACP 适配器：安装/升级由环境检测执行，并会同步写入市场配置。'
+          : isAcp
+            ? 'ACP 适配器内置于宿主：请到环境检测安装/升级 ' + (displayName || agentType) + ' 的宿主。'
+            : '兼容模式：请到环境检测安装/升级本机 CLI。'}
+      </div>
       {packages && (
-        <div className="text-[10px] mt-1 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
-          {lifecycle.kind} · {packages}
-        </div>
-      )}
-      {!packages && lifecycle.kind === 'binary' && (lifecycle.artifacts?.length ?? 0) > 0 && (
-        <div className="text-[10px] mt-1 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
-          binary · {lifecycle.artifacts!.length} 个平台制品（按本机平台自动选取）
-        </div>
-      )}
-      {pkgState?.integrity === 'none' && (
-        <div className="text-[10px] mt-1" style={{ color: 'var(--warning, #d97706)' }}>
-          本次安装未校验完整性（安装包无校验值，已由你确认）。
-        </div>
-      )}
-      {runtime && (
-        <div className="text-[10px] mt-0.5 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>
-          运行：{runtime}
-        </div>
+        <div className="text-[10px] mt-1 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>{lifecycle?.kind} · {packages}</div>
       )}
       {pkgState?.lastError && (
-        <div className="text-[10px] mt-1 break-all" style={{ color: 'var(--danger, #dc2626)' }}>
-          {pkgState.lastError}
-        </div>
+        <div className="text-[10px] mt-1 break-all" style={{ color: 'var(--danger, #dc2626)' }}>{pkgState.lastError}</div>
       )}
-      {installing && message && (
-        <div className="text-[10px] mt-1 break-all" style={{ color: 'var(--text-secondary)' }}>
-          {message}
-        </div>
+      {runtime && (
+        <div className="text-[10px] mt-0.5 font-mono truncate" style={{ color: 'var(--text-tertiary)' }}>运行：{runtime}</div>
       )}
     </div>
   );
@@ -1352,7 +1131,7 @@ function agentStatus(agent: AgentConfig): { text: string; tone: 'ok' | 'warn' | 
 // ──────────────────────────────────────────────
 //  SortableAgentItem — 可拖拽排序的 Agent 卡片
 // ──────────────────────────────────────────────
-function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete, onInstall, onUninstall, onUpdate, installing, uninstalling, updating, installMsg }: {
+function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete }: {
   agent: AgentConfig;
   isEditing: boolean;
   editForm: Partial<AgentConfig> | null;
@@ -1363,13 +1142,6 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
   handleToggleEnabled: (agent: AgentConfig) => void;
   handleEdit: (agent: AgentConfig) => void;
   requestDelete: (agentType: string) => void;
-  onInstall: (agentType: string) => void;
-  onUninstall: (agentType: string) => void;
-  onUpdate: (agentType: string) => void;
-  installing: string | null;
-  uninstalling: string | null;
-  updating: string | null;
-  installMsg?: string;
 }) {
   const {
     attributes,
@@ -1389,7 +1161,6 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
   };
 
   const status = agentStatus(agent);
-  const busy = installing === agent.agentType;
 
   return (
     <div ref={setNodeRef} style={style}>
@@ -1402,13 +1173,6 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
             onCancel={() => { setEditingType(null); setEditForm(null as unknown as Partial<AgentConfig>); }}
             saving={saving}
             mode="edit"
-            onInstall={onInstall}
-            onUninstall={onUninstall}
-            onUpdate={onUpdate}
-            installing={installing}
-            uninstalling={uninstalling}
-            updating={updating}
-            installMsg={installMsg}
           />
         </SettingsCard>
       ) : (
@@ -1476,18 +1240,6 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
 
             {/* Actions */}
             <div className="flex items-center gap-1 shrink-0">
-              {/* 市场草稿：未就绪时把「安装」放在最前面，避免用户先进编辑页再找按钮 */}
-              {status && status.tone !== 'ok' && (
-                <SettingsButton
-                  onClick={() => onInstall(agent.agentType)}
-                  variant="primary"
-                  disabled={busy}
-                  icon={busy ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
-                  title="在本机安装该 Agent 的依赖包"
-                >
-                  {busy ? '安装中' : status.tone === 'error' ? '重试' : '安装'}
-                </SettingsButton>
-              )}
               <SettingsToggle
                 checked={agent.isEnabled}
                 onChange={() => handleToggleEnabled(agent)}

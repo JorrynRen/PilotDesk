@@ -26,6 +26,10 @@ interface DependencyStatus {
   broken?: string | null;
   /** 是否有可执行的安装规格（市场下发的 lifecycle）；手工配置的 Agent 为 false */
   installable?: boolean;
+  /** 适配器是否内置于宿主：决定环境检测页升级/卸载的是「适配器」还是「宿主」 */
+  adapterEmbedded?: boolean;
+  /** 本页动作对象文案：适配器 / 宿主 / CLI */
+  targetLabel: '适配器' | '宿主' | 'CLI';
   /** 卸载对象文案：ACP 是「卸载适配器」，本地 CLI 是「卸载 CLI 包」 */
   uninstallLabel?: string;
   action?: string;
@@ -185,16 +189,33 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const isApiProvider = (agentType: string) =>
     agentType === 'api' || agentType.startsWith('api:') || transportMap[agentType] === 'http';
 
-  // 本地 CLI 市集里「同名且可安装」的预置：历史手工创建的 Agent 靠它接管安装/更新/卸载
-  const [presetInstallable, setPresetInstallable] = useState<Record<string, boolean>>({});
+  // 市场条目的形态信息（按接入方式分开）：本页需要知道「适配器是否内置于宿主」，
+  // 以便把动作说成「更新适配器」还是「更新宿主」，并把请求交给后端按形态分流。
+  const [marketForms, setMarketForms] = useState<{
+    acp: Record<string, { supported: boolean; adapterEmbedded: boolean }>;
+    cli: Record<string, { supported: boolean; adapterEmbedded: boolean }>;
+  }>({ acp: {}, cli: {} });
   useEffect(() => {
     let alive = true;
-    invoke<Array<{ agentType: string; supported: boolean }>>('agent_market_list', { category: 'cli' })
-      .then((rows) => {
+    Promise.all(
+      (['acp', 'cli'] as const).map((category) =>
+        invoke<Array<{ agentType: string; supported: boolean; adapterEmbedded?: boolean }>>(
+          'agent_market_list',
+          { category }
+        ).catch(() => [])
+      )
+    )
+      .then(([acp, cli]) => {
         if (!alive) return;
-        const m: Record<string, boolean> = {};
-        rows.forEach((r) => { m[r.agentType] = !!r.supported; });
-        setPresetInstallable(m);
+        const toMap = (rows: Array<{ agentType: string; supported: boolean; adapterEmbedded?: boolean }>) => {
+          const m: Record<string, { supported: boolean; adapterEmbedded: boolean }> = {};
+          rows.forEach((r) => {
+            m[r.agentType] = { supported: !!r.supported, adapterEmbedded: !!r.adapterEmbedded };
+          });
+          return m;
+        };
+        // 按接入方式分开存：同名 ACP/CLI 条目互不覆盖
+        setMarketForms({ acp: toMap(acp), cli: toMap(cli) });
       })
       .catch(() => {
         // 市集不可用就维持「手工配置」，不影响环境检测本身
@@ -279,6 +300,15 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       const latestVer = envInfo?.agentLatestVersions?.[agent.agentType] ?? latestVersions[agent.agentType]?.version ?? null;
       const latestRelease = latestVersions[agent.agentType]?.releaseTime ?? null;
       const updateCheck = updateChecking[agent.agentType] ?? false;
+      // 形态：ACP 看适配器是否内置；兼容模式本身就是 CLI
+      const acp = isAcpAgent(agent.agentType);
+      const form = (acp ? marketForms.acp : marketForms.cli)[agent.agentType];
+      const adapterEmbedded = acp ? (form?.adapterEmbedded ?? true) : true;
+      const targetLabel: DependencyStatus['targetLabel'] = !acp
+        ? 'CLI'
+        : adapterEmbedded
+          ? '宿主'
+          : '适配器';
       return {
         name: agent.displayName,
         key: agent.agentType,
@@ -290,8 +320,10 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         broken: installed ? (health?.broken ?? null) : null,
         // 安装/卸载命令来自市集下发的 lifecycle；历史手工 Agent 若市集有同名可安装预置，
         // 按「接管」处理（后端真正执行前会先把预置规格写回本地）
-        installable: !!agent.lifecycle || presetInstallable[agent.agentType] === true,
-        uninstallLabel: isAcpAgent(agent.agentType) ? '卸载适配器' : '卸载 CLI 包',
+        installable: !!agent.lifecycle || form?.supported === true,
+        adapterEmbedded,
+        targetLabel,
+        uninstallLabel: !acp ? '卸载 CLI 包' : adapterEmbedded ? '卸载宿主' : '卸载适配器',
         action: installed ? 'update' as const : 'install' as const,
         installing: installing === agent.agentType,
         latestVersion: latestVer,
@@ -308,17 +340,14 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     setInstalling(key);
     addLog(`开始${mode === 'update' ? '更新' : '安装'} ${name}...`, 'info');
     try {
-      // 市集下发的 Agent 走完整安装流程（解析 bin、回写运行时、置 ready）；
-      // 历史手工 Agent 若市集有同名预置也走它（后端先接管预置规格再安装）；
-      // 其余（如 Git / Python 等非 Agent 工具）仍走通用的 install_agent。
-      if (agent?.pkgState || presetInstallable[key]) {
-        await invoke(mode === 'update' ? 'agent_market_update' : 'agent_market_install', {
-          agentType: key,
-          allowUnverified,
-        });
-      } else {
-        await invoke('install_agent', { agentType: key, allowUnverified });
-      }
+      // 后端按适配器形态分流：
+      // - 独立适配器：写配置 + 装/升级适配器（原子）；
+      // - 内置适配器/兼容模式：只装/升级宿主，不写配置。
+      await invoke('agent_environment_install', {
+        agentType: key,
+        allowUnverified,
+        update: mode === 'update',
+      });
       addLog(`${name} ${mode === 'update' ? '更新' : '安装'}成功`, 'success');
       // 两处状态都要刷：环境检测（版本/可用性）与 Agent 列表（包状态/lifecycle）
       await Promise.all([fetchEnv(), fetchAgents()]);
@@ -360,30 +389,38 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     action: 'install' | 'update' | 'uninstall' | 'reinstall',
   ) => {
     const name = getAgentName(key);
-    // 卸载对象按接入方式说清楚：ACP 卸的是适配器，本地 CLI 卸的是包
-    const uninstallTarget = agents.some((a) => a.agentType === key)
-      ? isAcpAgent(key) ? 'ACP 适配器' : '本地 CLI 包'
-      : null;
+    const acp = isAcpAgent(key);
+    const embedded = acp ? (marketForms.acp[key]?.adapterEmbedded ?? true) : true;
+    const target: '适配器' | '宿主' | 'CLI' = !acp ? 'CLI' : embedded ? '宿主' : '适配器';
+    // 卸载对象按形态说清楚：独立适配器、内置适配器的宿主、兼容模式 CLI
+    const uninstallTarget = !acp
+      ? '本地 CLI 包'
+      : embedded
+        ? '宿主（含内置适配器）'
+        : 'ACP 适配器';
     const title =
       action === 'uninstall' ? '确认卸载'
-      : action === 'update' ? '确认更新'
-      : action === 'reinstall' ? '确认重装'
-      : '确认安装';
+      : action === 'update' ? `确认更新${target}`
+      : action === 'reinstall' ? `确认重装${target}`
+      : `确认安装${target}`;
     const message =
       action === 'uninstall'
-        ? uninstallTarget
-          ? `确定要卸载 ${name} 的${uninstallTarget}吗？Agent 配置会保留，卸载后需重新安装才能用于会话。`
-          : `确定要卸载 ${name} 吗？此操作将从系统中移除该工具。`
-      : action === 'update' ? `确定要更新 ${name} 到最新版本吗？`
-      : action === 'reinstall' ? `确定要重新安装 ${name} 吗？`
-      : `确定要安装 ${name} 吗？`;
-    // ACP 官方目录只提供**适配器**的安装信息，但适配器与本体不一定分离：
-    // 分离式（codex / claude）装完还要另装宿主 CLI 并登录；内置式（hermes）适配器
-    // 就在本体内，更新适配器即更新本体。不提前说清楚，用户会误判装完能不能用。
-    const acpCaution =
-      action !== 'uninstall' && isAcpAgent(key)
-        ? '\n\n注意：ACP 适配器与 Agent 本体的关系因厂商而异——\n· 分离式（如 Codex、Claude）：这里只安装适配器，不包含本体；本体若需要单独的命令行工具或账号，请自行安装并在终端完成登录，否则建立会话会在握手阶段失败；\n· 内置式（如 Hermes）：适配器内置于本体，更新适配器即更新本体。'
-        : '';
+        ? `确定要卸载 ${name} 的${uninstallTarget}吗？Agent 配置会保留，卸载后需重新安装才能用于会话。`
+        : action === 'update' ? `确定要把 ${name} 的${target}更新到最新版本吗？${acp && !embedded ? '会同时写入市场配置。' : '不会改动本地配置。'}`
+        : action === 'reinstall' ? `确定要重新安装 ${name} 的${target}吗？${acp && !embedded ? '会同时写入市场配置。' : '不会改动本地配置。'}`
+        : `确定要安装 ${name} 的${target}吗？${acp && !embedded ? '会同时写入市场配置。' : '不会改动本地配置。'}`;
+    // 说清楚这一步到底动了什么，避免用户误判「装完就能用」：
+    // - 独立适配器：适配器与本体分离，本体可能还要单独安装/登录；
+    // - 内置适配器：适配器在宿主里，升级宿主即升级适配器；
+    // - 兼容模式：没有适配器，装的就是本机 CLI。
+    const formCaution =
+      action !== 'uninstall' && acp && !embedded
+        ? '\n\n注意：独立 ACP 适配器与 Agent 本体是分开的——这里会安装/更新适配器并写入市场配置；本体若需要单独安装命令行或登录，请自行完成，否则建立会话会在握手阶段失败。'
+        : action !== 'uninstall' && acp && embedded
+          ? '\n\n注意：该适配器内置于宿主——这一步安装/更新的是宿主本体，不会改动本地配置。'
+          : action !== 'uninstall' && !acp
+            ? '\n\n注意：该 Agent 以命令行方式接入——这一步安装/更新的是本机 CLI，不会改动本地配置。'
+            : '';
     // 二进制安装包没有 registry 校验值：后端会先找厂商校验文件，取不到就不校验。
     const unverified = needsUnverifiedConsent(
       agents.find((a) => a.agentType === key)?.lifecycle
@@ -396,7 +433,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       action === 'uninstall' ? '卸载' : action === 'update' ? '更新' : action === 'reinstall' ? '重装' : '安装';
     const ok = await confirmDialog({
       title,
-      message: `${message}${acpCaution}${integrityCaution}`,
+      message: `${message}${formCaution}${integrityCaution}`,
       confirmText: unverified ? '仍然安装' : confirmText,
       danger: action === 'uninstall',
     });
@@ -612,7 +649,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     {dep.installing ? (
                       <><Loader2 size={11} className="animate-spin" /> 安装中</>
                     ) : (
-                      <><Download size={11} /> 安装</>
+                      <><Download size={11} /> 安装{dep.targetLabel}</>
                     )}
                   </SettingsButton>
                 )}
@@ -633,7 +670,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       {dep.installing ? (
                         <><Loader2 size={11} className="animate-spin" /> 更新中</>
                       ) : (
-                        <><ArrowUpCircle size={11} /> 更新</>
+                        <><ArrowUpCircle size={11} /> 更新{dep.targetLabel}</>
                       )}
                     </SettingsButton>
                     <SettingsButton

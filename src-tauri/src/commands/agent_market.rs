@@ -67,28 +67,17 @@ pub struct MarketAgent {
     pub supported: bool,
     pub unsupported_reason: Option<String>,
     pub installed: bool,
+    /// 本机版本：独立适配器 = 实时探测到的适配器版本；内置适配器/兼容模式 = 本地配置版本
+    /// （`agents.version`）。未探测到/没有记录时为 `None`（前端显示「本机 未检测」）。
     pub installed_version: Option<String>,
     pub pkg_status: Option<String>,
-    /// 用于版本比较的目录版本：ACP 官方目录的 `registryVersion`，或运行时探测到的最新版本
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_version: Option<String>,
-    /// 目录版本来源：`registry`（registryVersion）/ `probe`（latestVersionCmd）/ `none`（版本未知）
-    pub version_source: String,
-    /// ACP 官方目录的适配器版本（`registryVersion`）；预置条目为空
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry_version: Option<String>,
-    /// 适配器是否内置于宿主（单包，或 adapter 与 host 同包）：内置时两者版本同源
+    /// 适配器是否内置于宿主（单包，或 adapter 与 host 同包）：内置时适配器与宿主版本同源
     pub adapter_embedded: bool,
-    /// 宿主最新版本（运行时探测）；内置型 ACP 条目不重复导出
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_latest_version: Option<String>,
-    /// 目录版本**明确高于**本机安装版本（方向感知；版本无法比较时一律为 false）
+    /// 市场配置版本**高于**本机版本（方向感知；版本无法比较时一律为 false）。
+    /// 独立适配器比较的是探测到的适配器版本，内置适配器/兼容模式比较的是本地配置版本。
     pub update_available: bool,
-    /// 版本无法比较（非标准版本号 / 缺本机版本）但确有目录条目：给「强制更新」入口，
-    /// 由用户自行决定是否按目录规格重装（避免因无法判定而彻底失去更新手段）。
-    pub force_update_available: bool,
-    /// 预置配置清单有新版（本地 `agents.version` 与条目 version 不一致）：只更新本地配置，
-    /// 与「宿主更新」「适配器更新」是两回事，不触发安装。
+    /// 内置适配器/兼容模式：本地配置清单有新版（只更新本地配置，不执行安装）。
+    /// 独立适配器恒为 false（避免「配置升了、适配器没升」的漂移）。
     pub config_update_available: bool,
 }
 
@@ -348,27 +337,14 @@ impl MarketEntry {
     /// 适配器是否内置于宿主：无 adapter 包、只有一个包，或 adapter 与 host 同包。
     /// 内置时“适配器版本”就是宿主版本，不能再单独给适配器升级入口。
     fn adapter_embedded(&self) -> bool {
-        let adapters: Vec<String> = self
-            .lifecycle
-            .packages
-            .iter()
-            .filter(|p| p.role == PackageRole::Adapter)
-            .map(|p| crate::agent::lifecycle::package_without_version(&p.package))
-            .collect();
-        if adapters.is_empty() {
-            return true;
-        }
-        let hosts: Vec<String> = self
-            .lifecycle
-            .packages
-            .iter()
-            .filter(|p| p.role == PackageRole::Host)
-            .map(|p| crate::agent::lifecycle::package_without_version(&p.package))
-            .collect();
-        adapters.iter().all(|a| hosts.iter().any(|h| h == a))
+        spec_adapter_embedded(&self.lifecycle)
     }
 
-    fn to_market_agent(&self, installed: &InstalledInfo, probed_latest: Option<&str>) -> MarketAgent {
+    fn to_market_agent(
+        &self,
+        installed: &InstalledInfo,
+        probed_adapter_version: Option<&str>,
+    ) -> MarketAgent {
         // 没有包名、没有安装命令、也没有平台制品 = 老版预置/只能手工配置，不能给「获取」入口
         let has_install_spec = !self.lifecycle.packages.is_empty()
             || self.lifecycle.install_cmd.is_some()
@@ -391,52 +367,39 @@ impl MarketEntry {
                 args: p.args.clone(),
             })
             .collect();
-        // 版本源优先级：ACP 官方 `registryVersion` > 运行时探测（`latestVersionCmd`）> 未知。
-        // 适配器内置宿主时两者同源，优先用探测值（能反映目录快照之后的发布）。
-        // 未知不等于「已是最新」，也不强行给更新入口；市场侧只保留「重装」。
-        let probed = probed_latest.filter(|v| !v.trim().is_empty());
         let embedded = self.adapter_embedded();
-        let registry_catalog = self
-            .registry_version
-            .as_deref()
-            .filter(|v| !v.trim().is_empty());
-        let catalog_version = if embedded {
-            probed.or(registry_catalog)
+        // 只有「ACP + 独立适配器」才把本机版本理解为适配器版本；
+        // 内置适配器与兼容模式的本机版本就是本地配置版本（`agents.version`）。
+        let independent_adapter = self.category == "acp" && !embedded;
+        let market_version = self.version.trim().to_string();
+        let local_config_version = installed.config_version.clone();
+        let local_version = if independent_adapter {
+            probed_adapter_version
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
         } else {
-            registry_catalog
+            local_config_version.clone()
         };
-        let version_source = if registry_catalog.is_some() {
-            "registry"
-        } else if catalog_version.is_some() {
-            "probe"
-        } else {
-            "none"
-        };
-        // 内置型 ACP 条目的“适配器版本”就是配置版本，宿主版本不再重复展示
-        let host_latest_version = if embedded && self.source != SOURCE_PRESET {
-            None
-        } else {
-            probed.map(|v| v.to_string())
-        };
-        // 方向感知：只有目录版本严格高于本机版本才算可更新。
-        // 用 `!=` 会在目录快照落后于包管理器最新版时永久误报，点更新还会把本机降级。
-        let newer = match (installed.exists, catalog_version, installed.installed_version.as_deref()) {
-            (true, Some(cv), Some(iv)) => crate::agent::lifecycle::is_newer_version(cv, iv),
+        // 方向感知：只有市场版本严格高于本机版本才算可升级。
+        let newer = match (
+            installed.exists,
+            market_version.is_empty(),
+            local_version.as_deref(),
+        ) {
+            (true, false, Some(local)) => crate::agent::lifecycle::is_newer_version(&market_version, local),
             _ => None,
         };
-        let update_available = newer == Some(true);
-        // 无法比较（版本号非标准 / 本机没有版本记录）且两边版本不一致 → 给「强制更新」，
-        // 让用户仍能按目录规格重装（否则这类条目永远没有更新入口）。
-        let force_update_available = installed.exists
-            && catalog_version.is_some()
-            && newer.is_none()
-            && installed.installed_version.as_deref() != catalog_version;
-        // 配置清单更新：只比对**该条目自身**的配置版本，与清单顶层 version 无关。
-        // 历史配置没有版本记录时按本地实际配置内容比对，避免一升级清单就全体误报。
-        let config_update_available = self.source == SOURCE_PRESET
+        // 内置适配器/兼容模式：市场版本就是配置版本，版本不同即提示「配置可升级」；
+        // 无法比较时按配置内容兜底（历史配置没有版本记录）。
+        let config_update_available = !independent_adapter
             && installed.exists
-            && match installed.config_version.as_deref() {
-                Some(local) => local != self.version,
+            && !market_version.is_empty()
+            && match local_config_version.as_deref() {
+                Some(local) => match newer {
+                    Some(true) => true,
+                    Some(false) => false,
+                    None => local != market_version,
+                },
                 None => installed
                     .lifecycle
                     .as_ref()
@@ -445,6 +408,11 @@ impl MarketEntry {
                     })
                     .unwrap_or(false),
             };
+        let update_available = if independent_adapter {
+            newer == Some(true)
+        } else {
+            config_update_available
+        };
         MarketAgent {
             agent_type: self.agent_type.clone(),
             display_name: self.display_name.clone(),
@@ -464,18 +432,33 @@ impl MarketEntry {
             supported: support.is_ok(),
             unsupported_reason: support.err(),
             installed: installed.exists,
-            installed_version: installed.installed_version.clone(),
+            installed_version: local_version,
             pkg_status: installed.pkg_status.clone(),
-            catalog_version: catalog_version.map(|v| v.to_string()),
-            version_source: version_source.to_string(),
-            registry_version: self.registry_version.clone().filter(|v| !v.trim().is_empty()),
             adapter_embedded: embedded,
-            host_latest_version,
             update_available,
-            force_update_available,
             config_update_available,
         }
     }
+}
+
+/// 适配器是否内置于宿主：无 adapter 包、只有一个包，或 adapter 与 host 同包。
+fn spec_adapter_embedded(spec: &LifecycleSpec) -> bool {
+    let adapters: Vec<String> = spec
+        .packages
+        .iter()
+        .filter(|p| p.role == PackageRole::Adapter)
+        .map(|p| crate::agent::lifecycle::package_without_version(&p.package))
+        .collect();
+    if adapters.is_empty() {
+        return true;
+    }
+    let hosts: Vec<String> = spec
+        .packages
+        .iter()
+        .filter(|p| p.role == PackageRole::Host)
+        .map(|p| crate::agent::lifecycle::package_without_version(&p.package))
+        .collect();
+    adapters.iter().all(|a| hosts.iter().any(|h| h == a))
 }
 
 fn string_list(v: Option<&serde_json::Value>) -> Vec<String> {
@@ -505,7 +488,6 @@ fn string_map(v: Option<&serde_json::Value>) -> BTreeMap<String, String> {
 /// 已安装信息（从 `agents` 表读）。
 struct InstalledInfo {
     exists: bool,
-    installed_version: Option<String>,
     pkg_status: Option<String>,
     /// 本地配置版本号（`agents.version`，与 `presetVersion` 是同一个概念）
     config_version: Option<String>,
@@ -535,17 +517,12 @@ fn installed_map(conn: &rusqlite::Connection) -> Result<BTreeMap<String, Install
             .as_deref()
             .and_then(|s| serde_json::from_str::<LifecycleSpec>(s).ok());
         let config_version = Some(version.clone()).filter(|v| !v.trim().is_empty());
-        // 安装版本只认安装记录：绝不能回落到配置版本（`agents.version`），
-        // 否则升级配置把 1.0 改成 1.1 后，会被当成"本机已装 v1.1"，宿主升级突然消失。
-        let installed_version = state
-            .as_ref()
-            .and_then(|s| s.installed_version.clone())
-            .filter(|v| !v.trim().is_empty());
+        // 独立适配器的本机版本只认环境检测的实时探测，不回落安装记录：
+        // 用户手动升级后记录会过期，回落会让市场版本判断与设置页分叉。
         out.insert(
             agent_type,
             InstalledInfo {
                 exists: true,
-                installed_version,
                 pkg_status: state.map(|s| s.status),
                 config_version,
                 lifecycle,
@@ -632,38 +609,37 @@ pub async fn agent_market_list(
     let entries = load_entries(cat).await?;
 
     let conn = state.get_conn()?;
-    let mut installed = installed_map(&conn)?;
-    // 「本机版本」与设置页同源：优先用环境检测的实时探测结果，`pkg_state` 里的安装记录只作兜底
-    // （用户手动 `npm i -g` 升级后记录会过期，两处判断又会分叉）。
-    for (agent_type, version) in crate::commands::env::cached_agent_versions() {
-        if let Some(info) = installed.get_mut(&agent_type) {
-            if info.exists {
-                info.installed_version = Some(version);
-            }
-        }
-    }
-    let probed_latest = crate::commands::env::cached_agent_latest_versions();
+    let installed = installed_map(&conn)?;
+    // 独立适配器的「本机版本」只认环境检测的实时探测（用户手动升级后安装记录会过期）；
+    // 内置适配器/兼容模式则用本地配置版本，`to_market_agent` 内部按形态取值。
+    let probed = crate::commands::env::cached_agent_versions();
     Ok(entries
         .iter()
         .map(|e| {
             e.to_market_agent(
                 installed.get(&e.agent_type).unwrap_or(&InstalledInfo {
                     exists: false,
-                    installed_version: None,
                     pkg_status: None,
                     config_version: None,
                     lifecycle: None,
                 }),
-                probed_latest.get(&e.agent_type).map(|v| v.as_str()),
+                probed.get(&e.agent_type).map(|v| v.as_str()),
             )
         })
         .collect())
 }
 
-/// 「获取」：落一条草稿（`pending_install`），下载图标到本地，随后由前端跳转配置页安装。
+/// 「获取」：落一条草稿（`pending_install`），下载图标到本地。
 #[tauri::command]
 pub async fn agent_market_acquire(
     state: tauri::State<'_, crate::DbState>,
+    agent_type: String,
+) -> Result<AgentConfig, AppError> {
+    acquire_inner(&state, agent_type).await
+}
+
+async fn acquire_inner(
+    state: &tauri::State<'_, crate::DbState>,
     agent_type: String,
 ) -> Result<AgentConfig, AppError> {
     {
@@ -1467,10 +1443,106 @@ pub(crate) async fn adopt_preset_spec(
     Ok(Some(entry.lifecycle))
 }
 
-/// 「安装」：执行安装命令，随后解析 bin / 已安装版本并把包状态置为 `ready`。
+/// 按「agentType + 本地接入方式」取市场条目。
 ///
-/// `allow_unverified`：安装包既无 registry 校验值、又无厂商校验文件时，
-/// 用户是否已显式确认「仍然安装」（不校验完整性）。
+/// 同名可能同时存在 ACP 与 CLI 两条，必须按 transport 精确匹配，否则会把 ACP 适配器
+/// 规格写进本地 CLI 配置（反之亦然）。
+async fn market_entry_for(
+    agent_type: &str,
+    transport: &str,
+    category: &str,
+) -> Result<MarketEntry, AppError> {
+    let entries = load_entries(Some(category)).await?;
+    let mut candidates: Vec<MarketEntry> = entries
+        .into_iter()
+        .filter(|e| e.agent_type == agent_type)
+        .collect();
+    match candidates.iter().position(|e| e.transport == transport) {
+        Some(pos) => Ok(candidates.remove(pos)),
+        None => candidates
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::NotFound(format!("市场中未找到 Agent「{}」", agent_type))),
+    }
+}
+
+/// 把市场条目的配置快照写到本地（不执行任何安装命令）。
+///
+/// `pending=true`：先置「待安装」，供随后的适配器安装使用；
+/// `pending=false`：只更新配置，保留已有安装记录（内置适配器/兼容模式的宿主由环境检测管理）。
+fn write_entry_config(
+    state: &tauri::State<'_, crate::DbState>,
+    agent_type: &str,
+    entry: &MarketEntry,
+    pending: bool,
+) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    let existing = agents::get_agent_inner(&conn, agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
+    let now_ts = crate::utils::now();
+    let installed_at = existing
+        .dist_source
+        .as_ref()
+        .map(|d| d.installed_at)
+        .filter(|t| *t > 0)
+        .unwrap_or(now_ts);
+    let pkg_state = if pending {
+        PkgState::pending(now_ts)
+    } else {
+        match existing.pkg_state.clone() {
+            Some(mut pkg) => {
+                pkg.status = crate::agent::lifecycle::STATUS_READY.to_string();
+                pkg.last_error = None;
+                pkg.updated_at = now_ts;
+                pkg
+            }
+            None => PkgState::ready(now_ts),
+        }
+    };
+    agents::update_agent_inner(
+        &conn,
+        UpdateAgentPayload {
+            agent_type: agent_type.to_string(),
+            lifecycle: Some(entry.lifecycle.clone()),
+            pkg_state: Some(pkg_state),
+            dist_source: Some(DistSource {
+                source: entry.source.clone(),
+                registry_id: entry.registry_id.clone(),
+                registry_version: entry.registry_version.clone(),
+                icon_url: entry.icon_url.clone(),
+                installed_at,
+            }),
+            version: Some(entry.version.clone()),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
+}
+
+/// 安装/升级失败时把配置退回安装前的快照（独立适配器的原子性保障）。
+fn restore_config(
+    state: &tauri::State<'_, crate::DbState>,
+    prev: &AgentConfig,
+) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    agents::update_agent_inner(
+        &conn,
+        UpdateAgentPayload {
+            agent_type: prev.agent_type.clone(),
+            lifecycle: prev.lifecycle.clone(),
+            pkg_state: prev.pkg_state.clone(),
+            dist_source: prev.dist_source.clone(),
+            version: Some(prev.version.clone()),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
+}
+
+/// 「安装」：按市场条目的形态落配置。
+///
+/// - 独立适配器：写配置 + 安装适配器（原子，失败回滚配置）；
+/// - 内置适配器/兼容模式：只拉/写配置，**不执行安装命令**（宿主安装由环境检测负责）。
 #[tauri::command]
 pub async fn agent_market_install(
     app: tauri::AppHandle,
@@ -1479,15 +1551,278 @@ pub async fn agent_market_install(
     agent_type: String,
     allow_unverified: Option<bool>,
 ) -> Result<AgentConfig, AppError> {
+    install_inner(
+        &app,
+        &state,
+        &agent_mgr,
+        &agent_type,
+        allow_unverified.unwrap_or(false),
+    )
+    .await
+}
+
+async fn install_inner(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, crate::DbState>,
+    agent_mgr: &tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: &str,
+    allow_unverified: bool,
+) -> Result<AgentConfig, AppError> {
+    // 还没有本地配置：先按市场条目落草稿（市集「安装」直接完成，不再跳去集成配置）
+    let config = match {
+        let conn = state.get_conn()?;
+        agents::get_agent_inner(&conn, agent_type)?
+    } {
+        Some(c) => c,
+        None => acquire_inner(state, agent_type.to_string()).await?,
+    };
+    let transport = {
+        let conn = state.get_conn()?;
+        agents::get_agent_transport_inner(&conn, agent_type)?.transport
+    };
+    let category = if transport == "acp" { "acp" } else { "cli" };
+    let entry = market_entry_for(agent_type, &transport, category).await?;
+    entry.lifecycle.supported().map_err(AppError::Config)?;
+
+    let independent = entry.category == "acp" && !entry.adapter_embedded();
+    if independent {
+        let was_ready = config
+            .pkg_state
+            .as_ref()
+            .map(|s| s.status == crate::agent::lifecycle::STATUS_READY)
+            .unwrap_or(false);
+        write_entry_config(state, agent_type, &entry, true)?;
+        if let Err(err) = run_install(
+            app,
+            state,
+            agent_mgr,
+            agent_type,
+            &config.display_name,
+            &entry.lifecycle,
+            Some(entry.version.as_str()).filter(|v| !v.trim().is_empty()),
+            allow_unverified,
+            was_ready,
+        )
+        .await
+        {
+            // 适配器没装成：把配置退回安装前的快照，避免「配置新、适配器旧」的漂移
+            let _ = restore_config(state, &config);
+            return Err(err);
+        }
+    } else {
+        write_entry_config(state, agent_type, &entry, false)?;
+    }
+
+    let conn = state.get_conn()?;
+    agents::get_agent_inner(&conn, agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))
+}
+
+/// 「升级配置」：按市场条目的形态升级。
+///
+/// - 独立适配器：写新配置 + 升级适配器（原子，失败回滚配置）；
+/// - 内置适配器/兼容模式：只同步配置，不执行安装命令。
+#[tauri::command]
+pub async fn agent_market_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: String,
+    allow_unverified: Option<bool>,
+) -> Result<AgentConfig, AppError> {
+    update_inner(
+        &app,
+        &state,
+        &agent_mgr,
+        &agent_type,
+        allow_unverified.unwrap_or(false),
+    )
+    .await
+}
+
+async fn update_inner(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, crate::DbState>,
+    agent_mgr: &tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: &str,
+    allow_unverified: bool,
+) -> Result<AgentConfig, AppError> {
+    let (config, transport) = {
+        let conn = state.get_conn()?;
+        let config = agents::get_agent_inner(&conn, agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
+        let transport = agents::get_agent_transport_inner(&conn, agent_type)?.transport;
+        (config, transport)
+    };
+    // 更新前先强制刷新目录缓存：否则写回的配置版本仍是 24h 前的快照。
+    // `load(true)` 失败会自动回退旧缓存/内置快照，离线也不会挡住更新。
+    if transport == "acp" {
+        if let Err(e) = registry::load(true).await {
+            log::warn!("[AgentMarket] 更新前刷新目录失败，继续使用缓存: {}", e);
+        }
+    }
+    let category = if transport == "acp" { "acp" } else { "cli" };
+    let entry = market_entry_for(agent_type, &transport, category).await?;
+    if entry.version.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "该条目没有市场版本信息，无需更新".to_string(),
+        ));
+    }
+    entry.lifecycle.supported().map_err(AppError::Config)?;
+
+    let independent = entry.category == "acp" && !entry.adapter_embedded();
+    if independent {
+        write_entry_config(state, agent_type, &entry, true)?;
+        if let Err(err) = run_install(
+            app,
+            state,
+            agent_mgr,
+            agent_type,
+            &config.display_name,
+            &entry.lifecycle,
+            Some(entry.version.as_str()).filter(|v| !v.trim().is_empty()),
+            allow_unverified,
+            true,
+        )
+        .await
+        {
+            let _ = restore_config(state, &config);
+            return Err(err);
+        }
+    } else {
+        write_entry_config(state, agent_type, &entry, false)?;
+    }
+
+    let conn = state.get_conn()?;
+    agents::get_agent_inner(&conn, agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))
+}
+
+/// 「配置更新」：只把市场清单里的配置（生命周期规格）同步到本地。
+///
+/// 仅内置适配器/兼容模式使用；独立适配器必须连带升级适配器（走 `agent_market_update`），
+/// 否则会出现「配置升了、适配器没升」的漂移。
+#[tauri::command]
+pub async fn agent_market_apply_config(
+    state: tauri::State<'_, crate::DbState>,
+    agent_type: String,
+) -> Result<AgentConfig, AppError> {
+    let transport = {
+        let conn = state.get_conn()?;
+        agents::get_agent_inner(&conn, &agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
+        agents::get_agent_transport_inner(&conn, &agent_type)?.transport
+    };
+    let category = if transport == "acp" { "acp" } else { "cli" };
+    let entry = market_entry_for(&agent_type, &transport, category).await?;
+    if entry.category == "acp" && !entry.adapter_embedded() {
+        return Err(AppError::InvalidInput(
+            "独立适配器不支持只更新配置：请升级适配器，或到「集成配置」编辑 / 导入 JSON".to_string(),
+        ));
+    }
+    if entry.version.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "该条目没有可同步的配置版本".to_string(),
+        ));
+    }
+    write_entry_config(&state, &agent_type, &entry, false)?;
+
+    // 只刷新配置清单：本机已安装的版本没有变化，不能清环境检测缓存。
+    let conn = state.get_conn()?;
+    agents::get_agent_inner(&conn, &agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))
+}
+
+/// 环境检测页的安装/升级入口：按适配器形态分流。
+///
+/// - 独立适配器：委托市集「写配置 + 装/升级适配器」（原子，避免配置与适配器版本漂移）；
+/// - 内置适配器 / 兼容模式：只对本机已配置的宿主执行安装/升级，**不写配置**。
+#[tauri::command]
+pub async fn agent_environment_install(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: String,
+    allow_unverified: Option<bool>,
+    update: Option<bool>,
+) -> Result<AgentConfig, AppError> {
+    let is_update = update.unwrap_or(false);
     let (config, transport) = {
         let conn = state.get_conn()?;
         let config = agents::get_agent_inner(&conn, &agent_type)?
             .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
-        // 接管要按本地接入方式取同名预置（同名可能同时存在 ACP 与 CLI 两条）
         let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
         (config, transport)
     };
-    // 历史手工配置没有规格时按同名预置接管（先写回本地再安装）
+    let category = if transport == "acp" { "acp" } else { "cli" };
+    // 形态以市场条目为准；市场不可用时按本地规格判断（无 adapter 包即视为内置）
+    let entry = load_entries(Some(category)).await.ok().and_then(|entries| {
+        let mut candidates: Vec<MarketEntry> = entries
+            .into_iter()
+            .filter(|e| e.agent_type == agent_type)
+            .collect();
+        match candidates.iter().position(|e| e.transport == transport) {
+            Some(pos) => Some(candidates.remove(pos)),
+            None => candidates.into_iter().next(),
+        }
+    });
+    let independent = match &entry {
+        Some(e) => e.category == "acp" && !e.adapter_embedded(),
+        None => {
+            transport == "acp"
+                && config
+                    .lifecycle
+                    .as_ref()
+                    .map(|spec| !spec_adapter_embedded(spec))
+                    .unwrap_or(false)
+        }
+    };
+    if independent {
+        if entry.is_some() {
+            return if is_update {
+                update_inner(
+                    &app,
+                    &state,
+                    &agent_mgr,
+                    &agent_type,
+                    allow_unverified.unwrap_or(false),
+                )
+                .await
+            } else {
+                install_inner(
+                    &app,
+                    &state,
+                    &agent_mgr,
+                    &agent_type,
+                    allow_unverified.unwrap_or(false),
+                )
+                .await
+            };
+        }
+        // 市场里没有同名条目（离线 / 手工配置）：按本地规格直接安装，不依赖市场
+        let spec = config.lifecycle.clone().ok_or_else(|| {
+            AppError::Config(format!("『{}』没有生命周期规格，无法安装", agent_type))
+        })?;
+        spec.supported().map_err(AppError::Config)?;
+        run_install(
+            &app,
+            &state,
+            &agent_mgr,
+            &agent_type,
+            &config.display_name,
+            &spec,
+            Some(config.version.as_str()).filter(|v| !v.trim().is_empty()),
+            allow_unverified.unwrap_or(false),
+            is_update,
+        )
+        .await?;
+        let conn = state.get_conn()?;
+        return agents::get_agent_inner(&conn, &agent_type)?
+            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)));
+    }
+
+    // 内置适配器 / 兼容模式：只升级宿主，不写配置。
+    // 历史手工配置没有规格时按同名预置接管（否则没有安装命令可用）。
     let spec = match config.lifecycle.clone() {
         Some(spec) => spec,
         None => adopt_preset_spec(&state, &agent_type, &transport)
@@ -1500,7 +1835,6 @@ pub async fn agent_market_install(
             })?,
     };
     spec.supported().map_err(AppError::Config)?;
-
     run_install(
         &app,
         &state,
@@ -1510,190 +1844,10 @@ pub async fn agent_market_install(
         &spec,
         Some(config.version.as_str()).filter(|v| !v.trim().is_empty()),
         allow_unverified.unwrap_or(false),
-        false,
+        is_update,
     )
     .await?;
 
-    let conn = state.get_conn()?;
-    agents::get_agent_inner(&conn, &agent_type)?
-        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))
-}
-
-/// 「更新」：用市场里的最新规格覆盖本地配置后再安装（仅 ACP 官方目录条目）。
-///
-/// 安装命令里的包名带钉死版本，所以更新必须先写回新版本规格，再走同一套安装/校验流程。
-#[tauri::command]
-pub async fn agent_market_update(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, crate::DbState>,
-    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
-    agent_type: String,
-    allow_unverified: Option<bool>,
-) -> Result<AgentConfig, AppError> {
-    // 更新前先强制刷新目录缓存：否则写回的 `agents.version` / `dist_source.registry_version`
-    // 仍是 24h 前的快照，会出现"适配器已经升级、本地清单版本号却停在旧值"的困惑。
-    // `load(true)` 拉取失败会自动回退旧缓存/内置快照，离线也不会挡住更新。
-    if let Err(e) = registry::load(true).await {
-        log::warn!("[AgentMarket] 更新前刷新目录失败，继续使用缓存: {}", e);
-    }
-    let (config, transport) = {
-        let conn = state.get_conn()?;
-        let config = agents::get_agent_inner(&conn, &agent_type)?
-            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
-        let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
-        (config, transport)
-    };
-    let entries = load_entries(None).await?;
-    // 同名可能同时存在 ACP 与 CLI 两条：优先取与本地接入方式一致的条目，
-    // 否则本地 CLI 配置可能被 ACP 适配器规格覆盖。
-    let mut candidates: Vec<MarketEntry> = entries
-        .into_iter()
-        .filter(|e| e.agent_type == agent_type)
-        .collect();
-    let entry = match candidates.iter().position(|e| e.transport == transport) {
-        Some(pos) => candidates.remove(pos),
-        None => candidates
-            .into_iter()
-            .next()
-            .ok_or_else(|| AppError::NotFound(format!("市场中未找到 Agent「{}」", agent_type)))?,
-    };
-    if entry.registry_version.is_none() && entry.source != SOURCE_PRESET {
-        return Err(AppError::InvalidInput(
-            "该条目没有市场版本信息，无需更新".to_string(),
-        ));
-    }
-    entry.lifecycle.supported().map_err(AppError::Config)?;
-
-    let now_ts = crate::utils::now();
-    {
-        let conn = state.get_conn()?;
-        agents::update_agent_inner(
-            &conn,
-            UpdateAgentPayload {
-                agent_type: agent_type.clone(),
-                display_name: None,
-                description: None,
-                lifecycle: Some(entry.lifecycle.clone()),
-                pkg_state: Some(PkgState::pending(now_ts)),
-                dist_source: Some(DistSource {
-                    source: entry.source.clone(),
-                    registry_id: entry.registry_id.clone(),
-                    registry_version: entry.registry_version.clone(),
-                    icon_url: entry.icon_url.clone(),
-                    installed_at: now_ts,
-                }),
-                run_cmd_template: None,
-                output_parser: None,
-                output_filter_regex: None,
-                supports_session_continuity: None,
-                session_id_source: None,
-                session_id_event_type: None,
-                session_id_field: None,
-                resume_arg_template: None,
-                skills_dir: None,
-                skill_entry_file: None,
-                skill_display_mode: None,
-                color: None,
-                icon: None,
-                sort_order: None,
-                is_enabled: None,
-                // 配置版本号（非 Agent 版本号）随清单一起刷新
-                version: Some(entry.version.clone()),
-            },
-        )?;
-    }
-
-    run_install(
-        &app,
-        &state,
-        &agent_mgr,
-        &agent_type,
-        &config.display_name,
-        &entry.lifecycle,
-        Some(entry.version.as_str()).filter(|v| !v.trim().is_empty()),
-        allow_unverified.unwrap_or(false),
-        true,
-    )
-    .await?;
-
-    let conn = state.get_conn()?;
-    agents::get_agent_inner(&conn, &agent_type)?
-        .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))
-}
-
-/// 「配置更新」：只把市场清单里的配置（生命周期规格）同步到本地。
-///
-/// 与「宿主更新」「适配器更新」是两回事：不执行安装命令、不改本机安装状态，
-/// 仅更新配置快照与 `presetVersion`，让后续检测/更新使用新渠道。
-#[tauri::command]
-pub async fn agent_market_apply_config(
-    state: tauri::State<'_, crate::DbState>,
-    agent_type: String,
-) -> Result<AgentConfig, AppError> {
-    let (config, transport) = {
-        let conn = state.get_conn()?;
-        let config = agents::get_agent_inner(&conn, &agent_type)?
-            .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))?;
-        let transport = agents::get_agent_transport_inner(&conn, &agent_type)?.transport;
-        (config, transport)
-    };
-
-    let category = if transport == "acp" { "acp" } else { "cli" };
-    let entries = load_entries(Some(category)).await?;
-    let entry = entries
-        .into_iter()
-        .find(|e| {
-            e.agent_type == agent_type && e.source == SOURCE_PRESET && e.transport == transport
-        })
-        .ok_or_else(|| {
-            AppError::NotFound(format!("市场中未找到 Agent「{}」的预置配置", agent_type))
-        })?;
-
-    // 老版预置没有安装规格，无从同步
-    if entry.lifecycle.packages.is_empty() && entry.lifecycle.install_cmd.is_none() {
-        return Err(AppError::InvalidInput(
-            "该条目没有可同步的配置清单".to_string(),
-        ));
-    }
-
-    let version = entry.version.clone();
-    let icon_url = entry.icon_url.clone();
-    let source = entry.source.clone();
-    let installed_at = config
-        .dist_source
-        .as_ref()
-        .map(|d| d.installed_at)
-        .filter(|t| *t > 0)
-        .unwrap_or_else(crate::utils::now);
-    let registry_id = config.dist_source.as_ref().and_then(|d| d.registry_id.clone());
-    let registry_version = config
-        .dist_source
-        .as_ref()
-        .and_then(|d| d.registry_version.clone());
-
-    {
-        let conn = state.get_conn()?;
-        agents::update_agent_inner(
-            &conn,
-            UpdateAgentPayload {
-                agent_type: agent_type.clone(),
-                lifecycle: Some(entry.lifecycle),
-                dist_source: Some(DistSource {
-                    source,
-                    registry_id,
-                    registry_version,
-                    icon_url,
-                    installed_at,
-                }),
-                // 配置版本号（非 Agent 版本号）随清单一起刷新
-                version: Some(version),
-                ..Default::default()
-            },
-        )?;
-    }
-
-    // 只刷新配置清单：本机已安装的版本没有变化，不能清环境检测缓存，
-    // 否则市场侧会失去「本机版本」，宿主/适配器升级入口随之消失。
     let conn = state.get_conn()?;
     agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型『{}』不存在", agent_type)))

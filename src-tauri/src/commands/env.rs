@@ -603,13 +603,9 @@ pub(crate) fn cached_agent_versions() -> std::collections::HashMap<String, Strin
         .unwrap_or_default()
 }
 
-/// 最近一次环境检测得到的最新版本（只读缓存）。
-///
-/// 市场侧对没有 `registryVersion` 的条目用它代替目录版本；没探测过或探测失败即「版本未知」。
 static LATEST_VERSIONS: std::sync::RwLock<
     Option<std::collections::HashMap<String, (Instant, String)>>,
 > = std::sync::RwLock::new(None);
-const LATEST_TTL: Duration = Duration::from_secs(1800);
 
 pub(crate) fn remember_agent_latest_version(agent_type: &str, version: &str) {
     if let Ok(mut guard) = LATEST_VERSIONS.write() {
@@ -617,21 +613,6 @@ pub(crate) fn remember_agent_latest_version(agent_type: &str, version: &str) {
             .get_or_insert_with(std::collections::HashMap::new)
             .insert(agent_type.to_string(), (Instant::now(), version.to_string()));
     }
-}
-
-pub(crate) fn cached_agent_latest_versions() -> std::collections::HashMap<String, String> {
-    LATEST_VERSIONS
-        .read()
-        .ok()
-        .and_then(|guard| {
-            guard.as_ref().map(|map| {
-                map.iter()
-                    .filter(|(_, (ts, _))| ts.elapsed() < LATEST_TTL)
-                    .map(|(k, (_, v))| (k.clone(), v.clone()))
-                    .collect()
-            })
-        })
-        .unwrap_or_default()
 }
 
 /// 安装 / 更新成功后回填环境检测缓存里的版本。

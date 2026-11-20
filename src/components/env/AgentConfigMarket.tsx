@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import type { ReactNode } from 'react';
-import { Download, RefreshCw, Search, CheckCircle2, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
+import { Download, RefreshCw, Search, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -18,8 +16,9 @@ import type { LifecycleSpec } from '../../types';
  *
  * 两类接入方式同架陈列：`ACP 协议接入`（官方目录 + 官方缺失的预置）与
  * `兼容模式接入`（直接以命令行子进程运行）。
- * 「获取」只落草稿（后端记 pending_install 并下载图标），随即跳转到
- * 「设置 › 集成配置」的该 Agent 上继续完成安装 —— 安装本身是本地动作，不在这里静默做。
+ * 市集只负责「配置版本」与独立适配器的安装/升级：
+ * - 独立适配器：安装/升级 = 写配置 + 装/升级适配器（原子）；
+ * - 内置适配器/兼容模式：只拉/写配置，不执行安装命令（宿主安装由环境检测负责）。
  */
 
 type MarketCategory = 'acp' | 'cli';
@@ -50,23 +49,14 @@ interface MarketAgent {
   supported: boolean;
   unsupportedReason?: string | null;
   installed: boolean;
+  /** 本机版本：独立适配器 = 探测到的适配器版本；内置适配器/兼容模式 = 本地配置版本 */
   installedVersion?: string | null;
   pkgStatus?: string | null;
-  /** 用于版本比较的目录版本：ACP 官方 registryVersion，或运行时探测到的最新版本 */
-  catalogVersion?: string | null;
-  /** 目录版本来源：registry / probe / none（版本未知） */
-  versionSource?: 'registry' | 'probe' | 'none' | string;
-  /** ACP 官方目录的适配器版本；预置条目为空 */
-  registryVersion?: string | null;
-  /** 适配器是否内置于宿主（内置时适配器版本 == 配置版本） */
+  /** 适配器是否内置于宿主（内置时适配器与宿主版本同源） */
   adapterEmbedded?: boolean;
-  /** 宿主最新版本（运行时探测）；内置型 ACP 条目不重复导出 */
-  hostLatestVersion?: string | null;
-  /** 目录版本明确高于本机版本（方向感知，不会因"不相等"误报） */
+  /** 市场配置版本高于本机版本（方向感知，不会因"不相等"误报） */
   updateAvailable: boolean;
-  /** 版本无法比较（非标准版本号 / 缺本机版本）：给「强制更新」入口 */
-  forceUpdateAvailable?: boolean;
-  /** 市场配置清单有新版：只同步配置，与宿主/适配器版本更新无关 */
+  /** 内置适配器/兼容模式：本地配置清单有新版（只同步配置） */
   configUpdateAvailable?: boolean;
 }
 
@@ -80,9 +70,6 @@ function statusLabel(a: MarketAgent): { text: string; tone: 'ok' | 'warn' | 'err
   if (!a.installed) return null;
   if (a.pkgStatus === 'failed') return { text: '安装失败', tone: 'error' };
   if (a.pkgStatus === 'pending_install') return { text: '待安装', tone: 'warn' };
-  // 没有 registryVersion、也没有可用的最新版本查询：不谎报「已是最新」。
-  if (a.versionSource === 'none') return { text: '已安装 · 版本未知', tone: 'warn' };
-  if (a.pkgStatus === 'ready') return { text: '已就绪', tone: 'ok' };
   return { text: '已配置', tone: 'ok' };
 }
 
@@ -98,7 +85,6 @@ const MARKET_STATE_INITIAL: Record<MarketCategory, MarketCategoryState> = {
 };
 
 export function AgentConfigMarket() {
-  const navigate = useNavigate();
   /** 全局 Agent 列表是单例缓存，获取后必须主动刷新，否则配置页看不到新条目。 */
   const { fetchAgents } = useAgentRegistry();
   /** 安装/更新后刷新全局环境信息（运行与策略页共用同一份 envInfo） */
@@ -159,68 +145,59 @@ export function AgentConfigMarket() {
     );
   }, [current.agents, keyword]);
 
-  /** 「获取」：落草稿后立刻跳去集成配置完成安装（ACP 需要装适配器，不能在这里静默完成）。 */
-  const handleAcquire = async (agent: MarketAgent) => {
-    setBusyAction(`acquire:${agent.agentType}`);
+  const refreshCategoryOf = async (agent: MarketAgent) => {
+    await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
+    void refreshEnv();
+  };
+
+  /** 「安装」：独立适配器连带安装；内置适配器/兼容模式只落配置（后端按形态分流）。 */
+  const handleInstall = async (agent: MarketAgent) => {
+    setBusyAction(`install:${agent.agentType}`);
     try {
-      await invoke('agent_market_acquire', { agentType: agent.agentType });
-      // 先刷新全局 Agent 列表：配置页的深层链接要靠它找到这条草稿。
+      await invoke('agent_market_install', { agentType: agent.agentType });
       await fetchAgents();
-      showToast(`已获取 ${agent.displayName}，请继续完成安装`, 'success');
-      navigate(`/settings?tab=agents&agent=${encodeURIComponent(agent.agentType)}`);
+      showToast(
+        agent.category === 'acp' && !agent.adapterEmbedded
+          ? `${agent.displayName} 的适配器已安装`
+          : `${agent.displayName} 的配置已获取`,
+        'success'
+      );
     } catch (err) {
-      showToast(`获取失败: ${errorMessage(err)}`, 'error');
+      showToast(`安装失败: ${errorMessage(err)}`, 'error');
     }
     setBusyAction(null);
+    await refreshCategoryOf(agent);
   };
 
-  const openInConfig = (agentType: string) => {
-    navigate(`/settings?tab=agents&agent=${encodeURIComponent(agentType)}`);
-  };
-
-  /** 「升级」：用市场里的新版本规格覆盖本地配置并重新安装（ACP 适配器 / 宿主 CLI）。 */
-  const handleUpdate = async (agent: MarketAgent) => {
-    setBusyAction(`update:${agent.agentType}`);
+  /** 「升级配置」：独立适配器 = 写配置 + 升级适配器（原子）；内置/兼容模式 = 只同步配置。 */
+  const handleUpgrade = async (agent: MarketAgent) => {
+    const independent = agent.category === 'acp' && !agent.adapterEmbedded;
+    setBusyAction(`upgrade:${agent.agentType}`);
     try {
-      await invoke('agent_market_update', { agentType: agent.agentType });
-      showToast(`${agent.displayName} 已升级`, 'success');
+      await invoke(independent ? 'agent_market_update' : 'agent_market_apply_config', {
+        agentType: agent.agentType,
+      });
+      await fetchAgents();
+      showToast(`${agent.displayName} 的配置已升级`, 'success');
     } catch (err) {
       showToast(`升级失败: ${errorMessage(err)}`, 'error');
     }
     setBusyAction(null);
-    // 更新只影响该条目所在市场，按需刷新即可；
-    // 同时刷新全局环境信息，否则「运行与策略」还显示更新前的版本。
-    await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
-    void refreshEnv();
+    await refreshCategoryOf(agent);
   };
 
-  /** 「升级配置」：只同步市场清单里的配置，不安装、不升级宿主或适配器。 */
-  const handleApplyConfig = async (agent: MarketAgent) => {
-    setBusyAction(`config:${agent.agentType}`);
-    try {
-      await invoke('agent_market_apply_config', { agentType: agent.agentType });
-      await fetchAgents();
-      showToast(`${agent.displayName} 的配置已升级`, 'success');
-    } catch (err) {
-      showToast(`配置升级失败: ${errorMessage(err)}`, 'error');
-    }
-    setBusyAction(null);
-    await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
-    void refreshEnv();
-  };
-
-  /** 「重装」：版本未知时的唯一操作入口，按当前清单重新执行安装命令（不以「更新」名义执行）。 */
+  /** 「重装」：独立适配器未探测到版本时的兜底入口，按当前市场清单重新安装。 */
   const handleReinstall = async (agent: MarketAgent) => {
     setBusyAction(`reinstall:${agent.agentType}`);
     try {
       await invoke('agent_market_install', { agentType: agent.agentType });
+      await fetchAgents();
       showToast(`${agent.displayName} 已重新安装`, 'success');
     } catch (err) {
       showToast(`重装失败: ${errorMessage(err)}`, 'error');
     }
     setBusyAction(null);
-    await fetchCategory(agent.category === 'cli' ? 'cli' : 'acp');
-    void refreshEnv();
+    await refreshCategoryOf(agent);
   };
 
   const renderAction = (agent: MarketAgent) => {
@@ -232,109 +209,70 @@ export function AgentConfigMarket() {
       );
     }
     const anyBusy = busyAction?.endsWith(`:${agent.agentType}`) ?? false;
-    const acquiring = busyAction === `acquire:${agent.agentType}`;
-    const updating = busyAction === `update:${agent.agentType}`;
-    const configuring = busyAction === `config:${agent.agentType}`;
+    const installing = busyAction === `install:${agent.agentType}`;
+    const upgrading = busyAction === `upgrade:${agent.agentType}`;
     const reinstalling = busyAction === `reinstall:${agent.agentType}`;
-    // 未获取：只是把配置拉下来
+    const independent = agent.category === 'acp' && !agent.adapterEmbedded;
+    // 未获取：独立适配器会连带安装，内置/兼容模式只落配置
     if (!agent.installed) {
       return (
         <SettingsButton
           variant="primary"
-          icon={acquiring ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+          icon={installing ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
           disabled={anyBusy}
-          onClick={() => handleAcquire(agent)}
+          onClick={() => handleInstall(agent)}
+          title={independent ? '获取配置并安装适配器' : '获取配置（不执行安装命令）'}
         >
-          获取
+          {installing ? '安装中' : '获取'}
         </SettingsButton>
       );
     }
-    // 已获取但依赖未就绪：去配置页完成安装（pkgStatus 为空表示手工/历史配置，视为已就绪）
+    // 安装失败/待安装：重试安装
     if (agent.pkgStatus === 'pending_install' || agent.pkgStatus === 'failed') {
       return (
         <SettingsButton
           variant="primary"
-          icon={<ArrowRight size={11} />}
-          onClick={() => openInConfig(agent.agentType)}
-          title="前往集成配置完成本机依赖安装"
+          icon={installing ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+          disabled={anyBusy}
+          onClick={() => handleInstall(agent)}
+          title={independent ? '重新安装适配器' : '重新写入配置'}
         >
-          {agent.pkgStatus === 'failed' ? '重试安装' : '完成配置'}
+          {installing ? '处理中' : agent.pkgStatus === 'failed' ? (independent ? '重试安装' : '写入配置') : '完成安装'}
         </SettingsButton>
       );
     }
-    // 已就绪：宿主/适配器升级、配置升级、重装相互独立，可能同时出现，避免互相顶掉
-    const upgradeTarget = agent.category === 'acp' ? '适配器' : '宿主';
-    const actions: ReactNode[] = [];
-    if (agent.updateAvailable) {
-      actions.push(
+    if (agent.updateAvailable || agent.configUpdateAvailable) {
+      return (
         <SettingsButton
-          key="update"
           variant="update"
-          icon={updating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          icon={upgrading ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={anyBusy}
-          onClick={() => handleUpdate(agent)}
-          title={`将${upgradeTarget}升级到 v${agent.catalogVersion || agent.version}`}
-        >
-          {updating ? '升级中' : `升级${upgradeTarget}`}
-        </SettingsButton>
-      );
-    } else if (agent.forceUpdateAvailable) {
-      // 版本无法比较（非标准版本号 / 本机没有版本记录）：仍给一个明确标注的强制重装入口，
-      // 否则这类条目会因"无法判定是否最新"而彻底失去更新手段。
-      actions.push(
-        <SettingsButton
-          key="force"
-          variant="secondary"
-          icon={updating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-          disabled={anyBusy}
-          onClick={() => handleUpdate(agent)}
+          onClick={() => handleUpgrade(agent)}
           title={
-            `无法比较版本（市场 v${agent.catalogVersion || agent.version}，本机 ${agent.installedVersion ? `v${agent.installedVersion}` : '未知'}）；` +
-            '点击按市场规格强制升级（Agent 配置保留）'
+            independent
+              ? `升级配置到 v${agent.version}，并同步升级适配器`
+              : `升级本地配置到 v${agent.version}（不执行安装命令）`
           }
         >
-          {updating ? '升级中' : '强制升级'}
+          {upgrading ? '升级中' : '升级配置'}
         </SettingsButton>
       );
     }
-    // 配置清单有新版：只更新本地配置快照，不重装本机 Agent
-    if (agent.configUpdateAvailable) {
-      actions.push(
+    // 独立适配器没探测到本机版本：无法判断是否最新，给一个明确的重装入口
+    if (independent && !agent.installedVersion) {
+      return (
         <SettingsButton
-          key="config"
-          variant="update"
-          icon={configuring ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-          disabled={anyBusy}
-          onClick={() => handleApplyConfig(agent)}
-          title={`升级本地配置清单到 ${agent.version}，不重装、不升级本机 Agent`}
-        >
-          {configuring ? '升级中' : '升级配置'}
-        </SettingsButton>
-      );
-    }
-    // 版本未知（无 registryVersion、也没有可用的最新版本探测）：不判断更新，只提供重装
-    if (agent.versionSource === 'none') {
-      actions.push(
-        <SettingsButton
-          key="reinstall"
           variant="secondary"
           icon={reinstalling ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           disabled={anyBusy}
           onClick={() => handleReinstall(agent)}
-          title="无法获知最新版本；按当前市场清单重新安装（覆盖本机安装）"
+          title="未探测到本机适配器版本；按当前市场配置重新安装（Agent 配置保留）"
         >
           {reinstalling ? '重装中' : '重装'}
         </SettingsButton>
       );
     }
-    if (actions.length === 0) {
-      return (
-        <SettingsButton variant="secondary" onClick={() => openInConfig(agent.agentType)}>
-          管理
-        </SettingsButton>
-      );
-    }
-    return <div className="flex items-center gap-1.5">{actions}</div>;
+    return <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>已是最新</span>;
   };
 
   return (
@@ -453,40 +391,31 @@ export function AgentConfigMarket() {
                         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                           {agent.displayName}
                         </span>
-                        {/* 版本标签按来源区分：ACP 目录条目是适配器版本，
-                            预置 ACP 条目是清单配置版本；不加区分会和宿主的运行时版本混淆 */}
-                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                          {agent.category === 'acp'
-                            ? `${agent.source === 'acp-registry' ? '适配器' : '配置'} v${agent.version || '—'}`
-                            : `v${agent.version || '—'}`}
+                        {/* 市场配置版本：统一无前缀，直接对应 agents-config/registry 条目的版本号 */}
+                        <span
+                          className="text-[10px]"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title="市场配置版本"
+                        >
+                          v{agent.version || '—'}
                         </span>
-                        {/* 独立适配器且目录版本与配置版本不一致时，单独标注适配器版本 */}
-                        {!agent.adapterEmbedded &&
-                          agent.registryVersion &&
-                          agent.registryVersion !== agent.version && (
-                            <span
-                              className="text-[10px]"
-                              style={{ color: 'var(--text-tertiary)' }}
-                              title="ACP 适配器版本"
-                            >
-                              适配器 v{agent.registryVersion}
-                            </span>
-                          )}
-                        {/* 运行时最新版本：适配器内置于宿主时两者同源，统一叫「适配器」，
-                            避免同一版本既像宿主又像适配器；独立适配器时才区分宿主 */}
-                        {agent.hostLatestVersion && (
-                          <span
-                            className="text-[10px]"
-                            style={{ color: 'var(--text-tertiary)' }}
-                            title={
-                              agent.adapterEmbedded
-                                ? '适配器内置于宿主，版本与宿主一致'
-                                : '宿主最新版本'
-                            }
-                          >
-                            {agent.adapterEmbedded ? '适配器' : '宿主'} v{agent.hostLatestVersion}
-                          </span>
-                        )}
+                        {/* 本机版本必须带前缀，避免和市场版本混在一起无法比较。
+                            独立适配器 = 探测到的适配器版本；内置/兼容模式 = 本地配置版本 */}
+                        <span
+                          className="text-[10px]"
+                          style={{
+                            color: agent.installed
+                              ? 'var(--text-secondary)'
+                              : 'var(--text-tertiary)',
+                          }}
+                          title={
+                            agent.adapterEmbedded || agent.category !== 'acp'
+                              ? '本地配置版本'
+                              : '本机探测到的适配器版本'
+                          }
+                        >
+                          本机 {agent.installedVersion ? `v${agent.installedVersion}` : '未检测'}
+                        </span>
                         {/* 来源徽标：ACP 官方用强调色，预置用中性色，避免与状态标记混在一起 */}
                         <span
                           className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
@@ -518,17 +447,17 @@ export function AgentConfigMarket() {
                             {status.text}
                           </span>
                         )}
-                        {agent.updateAvailable && (
+                        {(agent.updateAvailable || agent.configUpdateAvailable) && (
                           <span
                             className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
                             style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
                             title={
-                              agent.installedVersion
-                                ? `当前 v${agent.installedVersion}，市场 v${agent.catalogVersion || agent.version}`
-                                : `市场 v${agent.catalogVersion || agent.version}`
+                              agent.adapterEmbedded || agent.category !== 'acp'
+                                ? `本地配置 v${agent.installedVersion || '未知'}，市场配置 v${agent.version}`
+                                : `本机适配器 v${agent.installedVersion || '未知'}，市场 v${agent.version}（升级会同时安装适配器）`
                             }
                           >
-                            可升级
+                            配置可升级
                           </span>
                         )}
                       </div>
