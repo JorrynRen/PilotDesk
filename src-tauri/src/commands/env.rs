@@ -146,6 +146,45 @@ fn npm_probe_package(cmd: &str) -> Option<&str> {
     }
 }
 
+/// Hermes 托管安装的版本戳（`hermes update` 写入安装根目录）。
+///
+/// `hermes --version` 会联网解析 stable 发布（GitHub API + git ls-remote），
+/// 网络慢时单次可达 15s 以上，导致环境检测超时误报。官方把
+/// `install-stamp.json` 声明为权威版本来源，超时时用它兜底。
+fn hermes_stamp_version() -> Option<String> {
+    let stamp_paths = [
+        std::env::var_os("LOCALAPPDATA").map(|base| {
+            std::path::PathBuf::from(base)
+                .join("hermes")
+                .join("hermes-agent")
+                .join("install-stamp.json")
+        }),
+        std::env::var_os("HOME").map(|home| {
+            std::path::PathBuf::from(home)
+                .join(".hermes")
+                .join("hermes-agent")
+                .join("install-stamp.json")
+        }),
+    ];
+    for path in stamp_paths.into_iter().flatten() {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let version = ["displayVersion", "baseVersion"]
+            .iter()
+            .filter_map(|key| json.get(*key).and_then(|v| v.as_str()))
+            .map(str::trim)
+            .find(|v| !v.is_empty() && *v != "unknown");
+        if let Some(v) = version {
+            return Some(v.trim_start_matches('v').to_string());
+        }
+    }
+    None
+}
+
 /// 评估一个 Agent 的「已安装 / 可用」状态。
 ///
 /// **检测与环境门禁共用同一口径**，避免出现「检测显示可用、会话却起不来」。
@@ -202,22 +241,39 @@ pub(crate) async fn probe_agent(
                 });
             match from_inventory {
                 Some(v) if !v.is_empty() => Some(v),
-                _ => match agent_mgr
-                    .execute_command_output_async(&cmd, "", 15, &label)
-                    .await
-                {
-                    Ok(out) => match lifecycle {
-                        // 有安装规格就只认它自己的解析：解析不出来说明版本真的不可知，
-                        // 回退到「从整段输出里猜数字」会把构建日期（如 `(2026.9.24)`）当成版本号。
-                        Some(l) => l.parse_installed_version(&out),
-                        // 手工配置的 Agent 没有规格，只能按通用规则猜
-                        None => Some(clean_version_string(&out)).filter(|v| !v.trim().is_empty()),
-                    },
-                    Err(err) => {
-                        version_error = Some(format!("版本探测失败：{}", err));
-                        None
+                _ => {
+                    // Hermes 的 `--version` 会联网解析 stable 发布，慢网络下单次常超过 15s，
+                    // 因此给它稍长的超时；仍然超时则回退到本地安装戳，不再报「安装异常」。
+                    let probe_timeout = if agent.agent_type == "hermes" { 25 } else { 15 };
+                    match agent_mgr
+                        .execute_command_output_async(&cmd, "", probe_timeout, &label)
+                        .await
+                    {
+                        Ok(out) => match lifecycle {
+                            // 有安装规格就只认它自己的解析：解析不出来说明版本真的不可知，
+                            // 回退到「从整段输出里猜数字」会把构建日期（如 `(2026.9.24)`）当成版本号。
+                            Some(l) => l.parse_installed_version(&out),
+                            // 手工配置的 Agent 没有规格，只能按通用规则猜
+                            None => {
+                                Some(clean_version_string(&out)).filter(|v| !v.trim().is_empty())
+                            }
+                        },
+                        Err(err) => {
+                            let stamp = if agent.agent_type == "hermes" {
+                                hermes_stamp_version()
+                            } else {
+                                None
+                            };
+                            match stamp {
+                                Some(v) => Some(v),
+                                None => {
+                                    version_error = Some(format!("版本探测失败：{}", err));
+                                    None
+                                }
+                            }
+                        }
                     }
-                },
+                }
             }
         }
         None => None,
