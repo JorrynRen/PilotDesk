@@ -260,6 +260,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   // terminal instance map: tabId -> { term, fitAddon }
   const terminalRef = useRef<Map<string, { term: Terminal; fitAddon: FitAddon }>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
+  // 可视区域（状态栏出现/消失会改变它的高度）。终端尺寸必须按它计算：
+  // container 是 minHeight:100% 的内容容器，子终端更高时它会被内容撑大，
+  // 无法反映可视区收缩，导致状态栏出现后尾行被裁掉。
+  const viewportRef = useRef<HTMLDivElement>(null);
   // Tauri event listener unlisten functions: tabId -> UnlistenFn[]
   const unlistenRefs = useRef<Map<string, UnlistenFn[]>>(new Map());
   // Guard against keyboard/button double-submit while a session is being created.
@@ -356,15 +360,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       console.error('[Terminal] Scale wrapper not ready');
       return;
     }
-    const container = containerRef.current;
-    if (!container) {
-      console.error('[Terminal] Container not ready');
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      console.error('[Terminal] Viewport not ready');
       return;
     }
     // Fit against the visible viewport. The ResizeObserver below keeps each active
-    // terminal aligned when the window or either side panel changes width.
-    const availableWidth = Math.max(320, container.clientWidth - 16);
-    const availableHeight = Math.max(180, container.clientHeight - 24);
+    // terminal aligned when the window, either side panel, or the status bar changes size.
+    const availableWidth = Math.max(320, viewport.clientWidth - 16);
+    const availableHeight = Math.max(180, viewport.clientHeight - 24);
 
     // Create tab div first (placeholder id, will be updated after ConPTY creation)
     const tabDiv = document.createElement('div');
@@ -583,17 +587,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   useEffect(() => {
     if (viewMode !== 'terminal' || !activeTerminalTabId) return;
 
-    const container = containerRef.current;
+    const viewport = viewportRef.current;
     const wrapper = scaleWrapperRef.current;
     const entry = terminalRef.current.get(activeTerminalTabId);
-    if (!container || !wrapper || !entry) return;
+    if (!viewport || !wrapper || !entry) return;
 
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const fit = () => {
-      if (!container.isConnected || container.clientWidth <= 0 || container.clientHeight <= 0) return;
+      if (!viewport.isConnected || viewport.clientWidth <= 0 || viewport.clientHeight <= 0) return;
 
-      const availableWidth = Math.max(320, container.clientWidth - 16);
-      const availableHeight = Math.max(180, container.clientHeight - 24);
+      const availableWidth = Math.max(320, viewport.clientWidth - 16);
+      const availableHeight = Math.max(180, viewport.clientHeight - 24);
       const activeDiv = document.getElementById(`xterm-tab-${activeTerminalTabId}`);
       if (!activeDiv) return;
 
@@ -630,8 +634,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       resizeTimer = window.setTimeout(fit, 80);
     };
 
+    // 观察可视区域而不是内容容器：状态栏挂载/卸载会改变可视高度，
+    // 而内容容器被子终端撑大后尺寸不变，观察它拿不到这次变化。
     const observer = new ResizeObserver(scheduleFit);
-    observer.observe(container);
+    observer.observe(viewport);
     scheduleFit();
 
     return () => {
@@ -894,6 +900,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
 
       {/* Terminal content area — scrollable parent for oversized terminal; xterm handles scrollback internally */}
       <div
+        ref={viewportRef}
         className="terminal-viewport-area flex-1 relative overflow-hidden"
         style={{ background: activeTheme.background }}
       >
