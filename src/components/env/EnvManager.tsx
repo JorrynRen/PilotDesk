@@ -28,9 +28,9 @@ interface DependencyStatus {
   installable?: boolean;
   /** 适配器是否内置于宿主：决定环境检测页升级/卸载的是「适配器」还是「宿主」 */
   adapterEmbedded?: boolean;
-  /** 本页动作对象文案：适配器 / 宿主 / CLI */
-  targetLabel: '适配器' | '宿主' | 'CLI';
-  /** 卸载对象文案：ACP 是「卸载适配器」，本地 CLI 是「卸载 CLI 包」 */
+  /** 本页动作对象文案：适配器 / 宿主 */
+  targetLabel: '适配器' | '宿主';
+  /** 卸载对象文案：独立适配器是「卸载适配器」，内置适配器/CLI 是「卸载宿主」 */
   uninstallLabel?: string;
   action?: string;
   installing?: boolean;
@@ -304,11 +304,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       const acp = isAcpAgent(agent.agentType);
       const form = (acp ? marketForms.acp : marketForms.cli)[agent.agentType];
       const adapterEmbedded = acp ? (form?.adapterEmbedded ?? true) : true;
-      const targetLabel: DependencyStatus['targetLabel'] = !acp
-        ? 'CLI'
-        : adapterEmbedded
-          ? '宿主'
-          : '适配器';
+      // 兼容模式与内置适配器统一称为「宿主」：CLI 本体就是宿主
+      const targetLabel: DependencyStatus['targetLabel'] = acp && !adapterEmbedded ? '适配器' : '宿主';
       return {
         name: agent.displayName,
         key: agent.agentType,
@@ -323,7 +320,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         installable: !!agent.lifecycle || form?.supported === true,
         adapterEmbedded,
         targetLabel,
-        uninstallLabel: !acp ? '卸载 CLI 包' : adapterEmbedded ? '卸载宿主' : '卸载适配器',
+        uninstallLabel: !acp ? '卸载宿主' : adapterEmbedded ? '卸载宿主' : '卸载适配器',
         action: installed ? 'update' as const : 'install' as const,
         installing: installing === agent.agentType,
         latestVersion: latestVer,
@@ -391,10 +388,10 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     const name = getAgentName(key);
     const acp = isAcpAgent(key);
     const embedded = acp ? (marketForms.acp[key]?.adapterEmbedded ?? true) : true;
-    const target: '适配器' | '宿主' | 'CLI' = !acp ? 'CLI' : embedded ? '宿主' : '适配器';
-    // 卸载对象按形态说清楚：独立适配器、内置适配器的宿主、兼容模式 CLI
+    const target: '适配器' | '宿主' = !acp || embedded ? '宿主' : '适配器';
+    // 卸载对象按形态说清楚：独立适配器、内置适配器的宿主、兼容模式 CLI 都按宿主处理
     const uninstallTarget = !acp
-      ? '本地 CLI 包'
+      ? '宿主'
       : embedded
         ? '宿主（含内置适配器）'
         : 'ACP 适配器';
@@ -419,7 +416,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         : action !== 'uninstall' && acp && embedded
           ? '\n\n注意：该适配器内置于宿主——这一步安装/更新的是宿主本体，不会改动本地配置。'
           : action !== 'uninstall' && !acp
-            ? '\n\n注意：该 Agent 以命令行方式接入——这一步安装/更新的是本机 CLI，不会改动本地配置。'
+            ? '\n\n注意：该 Agent 以命令行方式接入——这一步安装/更新的是本机 CLI 宿主，不会改动本地配置。'
             : '';
     // 二进制安装包没有 registry 校验值：后端会先找厂商校验文件，取不到就不校验。
     const unverified = needsUnverifiedConsent(

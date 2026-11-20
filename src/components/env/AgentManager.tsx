@@ -77,6 +77,35 @@ export function AgentManager() {
   }, [agents.length]);
 
   const transportOf = (agentType: string) => transportMap[agentType] ?? 'subprocess';
+  // 市集里各条目的配置版本：列表上直接提示「有新版本」（与编辑面板共用同一判断）
+  const [marketVersions, setMarketVersions] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    Promise.all(
+      (['acp', 'cli'] as const).map((category) =>
+        invoke<Array<{ agentType: string; transport: string; version?: string }>>(
+          'agent_market_list',
+          { category }
+        ).catch(() => [])
+      )
+    )
+      .then(([acp, cli]) => {
+        if (!alive) return;
+        const m: Record<string, string> = {};
+        [...acp, ...cli].forEach((r) => {
+          if (r.version) m[`${r.transport}:${r.agentType}`] = r.version;
+        });
+        setMarketVersions(m);
+      })
+      .catch(() => {
+        // 市集不可用就不显示版本提示，不影响配置编辑
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const marketVersionOf = (agentType: string) =>
+    marketVersions[`${transportOf(agentType)}:${agentType}`];
   // 分组只影响**渲染顺序与标题**：兼容模式在前、ACP 在后，组内保持原序。
   // 拖拽仍走同一个 SortableContext，故排序语义不变（组内拖动落在同一索引区间）。
   // 本机版本以环境检测的**实时探测**为准：`pkgState.installedVersion` 是安装当时的记录，
@@ -419,6 +448,7 @@ export function AgentManager() {
                       handleToggleEnabled={handleToggleEnabled}
                       handleEdit={handleEdit}
                       requestDelete={requestDelete}
+                      marketVersion={marketVersionOf(agent.agentType)}
                     />
                   </React.Fragment>
                 );
@@ -659,7 +689,11 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           configVersion={form.version ?? ''}
           marketVersion={marketInfo?.version ?? null}
           hasMarketUpdate={
-            !!marketInfo && (marketInfo.updateAvailable || marketInfo.configUpdateAvailable)
+            !!marketInfo &&
+            (marketInfo.updateAvailable ||
+              marketInfo.configUpdateAvailable ||
+              (!!marketInfo.version &&
+                normalizeVersion(marketInfo.version) !== normalizeVersion(form.version)))
           }
           adapterEmbedded={marketInfo?.adapterEmbedded ?? true}
           detectedInstalled={detectedHealth?.installed}
@@ -1131,7 +1165,12 @@ function agentStatus(agent: AgentConfig): { text: string; tone: 'ok' | 'warn' | 
 // ──────────────────────────────────────────────
 //  SortableAgentItem — 可拖拽排序的 Agent 卡片
 // ──────────────────────────────────────────────
-function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete }: {
+/** 配置版本比较：只做规范化后的字符串比对，方向交给市场动作判断。 */
+function normalizeVersion(v?: string | null) {
+  return (v ?? '').trim().replace(/^v/i, '');
+}
+
+function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete, marketVersion }: {
   agent: AgentConfig;
   isEditing: boolean;
   editForm: Partial<AgentConfig> | null;
@@ -1142,6 +1181,8 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
   handleToggleEnabled: (agent: AgentConfig) => void;
   handleEdit: (agent: AgentConfig) => void;
   requestDelete: (agentType: string) => void;
+  /** 市集里同名条目的配置版本：与本地 `agents.version` 不同即提示「有新版本」 */
+  marketVersion?: string;
 }) {
   const {
     attributes,
@@ -1208,6 +1249,15 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
                   {agent.version && (
                     <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                       v{agent.version}
+                    </span>
+                  )}
+                  {marketVersion && normalizeVersion(marketVersion) !== normalizeVersion(agent.version) && (
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+                      style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
+                      title={`本地配置 v${agent.version || '—'}，市场配置 v${marketVersion}；请到资源市集升级`}
+                    >
+                      有新版本
                     </span>
                   )}
                   {agent.isBuiltin && (
