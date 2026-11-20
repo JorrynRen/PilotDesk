@@ -414,7 +414,7 @@ export function AgentConfigMarket() {
                               : '本机探测到的适配器版本'
                           }
                         >
-                          本机 {agent.installedVersion ? `v${agent.installedVersion}` : '未检测'}
+                          本机 {agent.installed ? (agent.installedVersion ? `v${agent.installedVersion}` : '未检测') : '未集成'}
                         </span>
                         {/* 来源徽标：ACP 官方用强调色，预置用中性色，避免与状态标记混在一起 */}
                         <span
